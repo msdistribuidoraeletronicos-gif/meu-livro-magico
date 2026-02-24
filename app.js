@@ -1739,13 +1739,36 @@ try {
 // ------------------------------
 const USERS_FILE = path.join(OUT_DIR, "users.json");
 
+// ------------------------------
+// ✅ /admin (Painel Admin) — Vercel-safe path
+// ------------------------------
+const USERS_FILE = path.join(OUT_DIR, "users.json");
+
 try {
-  const mountAdminPage = require(path.join(__dirname, "admin.page.js"));
+  const candidates = [
+    path.join(__dirname, "admin.page.js"),                 // mesma pasta do app.js
+    path.join(process.cwd(), "admin.page.js"),             // raiz do projeto
+    path.join(process.cwd(), "api", "admin.page.js"),      // /api (comum na Vercel)
+  ];
+
+  const adminPath = candidates.find((p) => {
+    try { return fs.existsSync(p); } catch { return false; }
+  });
+
+  if (!adminPath) {
+    throw new Error(
+      "admin.page.js não encontrado. Procurei em:\n" + candidates.join("\n")
+    );
+  }
+
+  console.log("✅ admin.page.js encontrado em:", adminPath);
+
+  const mountAdminPage = require(adminPath);
   mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
-  console.log("✅ /admin ativo: admin.page.js carregado.");
+
+  console.log("✅ /admin ativo!");
 } catch (e) {
-  console.warn("⚠️  /admin NÃO carregou. Verifique se admin.page.js está ao lado do app.js.");
-  console.warn(String(e?.message || e));
+  console.warn("⚠️  /admin NÃO carregou:", String(e?.message || e));
 }
 // ------------------------------
 // API: create
