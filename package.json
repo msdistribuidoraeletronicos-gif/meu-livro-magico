@@ -1,11 +1,15 @@
 {
   "name": "livro-infantil-ai",
   "version": "1.0.0",
+  "private": true,
   "main": "app.js",
   "type": "commonjs",
   "scripts": {
     "start": "node app.js",
     "dev": "node app.js"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "keywords": [],
   "author": "",
@@ -14,7 +18,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.97.0",
     "dotenv": "^17.3.1",
-    "express": "^5.2.1",
+    "express": "^4.21.2",
     "pdfkit": "^0.17.2",
     "replicate": "^1.4.0",
     "sharp": "^0.34.5"

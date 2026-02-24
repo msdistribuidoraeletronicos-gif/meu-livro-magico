@@ -4,16 +4,16 @@
     { "src": "api/index.js", "use": "@vercel/node" }
   ],
   "functions": {
-    "api/index.js": {
+    "/api/index.js": {
       "includeFiles": [
-        "app.js",
-        "admin.page.js",
-        "generate.page.js",
-        "books/**",
-        "public/**",
-        "landing.html",
-        "how-it-works.html",
-        "exemplos.html"
+        "../app.js",
+        "../admin.page.js",
+        "../generate.page.js",
+        "../books/**",
+        "../public/**",
+        "../landing.html",
+        "../how-it-works.html",
+        "../exemplos.html"
       ]
     }
   },
