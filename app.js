@@ -105,24 +105,34 @@ const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "p
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
-// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
-function isServerlessReadOnlyFs() {
-  // Vercel / AWS Lambda costumam ter /var/task e FS read-only fora do /tmp
-  const d = String(__dirname || "");
-  return (
+function pickWritableRoot() {
+  const tmpRoot = path.join(os.tmpdir(), "meu-livro-magico");
+
+  // Sinais fortes de serverless (Vercel/Lambda)
+  const serverless =
     !!process.env.VERCEL ||
+    !!process.env.VERCEL_ENV ||
     !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
     !!process.env.LAMBDA_TASK_ROOT ||
-    d.startsWith("/var/task")
-  );
+    String(__dirname || "").startsWith("/var/task");
+
+  if (serverless) return tmpRoot;
+
+  // Fallback: testa se dá para escrever no __dirname
+  try {
+    const testDir = path.join(__dirname, ".fs_write_test");
+    fs.mkdirSync(testDir, { recursive: true });
+    fs.rmdirSync(testDir);
+    return __dirname;
+  } catch {
+    return tmpRoot;
+  }
 }
 
-const OUT_ROOT = isServerlessReadOnlyFs()
-  ? path.join(os.tmpdir(), "meu-livro-magico")
-  : __dirname;
-
+const OUT_ROOT = pickWritableRoot();
+if (process.env.VERCEL) return path.join(os.tmpdir(), "meu-livro-magico");
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
 const BOOKS_DIR = path.join(OUT_DIR, "books");
