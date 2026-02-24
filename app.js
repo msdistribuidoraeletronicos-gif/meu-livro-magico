@@ -107,10 +107,8 @@ const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
-// ✅ /var/task é READ-ONLY em Vercel/Lambda; /tmp é gravável.
+// 🔒 Se rodar em /var/task (Vercel/Lambda), filesystem é READ-ONLY → usar /tmp
 const IS_READONLY_FS = String(__dirname || "").startsWith("/var/task");
-
-// você pode manter o IS_SERVERLESS se quiser, mas o que manda é o filesystem
 const OUT_ROOT = IS_READONLY_FS ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
 
 const OUT_DIR = path.join(OUT_ROOT, "output");
