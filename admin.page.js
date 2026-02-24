@@ -1084,7 +1084,7 @@ function renderAdminHtml({ user, allowlistEnabled }) {
 module.exports = function mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth } = {}) {
   if (!app) throw new Error("admin.page.js: app é obrigatório");
   if (!OUT_DIR) throw new Error("admin.page.js: OUT_DIR é obrigatório");
-  if (!USERS_FILE) throw new Error("admin.page.js: USERS_FILE é obrigatório");
+  USERS_FILE = USERS_FILE || path.join(OUT_DIR, "users.json");
   if (typeof requireAuth !== "function") throw new Error("admin.page.js: requireAuth é obrigatório");
 
   // ✅ FORÇA SEMPRE: <OUT_DIR>/books (global)
