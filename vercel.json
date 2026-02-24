@@ -2,17 +2,7 @@
   "version": 2,
   "functions": {
     "api/index.js": {
-      "includeFiles": [
-        "app.js",
-        "admin.page.js",
-        "generate.page.js",
-        "profile.page.js",
-        "books/**",
-        "public/**",
-        "landing.html",
-        "how-it-works.html",
-        "exemplos.html"
-      ]
+      "includeFiles": "**/*"
     }
   },
   "routes": [
