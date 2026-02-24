@@ -1735,50 +1735,33 @@ try {
 } catch {
   // ok
 }
-
-// ------------------------------
-// ✅ /admin (Painel Admin) — Vercel-safe path
-// ------------------------------
-// ------------------------------
-// ✅ /admin (Painel Admin) — Vercel-friendly
-// ------------------------------
-const USERS_FILE = path.join(OUT_DIR, "users.json");
-
-// ✅ /admin (Painel Admin) — versão robusta (Vercel-friendly)
-// ------------------------------
-// ✅ /admin (Painel Admin) — Vercel-friendly (bundle-safe)
-// ------------------------------
-const USERS_FILE = path.join(OUT_DIR, "users.json");
-
-(() => {
  // ------------------------------
 // ✅ /admin (Painel Admin) — FIX Vercel bundle (require estático)
 // ------------------------------
+// ==============================
+// /admin — mount estático (Vercel bundle-safe)
+// ==============================
 const USERS_FILE = path.join(OUT_DIR, "users.json");
 
 try {
-  // ✅ IMPORTANTÍSSIMO: require estático para a Vercel incluir no bundle
-  const mountAdminPage = require("./admin.page"); // (funciona com admin.page.js)
+  const mountAdminPage = require("./admin.page"); // arquivo admin.page.js ao lado do app.js
 
   if (typeof mountAdminPage !== "function") {
-    throw new Error(`admin.page.js export inválido. Esperado function. Recebi: ${typeof mountAdminPage}`);
+    throw new Error(`admin.page.js export inválido. Esperado function, recebi: ${typeof mountAdminPage}`);
   }
 
   mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
-  console.log("✅ /admin ativo! (admin.page.js carregado via require estático)");
+  console.log("✅ /admin ativo! (admin.page.js montado)");
 } catch (e) {
   console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
 
-  // ✅ fallback para você ver o erro (não virar Cannot GET)
+  // fallback para não ficar "Cannot GET"
   app.get("/admin", requireAuth, (req, res) => {
-    res
-      .status(500)
-      .type("html")
-      .send(
-        `<h1>Admin não carregou</h1>
-         <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
-         <p>Confira os logs do deploy na Vercel (Functions/Logs).</p>`
-      );
+    res.status(500).type("html").send(`
+      <h1>Admin não carregou</h1>
+      <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
+      <p>Veja os logs da Vercel (Functions/Logs).</p>
+    `);
   });
 }
 // ------------------------------
