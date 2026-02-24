@@ -2,34 +2,36 @@
  * app.js — MONOCÓDIGO (UI + API + OpenAI + PDF)
  * MODO SEQUENCIAL (1 imagem por vez) + TEXTO DENTRO DA IMAGEM
  *
- * ✅ ESTA VERSÃO (SUPABASE AUTH + RLS + VERCEL-SAFE):
+ * ✅ Nesta versão (SUPABASE AUTH + RLS de verdade):
+ * - ✅ Remove login local (users.json / sessions Map)
  * - ✅ Login/Cadastro via Supabase Auth (JWT em cookie)
- * - ✅ Rotas do usuário usam ANON KEY + Bearer JWT (RLS ON)
- * - ✅ Vercel-safe: tudo que precisa persistir vai para Supabase Storage (bucket "books")
- * - ✅ /api/generateNext NÃO depende de arquivo local existir entre requisições
- * - ✅ /api/image busca primeiro no disco, senão baixa do Storage
- * - ✅ Geração sequencial: story -> cover -> pages -> pdf
+ * - ✅ Rotas do usuário usam ANON KEY + Bearer JWT (RLS ON) para books/profiles
+ * - ✅ Geração em background continua salvando no DISCO e também atualiza no DB (admin) para manter sincronizado
+ * - ✅ Mantém rotas e comportamento do app (livros em output/books, /books, /generate, etc.)
+ *
+ * ✅ CORREÇÕES IMPORTANTES NESTA VERSÃO:
+ * - ✅ Corrige sessão expirando: agora salva access_token + refresh_token (cookies sb_token + sb_refresh)
+ *   e faz refresh automático quando o access_token expira.
+ * - ✅ Logout limpa ambos cookies.
  *
  * Requisitos:
- *  - Node 18+
+ *  - Node 18+ (fetch global)
  *  - npm i express pdfkit dotenv sharp @supabase/supabase-js
  *
- * .env.local:
+ * .env.local (exemplo):
  *   PORT=3000
  *   OPENAI_API_KEY=...
  *   SUPABASE_URL=https://xxxx.supabase.co
  *   SUPABASE_ANON_KEY=...
- *   SUPABASE_SERVICE_ROLE_KEY=...  (RECOMENDADO/NECESSÁRIO p/ Storage upload)
+ *   SUPABASE_SERVICE_ROLE_KEY=...   (opcional, recomendado p/ sync background + profiles insert)
  *   ADMIN_EMAILS=email1@x.com,email2@y.com
- *   COOKIE_SECURE=1
- *   (Opcional Replicate)
- *   REPLICATE_API_TOKEN=...
- *   REPLICATE_MODEL=google/nano-banana-pro
- *   REPLICATE_VERSION=... (opcional)
+ *   COOKIE_SECURE=1   (opcional: força Secure no cookie quando HTTPS)
  *
- * IMPORTANTE:
- * - Crie o bucket Supabase Storage: "books"
- * - Se bucket for privado: adapte para Signed URLs (aqui assume público p/ simplicidade)
+ * Rodar:
+ *   node app.js
+ *
+ * Acesse:
+ *   http://localhost:3000
  */
 
 "use strict";
@@ -38,12 +40,10 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
-const os = require("os");
 const express = require("express");
 const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
 const { createClient } = require("@supabase/supabase-js");
-
 
 // ------------------------------
 // dotenv: .env.local (prioridade) e .env (fallback)
@@ -73,8 +73,12 @@ const { createClient } = require("@supabase/supabase-js");
     }
   }
 
-  if (loaded.length) console.log("✅ dotenv carregou:", loaded.join(" | "));
-  else console.log("ℹ️  Nenhum .env/.env.local encontrado em:", __dirname, "ou", process.cwd());
+  if (loaded.length) {
+    console.log("✅ dotenv carregou:", loaded.join(" | "));
+  } else {
+    console.log("ℹ️  Nenhum .env/.env.local encontrado em:", __dirname, "ou", process.cwd());
+  }
+
   console.log("DEBUG app.js ADMIN_EMAILS =", JSON.stringify(process.env.ADMIN_EMAILS || ""));
 })();
 
@@ -94,16 +98,19 @@ const IMAGE_MODEL = String(process.env.IMAGE_MODEL || "dall-e-2").trim() || "dal
 const REPLICATE_API_TOKEN = String(process.env.REPLICATE_API_TOKEN || "").trim();
 const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "google/nano-banana-pro").trim();
 const REPLICATE_VERSION = String(process.env.REPLICATE_VERSION || "").trim(); // opcional
+
 const REPLICATE_RESOLUTION = String(process.env.REPLICATE_RESOLUTION || "2K").trim();
 const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "1:1").trim();
 const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "png").trim();
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
-const IMAGE_PROVIDER = REPLICATE_API_TOKEN ? "replicate" : "openai";
+// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
+const os = require("os");
 
-// ✅ Vercel: /var/task read-only, só /tmp é gravável
+// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 function pickWritableRoot() {
   const tmpRoot = path.join(os.tmpdir(), "meu-livro-magico");
+
   const serverless =
     !!process.env.VERCEL ||
     !!process.env.VERCEL_ENV ||
@@ -125,11 +132,15 @@ function pickWritableRoot() {
 
 const OUT_ROOT = pickWritableRoot();
 const OUT_DIR = path.join(OUT_ROOT, "output");
+const USERS_DIR = path.join(OUT_DIR, "users");
 const BOOKS_DIR = path.join(OUT_DIR, "books");
 const JSON_LIMIT = "25mb";
 
 // Base de edição (mantém performance e garante match image/mask)
 const EDIT_MAX_SIDE = 1024;
+
+// Provider de imagem ativo
+const IMAGE_PROVIDER = REPLICATE_API_TOKEN ? "replicate" : "openai";
 
 // Páginas opcionais (arquivos)
 const LANDING_HTML = path.join(__dirname, "landing.html");
@@ -143,7 +154,7 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-// ✅ Cookies: access + refresh
+// ✅ Cookies (corrigido): salva access + refresh para evitar expiração e logout "aleatório"
 const SB_ACCESS_COOKIE = "sb_token"; // access_token
 const SB_REFRESH_COOKIE = "sb_refresh"; // refresh_token
 
@@ -173,9 +184,6 @@ function assertSupabaseAnon() {
   if (!supabaseAnon) throw new Error("Supabase ANON não configurado. Configure SUPABASE_URL e SUPABASE_ANON_KEY.");
 }
 
-// ------------------------------
-// Cookies
-// ------------------------------
 function parseCookies(req) {
   const header = String(req.headers.cookie || "");
   const out = {};
@@ -190,11 +198,18 @@ function parseCookies(req) {
   return out;
 }
 
+// ✅ adiciona cookie sem sobrescrever os anteriores
 function pushSetCookie(res, cookieStr) {
   const prev = res.getHeader("Set-Cookie");
-  if (!prev) return res.setHeader("Set-Cookie", cookieStr);
-  if (Array.isArray(prev)) return res.setHeader("Set-Cookie", [...prev, cookieStr]);
-  return res.setHeader("Set-Cookie", [prev, cookieStr]);
+  if (!prev) {
+    res.setHeader("Set-Cookie", cookieStr);
+    return;
+  }
+  if (Array.isArray(prev)) {
+    res.setHeader("Set-Cookie", [...prev, cookieStr]);
+    return;
+  }
+  res.setHeader("Set-Cookie", [prev, cookieStr]);
 }
 
 function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
@@ -206,7 +221,12 @@ function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
     `Max-Age=${maxAgeSec}`,
   ];
 
-  const secureOn = String(process.env.COOKIE_SECURE || "").trim() === "1" || !!process.env.VERCEL;
+  // Se você usar HTTPS em produção, pode habilitar Secure:
+  // Dica: na Vercel é HTTPS, então isso deve estar ON.
+  const secureOn =
+    String(process.env.COOKIE_SECURE || "").trim() === "1" ||
+    !!process.env.VERCEL;
+
   if (secureOn) parts.push("Secure");
 
   pushSetCookie(res, parts.join("; "));
@@ -214,8 +234,13 @@ function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
 
 function clearCookie(res, name) {
   const parts = [`${name}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
-  const secureOn = String(process.env.COOKIE_SECURE || "").trim() === "1" || !!process.env.VERCEL;
+
+  const secureOn =
+    String(process.env.COOKIE_SECURE || "").trim() === "1" ||
+    !!process.env.VERCEL;
+
   if (secureOn) parts.push("Secure");
+
   pushSetCookie(res, parts.join("; "));
 }
 
@@ -236,10 +261,8 @@ function clearUserTokens(res) {
   clearCookie(res, SB_REFRESH_COOKIE);
 }
 
-// ------------------------------
-// Auth helpers
-// ------------------------------
 async function refreshAccessTokenIfNeeded(req, res) {
+  // Tenta refresh usando refresh_token se access_token estiver inválido/expirado.
   try {
     assertSupabaseAnon();
     const { refresh } = getUserTokens(req);
@@ -251,7 +274,9 @@ async function refreshAccessTokenIfNeeded(req, res) {
     const access = data.session.access_token;
     const newRefresh = data.session.refresh_token || refresh;
 
+    // atualiza cookies
     if (res) setUserTokens(res, { access, refresh: newRefresh });
+
     return { access, refresh: newRefresh };
   } catch {
     return null;
@@ -268,6 +293,7 @@ async function getCurrentUser(req, resForCookieUpdate = null) {
 
     let { data, error } = await sb.auth.getUser();
 
+    // Se token expirou/invalidou, tenta refresh
     if (error || !data?.user) {
       const refreshed = await refreshAccessTokenIfNeeded(req, resForCookieUpdate);
       if (!refreshed?.access) return null;
@@ -299,7 +325,9 @@ function isAdminUser(user) {
 }
 
 function canAccessBook(userId, manifest, reqUser) {
+  // admin vê tudo
   if (isAdminUser(reqUser)) return true;
+  // usuário comum: só o dono
   return !!manifest && String(manifest.ownerId || "") === String(userId || "");
 }
 
@@ -429,6 +457,7 @@ function themeDesc(themeKey) {
   return map[themeKey] || String(themeKey || "aventura divertida");
 }
 
+// helper simples p/ evitar quebrar HTML
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -439,11 +468,12 @@ function escapeHtml(s) {
 }
 
 // ------------------------------
-// HTTP Helpers
+// HTTP Helpers (JSON + download)
 // ------------------------------
 async function fetchJson(url, { method = "GET", headers = {}, body = null, timeoutMs = 180000 } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
   try {
     const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
     const text = await r.text();
@@ -456,6 +486,7 @@ async function fetchJson(url, { method = "GET", headers = {}, body = null, timeo
       const msg = json?.detail || json?.error || text;
       throw new Error(`HTTP ${r.status}: ${String(msg).slice(0, 2000)}`);
     }
+
     return json ?? {};
   } finally {
     clearTimeout(t);
@@ -467,7 +498,7 @@ async function downloadToBuffer(url, timeoutMs = 180000) {
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(url, { signal: ctrl.signal });
-    if (!r.ok) throw new Error(`Falha ao baixar: HTTP ${r.status}`);
+    if (!r.ok) throw new Error(`Falha ao baixar imagem: HTTP ${r.status}`);
     const ab = await r.arrayBuffer();
     return Buffer.from(ab);
   } finally {
@@ -476,76 +507,27 @@ async function downloadToBuffer(url, timeoutMs = 180000) {
 }
 
 // ------------------------------
-// Supabase Storage (VERCEL-SAFE)
-// ------------------------------
-const STORAGE_BUCKET = String(process.env.SUPABASE_BUCKET || "books").trim() || "books";
-
-function storageKeyFor(userId, bookId, filename) {
-  return `${String(userId)}/${String(bookId)}/${String(filename)}`;
-}
-async function sbDownloadToLocal({ pathKey, localPath }) {
-  if (!supabaseAnon) throw new Error("Supabase ANON não configurado.");
-  const { data, error } = await supabaseAnon.storage.from(STORAGE_BUCKET).download(pathKey);
-  if (error) throw error;
-  const ab = await data.arrayBuffer();
-  await ensureDir(path.dirname(localPath));
-  await fsp.writeFile(localPath, Buffer.from(ab));
-  return localPath;
-}
-
-async function ensureLocalFromStorage(localPath, storageKey) {
-  if (existsSyncSafe(localPath)) return localPath;
-  if (!storageKey) throw new Error("storageKey ausente (reenvie a foto).");
-  return await sbDownloadToLocal({ pathKey: storageKey, localPath });
-}
-
-async function uploadLocalFileToStorage({ userId, bookId, localPath, filename, contentType }) {
-  const buf = await fsp.readFile(localPath);
-  const key = storageKeyFor(userId, bookId, filename);
-  await sbUploadBuffer({ pathKey: key, contentType, buffer: buf });
-  return { key, url: sbPublicUrl(key) };
-}
-function assertSupabaseAdmin() {
-  if (!supabaseAdmin) {
-    throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente. Necessário para upload no Supabase Storage.");
-  }
-}
-
-async function sbUploadBuffer({ pathKey, contentType, buffer }) {
-  assertSupabaseAdmin();
-
-  const { error } = await supabaseAdmin
-    .storage
-    .from(STORAGE_BUCKET)
-    .upload(pathKey, buffer, {
-      contentType: contentType || "application/octet-stream",
-      upsert: true,
-      cacheControl: "3600",
-    });
-
-  if (error) throw error;
-  return true;
-}
-
-function sbPublicUrl(pathKey) {
-  if (!supabaseAnon) throw new Error("Supabase ANON não configurado.");
-  const { data } = supabaseAnon.storage.from(STORAGE_BUCKET).getPublicUrl(pathKey);
-  return data?.publicUrl || "";
-}
-// ------------------------------
-// OpenAI (texto)
+// OpenAI (fetch direto) — texto
 // ------------------------------
 async function openaiFetchJson(url, bodyObj, timeoutMs = 180000) {
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada.");
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY não configurada. Crie .env.local com OPENAI_API_KEY=...");
+  }
+
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
   try {
     const r = await fetch(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(bodyObj),
       signal: ctrl.signal,
     });
+
     const text = await r.text();
     if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}: ${text.slice(0, 2000)}`);
     return JSON.parse(text);
@@ -567,6 +549,7 @@ function isModelAccessError(msg) {
 
 async function openaiResponsesWithFallback({ models, input, jsonObject = true, timeoutMs = 180000 }) {
   let lastErr = null;
+
   for (const model of models) {
     try {
       const body = { model, input };
@@ -579,13 +562,14 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
       throw e;
     }
   }
+
   throw lastErr || new Error("Falha ao chamar Responses com fallback.");
 }
 
 // ------------------------------
-// Replicate — imagem (principal)
+// Replicate — imagem (principal) ✅ FIX 422: version obrigatório
 // ------------------------------
-const replicateVersionCache = new Map(); // "owner/name" -> versionId
+const replicateVersionCache = new Map(); // key: "owner/name" -> versionId
 
 function splitReplicateModel(model) {
   const s = String(model || "").trim();
@@ -602,7 +586,11 @@ async function replicateGetLatestVersionId(model) {
   if (replicateVersionCache.has(key)) return replicateVersionCache.get(key);
 
   const parsed = splitReplicateModel(key);
-  if (!parsed) throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name".`);
+  if (!parsed) {
+    throw new Error(
+      `REPLICATE_MODEL inválido: "${key}". Use "owner/name" (ex: google/nano-banana-pro) ou configure REPLICATE_VERSION.`
+    );
+  }
 
   const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
     method: "GET",
@@ -611,16 +599,22 @@ async function replicateGetLatestVersionId(model) {
   });
 
   const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
-  if (!versionId) throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION.`);
+  if (!versionId) {
+    throw new Error(
+      `Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente no .env.local.`
+    );
+  }
 
   replicateVersionCache.set(key, String(versionId));
   return String(versionId);
 }
 
 async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
-  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
+  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
+
   const version = await replicateGetLatestVersionId(model);
 
+  // exige "version" e rejeita "model"
   return await fetchJson("https://api.replicate.com/v1/predictions", {
     method: "POST",
     timeoutMs,
@@ -637,7 +631,9 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
   const started = Date.now();
   while (true) {
-    if (Date.now() - started > timeoutMs) throw new Error("Timeout aguardando prediction do Replicate.");
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("Timeout aguardando prediction do Replicate.");
+    }
 
     const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       method: "GET",
@@ -647,7 +643,10 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
     const st = String(pred?.status || "");
     if (st === "succeeded") return pred;
-    if (st === "failed" || st === "canceled") throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
+    if (st === "failed" || st === "canceled") {
+      throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
+    }
+
     await new Promise((r) => setTimeout(r, pollMs));
   }
 }
@@ -656,8 +655,10 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 // OpenAI Images (fallback opcional)
 // ------------------------------
 async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada.");
-  if (typeof FormData === "undefined" || typeof Blob === "undefined") throw new Error("Node precisa ser 18+.");
+  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada. Use .env.local.");
+  if (typeof FormData === "undefined" || typeof Blob === "undefined") {
+    throw new Error("Seu Node não tem FormData/Blob globais. Use Node 18+.");
+  }
 
   const imgBuf = await fsp.readFile(imagePngPath);
   const maskBuf = maskPngPath && existsSyncSafe(maskPngPath) ? await fsp.readFile(maskPngPath) : null;
@@ -665,8 +666,12 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
   if (maskBuf) {
     const mi = await sharp(imgBuf).metadata();
     const mm = await sharp(maskBuf).metadata();
-    if ((mi?.width || 0) !== (mm?.width || 0) || (mi?.height || 0) !== (mm?.height || 0)) {
-      throw new Error(`Mask e imagem com tamanhos diferentes: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
+    const iw = mi?.width || 0;
+    const ih = mi?.height || 0;
+    const mw = mm?.width || 0;
+    const mh = mm?.height || 0;
+    if (iw && ih && mw && mh && (iw !== mw || ih !== mh)) {
+      throw new Error(`Mask e imagem com tamanhos diferentes: image=${iw}x${ih}, mask=${mw}x${mh}. Reenvie a foto.`);
     }
   }
 
@@ -683,7 +688,9 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
       form.append("n", "1");
 
       form.append("image", new Blob([imgBuf], { type: "image/png" }), path.basename(imagePngPath) || "image.png");
-      if (maskBuf) form.append("mask", new Blob([maskBuf], { type: "image/png" }), path.basename(maskPngPath) || "mask.png");
+      if (maskBuf) {
+        form.append("mask", new Blob([maskBuf], { type: "image/png" }), path.basename(maskPngPath) || "mask.png");
+      }
 
       const r = await fetch("https://api.openai.com/v1/images/edits", {
         method: "POST",
@@ -718,6 +725,7 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
   if (REPLICATE_API_TOKEN) {
     const imgBuf = await fsp.readFile(imagePngPath);
+
     const input = {
       prompt,
       image_input: [bufferToDataUrlPng(imgBuf)],
@@ -738,7 +746,8 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     let url = "";
     if (typeof pred?.output === "string") url = pred.output;
     else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
-    if (!url) throw new Error("Replicate não retornou URL de imagem.");
+
+    if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
 
     const buf = await downloadToBuffer(url, 240000);
     return await sharp(buf).png().toBuffer();
@@ -748,7 +757,7 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
 }
 
 // ------------------------------
-// História em TEXTO
+// História em TEXTO (páginas/parágrafos)
 // ------------------------------
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
   const theme_key = String(themeKey || "space");
@@ -761,8 +770,10 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
     "Você é um escritor de livros infantis.",
     "Crie uma história curta e positiva, apropriada para a idade.",
     "Retorne em PÁGINAS (cada página = 1 parágrafo).",
-    "Cada página deve ter: page (número), title (string curta), text (UM PARÁGRAFO, sem quebras de linha).",
-    "Limite aproximado: até ~55 palavras se <=7 anos; até ~75 se >7.",
+    "Cada página deve ter:",
+    "- page (número)",
+    "- title (string curta)",
+    "- text (UM PARÁGRAFO, sem quebras de linha; até ~55 palavras se <=7 anos; até ~75 se >7)",
     "Regras:",
     "- O nome da criança deve aparecer no texto e ser o protagonista.",
     "- Linguagem simples, divertida e mágica, com uma pequena lição.",
@@ -817,7 +828,7 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
 }
 
 // ------------------------------
-// Prompts de imagem
+// Prompt de imagem por parágrafo + estilo (read | color)
 // ------------------------------
 function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, styleKey }) {
   const th = themeDesc(themeKey);
@@ -826,16 +837,16 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, sty
   const style = String(styleKey || "read").trim();
 
   const base = [
-    "Crie UMA CENA para este texto:",
+    "Estou escrevendo um livro infantil e quero que você crie UMA CENA para este texto:",
     `"${txt}"`,
     "Regras IMPORTANTES:",
     "- Use a criança da imagem enviada como personagem principal.",
     "- Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
     "- Mantenha a identidade consistente em todas as páginas (same face, same hairstyle, same skin tone).",
     `- Tema da história: ${th}.`,
-    "- Composição: criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
+    "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
     "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
-    name ? `Nome (contexto): ${name}.` : "",
+    name ? `Nome da criança (apenas contexto): ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
@@ -844,13 +855,14 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, sty
       0,
       [
         "- Estilo: página de livro de colorir (coloring book).",
-        "- PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
+        "- Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
         "- SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM texturas realistas.",
-        "- Fundo branco (ou bem claro), poucos detalhes no fundo.",
+        "- Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
+        "- Visual infantil, fofo e amigável; formas simples; alta legibilidade dos contornos.",
       ].join(" ")
     );
   } else {
-    base.splice(5, 0, "- Estilo: ilustração semi-realista infantil, alegre, cores agradáveis, luz suave.");
+    base.splice(5, 0, "- Estilo: ilustração semi-realista de livro infantil, bonita, alegre, cores agradáveis, luz suave.");
   }
 
   return base.join(" ");
@@ -863,12 +875,12 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
 
   const parts = [
     "Crie uma CAPA de livro infantil.",
-    "Use a criança da imagem como personagem principal e mantenha suas características originais.",
-    "Mantenha identidade consistente com a foto (same face, same hairstyle, same skin tone).",
+    "Use a criança da imagem como personagem principal e mantenha suas características originais (identidade consistente).",
+    "Mantenha a identidade consistente com a foto (same face, same hairstyle, same skin tone).",
     `Tema: ${th}.`,
     "Cena de capa: alegre, mágica, positiva, com a criança em destaque no centro.",
     "NÃO escreva texto/legendas na imagem (eu vou aplicar depois).",
-    name ? `Nome (contexto): ${name}.` : "",
+    name ? `Nome da criança (apenas contexto): ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
@@ -876,10 +888,10 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
       1,
       0,
       [
-        "Estilo: CAPA para colorir (coloring book).",
-        "PRETO E BRANCO, contornos fortes, traço limpo.",
+        "Estilo: CAPA em formato de livro para colorir (coloring book).",
+        "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
         "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
-        "Fundo branco (ou bem claro) e poucos detalhes.",
+        "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
       ].join(" ")
     );
   } else {
@@ -905,15 +917,19 @@ function wrapLines(text, maxCharsPerLine) {
   const words = String(text || "").trim().split(/\s+/).filter(Boolean);
   const lines = [];
   let cur = "";
+
   for (const w of words) {
     const next = cur ? cur + " " + w : w;
-    if (next.length <= maxCharsPerLine) cur = next;
-    else {
+    if (next.length <= maxCharsPerLine) {
+      cur = next;
+    } else {
       if (cur) lines.push(cur);
       if (w.length > maxCharsPerLine) {
         lines.push(w.slice(0, maxCharsPerLine));
         cur = w.slice(maxCharsPerLine);
-      } else cur = w;
+      } else {
+        cur = w;
+      }
     }
   }
   if (cur) lines.push(cur);
@@ -923,6 +939,7 @@ function wrapLines(text, maxCharsPerLine) {
 async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const img = sharp(inputPath);
   const meta = await img.metadata();
+
   const W = Math.max(1, meta.width || 1024);
   const H = Math.max(1, meta.height || 1024);
 
@@ -1087,7 +1104,7 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
 }
 
 // ------------------------------
-// PDF: só imagens
+// PDF: só imagens (capa + páginas já com texto dentro)
 // ------------------------------
 async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir }) {
   await ensureDir(outputDir);
@@ -1124,11 +1141,11 @@ async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir 
 // ------------------------------
 // Manifest (disco)
 // ------------------------------
-function bookDirOf(userId, bookId) {
-  return path.join(BOOKS_DIR, String(userId), String(bookId));
+function bookDirOf(_userId, bookId) {
+  return path.join(BOOKS_DIR, String(bookId));
 }
-function manifestPathOf(userId, bookId) {
-  return path.join(bookDirOf(userId, bookId), "book.json");
+function manifestPathOf(_userId, bookId) {
+  return path.join(bookDirOf("", bookId), "book.json");
 }
 
 async function loadManifest(userId, bookId) {
@@ -1151,16 +1168,12 @@ function makeEmptyManifest(id, ownerId) {
     theme: "",
     style: "read", // read | color
     child: { name: "", age: 6, gender: "neutral" },
-
-    photo: { ok: false, file: "", mime: "", editBase: "", storageKey: "", url: "" },
-    mask: { ok: false, file: "", editBase: "", storageKey: "", url: "" },
-
+    photo: { ok: false, file: "", mime: "", editBase: "" },
+    mask: { ok: false, file: "", editBase: "" },
     pages: [],
     images: [],
-
-    cover: { ok: false, file: "", storageKey: "", url: "" },
+    cover: { ok: false, file: "", url: "" },
     pdf: "",
-    pdf_storageKey: "",
     updatedAt: nowISO(),
   };
 }
@@ -1168,10 +1181,12 @@ function makeEmptyManifest(id, ownerId) {
 // ------------------------------
 // Jobs em memória
 // ------------------------------
-const jobs = new Map(); // "userId:bookId" -> { running: bool }
+const jobs = new Map(); // key "userId:bookId" -> { running: bool }
 
 // ------------------------------
-// DB: books/profiles
+// DB: Books (public.books)
+// - Rotas do usuário: usam req.sb (RLS ON)
+// - Background: usa supabaseAdmin (se existir) para sync
 // ------------------------------
 function manifestToBookRow(userId, m) {
   return {
@@ -1259,15 +1274,19 @@ async function dbUpsertBookAdmin(userId, manifest) {
 
 async function dbInsertProfileAdmin(userId, name) {
   if (!supabaseAdmin) return false;
-  const { error } = await supabaseAdmin.from("profiles").upsert({ id: userId, name: String(name || "") }, { onConflict: "id" });
+  const { error } = await supabaseAdmin.from("profiles").upsert(
+    { id: userId, name: String(name || "") },
+    { onConflict: "id" }
+  );
   if (error) throw error;
   return true;
 }
 
-// ✅ Persistência unificada: disco + DB
+// ✅ Persistência unificada: disco + DB (user quando disponível; admin no background)
 async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {}) {
   await saveManifest(userId, bookId, manifest);
 
+  // 1) tenta pelo sbUser (RLS ON) se foi chamado dentro de request do usuário
   if (sbUser) {
     try {
       await dbUpsertBookUser(sbUser, userId, manifest);
@@ -1277,6 +1296,7 @@ async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {})
     }
   }
 
+  // 2) fallback admin (server trusted) para manter sync durante jobs background
   if (supabaseAdmin) {
     try {
       await dbUpsertBookAdmin(userId, manifest);
@@ -1290,9 +1310,11 @@ async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {})
 }
 
 async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallback = true } = {}) {
+  // 1) disco
   const disk = await loadManifest(userId, bookId);
   if (disk) return disk;
 
+  // 2) DB via usuário (RLS ON) se disponível
   if (sbUser) {
     try {
       const row = await dbGetBookUser(sbUser, bookId);
@@ -1302,10 +1324,11 @@ async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallba
         return m;
       }
     } catch (e) {
-      console.warn("⚠️  DB read (user/RLS) falhou:", String(e?.message || e));
+      console.warn("⚠️  DB read (user/RLS) falhou (continuando):", String(e?.message || e));
     }
   }
 
+  // 3) fallback admin (somente se permitido)
   if (allowAdminFallback && supabaseAdmin) {
     try {
       const { data, error } = await supabaseAdmin.from("books").select("*").eq("id", bookId).maybeSingle();
@@ -1316,7 +1339,7 @@ async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallba
         return m;
       }
     } catch (e) {
-      console.warn("⚠️  DB read (admin) falhou:", String(e?.message || e));
+      console.warn("⚠️  DB read (admin) falhou (continuando):", String(e?.message || e));
     }
   }
 
@@ -1329,7 +1352,6 @@ async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallba
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-
 app.get("/api/debug-fs", (req, res) => {
   res.json({
     ok: true,
@@ -1337,22 +1359,63 @@ app.get("/api/debug-fs", (req, res) => {
     __dirname,
     OUT_ROOT,
     OUT_DIR,
-    tmpdir: os.tmpdir(),
-    STORAGE_BUCKET,
-    hasServiceRole: !!supabaseAdmin,
-  });
-});
-app.get("/version", (req, res) => {
-  res.json({
-    ok: true,
-    now: new Date().toISOString(),
-    vercel: !!process.env.VERCEL,
-    commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
-    env: process.env.VERCEL_ENV || null,
+    tmpdir: require("os").tmpdir(),
   });
 });
 // ------------------------------
-// LOGIN UI (mantive simples e funcional)
+// books module (/books)
+// ------------------------------
+try {
+  const mountBooks = require(path.join(__dirname, "books")); // books/index.js
+  mountBooks(app, { OUT_DIR, USERS_DIR, requireAuth });
+  console.log("✅ /books ativo: módulo books/ carregado com sucesso.");
+} catch (e) {
+  console.warn("❌ módulo books/ NÃO carregou. /books desativado.");
+  console.warn("   Motivo:", String(e?.message || e));
+  console.warn("   Caminho esperado:", path.join(__dirname, "books", "index.js"));
+}
+
+// ------------------------------
+// generate.page.js (/generate)
+// ------------------------------
+try {
+  const mountGeneratePage = require(path.join(__dirname, "generate.page.js"));
+  mountGeneratePage(app, { requireAuth });
+  console.log("✅ /generate ativo: generate.page.js carregado com sucesso.");
+} catch (e) {
+  console.warn("❌ generate.page.js NÃO carregou. /generate desativado.");
+  console.warn("   Motivo:", String(e?.message || e));
+  console.warn("   Caminho esperado:", path.join(__dirname, "generate.page.js"));
+}
+
+// ------------------------------
+// admin.page.js (/admin)
+// ------------------------------
+try {
+  const mountAdminPage = require(path.join(__dirname, "admin.page.js"));
+  mountAdminPage(app, { OUT_DIR, BOOKS_DIR, USERS_FILE: "", requireAuth });
+  console.log("✅ /admin ativo: admin.page.js carregado com sucesso.");
+} catch (e) {
+  console.warn("❌ admin.page.js NÃO carregou. /admin desativado.");
+  console.warn("   Motivo:", String(e?.message || e));
+  console.warn("   Caminho esperado:", path.join(__dirname, "admin.page.js"));
+}
+
+// ------------------------------
+// profile.page.js (/profile)
+// ------------------------------
+try {
+  const mountProfilePage = require(path.join(__dirname, "profile.page.js"));
+  mountProfilePage(app, { requireAuth });
+  console.log("✅ /profile ativo: profile.page.js carregado com sucesso.");
+} catch (e) {
+  console.warn("❌ profile.page.js NÃO carregou. /profile desativado.");
+  console.warn("   Motivo:", String(e?.message || e));
+  console.warn("   Caminho esperado:", path.join(__dirname, "profile.page.js"));
+}
+
+// ------------------------------
+// LOGIN UI
 // ------------------------------
 app.get("/login", async (req, res) => {
   const nextUrl = String(req.query?.next || "/create");
@@ -1366,22 +1429,56 @@ app.get("/login", async (req, res) => {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Login — Meu Livro Mágico</title>
 <style>
-  :root{--bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--violet:#7c3aed;--pink:#db2777;}
+  :root{
+    --bg1:#ede9fe; --bg2:#ffffff; --bg3:#fdf2f8;
+    --text:#111827; --muted:#6b7280; --border:#e5e7eb;
+    --violet:#7c3aed; --pink:#db2777;
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));min-height:100vh;display:grid;place-items:center;padding:24px;color:var(--text);}
-  .card{width:min(520px,100%);background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px;}
-  h1{margin:8px 0 0;font-size:26px;font-weight:1000;text-align:center;}
-  p{margin:8px 0 0;text-align:center;color:var(--muted);font-weight:800;}
-  .tabs{display:flex;gap:10px;margin-top:16px;}
-  .tab{flex:1;border:1px solid var(--border);background:#fff;border-radius:999px;padding:10px 12px;cursor:pointer;font-weight:1000;color:#374151;}
-  .tab.active{background:linear-gradient(90deg,var(--violet),var(--pink));color:#fff;border-color:transparent;}
+  body{
+    margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    min-height:100vh; display:grid; place-items:center; padding:24px;
+    color:var(--text);
+  }
+  .card{
+    width:min(520px, 100%);
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:22px;
+    box-shadow: 0 20px 50px rgba(0,0,0,.10);
+    padding:18px;
+  }
+  h1{margin:8px 0 0; font-size:26px; font-weight:1000; text-align:center;}
+  p{margin:8px 0 0; text-align:center; color:var(--muted); font-weight:800;}
+  .tabs{display:flex; gap:10px; margin-top:16px;}
+  .tab{
+    flex:1; border:1px solid var(--border); background:#fff;
+    border-radius:999px; padding:10px 12px; cursor:pointer;
+    font-weight:1000; color:#374151;
+  }
+  .tab.active{background:linear-gradient(90deg,var(--violet),var(--pink)); color:#fff; border-color:transparent;}
   .field{margin-top:12px;}
-  .label{font-weight:1000;margin:0 0 6px;}
-  input{width:100%;border:1px solid var(--border);border-radius:14px;padding:12px 12px;font-size:15px;font-weight:900;outline:none;}
-  input:focus{border-color:rgba(124,58,237,.4);box-shadow:0 0 0 4px rgba(124,58,237,.12);}
-  .btn{width:100%;margin-top:14px;border:0;border-radius:999px;padding:12px 14px;font-weight:1000;cursor:pointer;color:#fff;background:linear-gradient(90deg,var(--violet),var(--pink));box-shadow:0 16px 34px rgba(124,58,237,.22);}
-  .hint{margin-top:12px;padding:10px 12px;border-radius:14px;background:rgba(219,39,119,.06);border:1px solid rgba(219,39,119,.14);color:#7f1d1d;font-weight:900;display:none;white-space:pre-wrap;}
-  a.link{display:block;text-align:center;margin-top:12px;color:#4c1d95;font-weight:1000;text-decoration:none;}
+  .label{font-weight:1000; margin:0 0 6px;}
+  input{
+    width:100%; border:1px solid var(--border); border-radius:14px;
+    padding:12px 12px; font-size:15px; font-weight:900; outline:none;
+  }
+  input:focus{border-color:rgba(124,58,237,.4); box-shadow:0 0 0 4px rgba(124,58,237,.12);}
+  .btn{
+    width:100%; margin-top:14px;
+    border:0; border-radius:999px; padding:12px 14px;
+    font-weight:1000; cursor:pointer; color:#fff;
+    background: linear-gradient(90deg,var(--violet),var(--pink));
+    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+  }
+  .hint{
+    margin-top:12px; padding:10px 12px; border-radius:14px;
+    background: rgba(219,39,119,.06);
+    border: 1px solid rgba(219,39,119,.14);
+    color:#7f1d1d; font-weight:900; display:none; white-space:pre-wrap;
+  }
+  a.link{display:block; text-align:center; margin-top:12px; color:#4c1d95; font-weight:1000; text-decoration:none;}
   a.link:hover{text-decoration:underline;}
 </style>
 </head>
@@ -1425,17 +1522,19 @@ app.get("/login", async (req, res) => {
 
     <div class="hint" id="hint"></div>
 
-    <a class="link" href="/sales">← Voltar</a>
+    <a class="link" href="/sales">← Voltar para Vendas</a>
   </div>
 
 <script>
   const nextUrl = ${JSON.stringify(nextUrl || "/create")};
+
   const $ = (id) => document.getElementById(id);
   function setHint(msg){
     const el = $("hint");
     el.textContent = msg || "";
     el.style.display = msg ? "block" : "none";
   }
+
   function setTab(which){
     const isLogin = which === "login";
     $("tabLogin").classList.toggle("active", isLogin);
@@ -1444,11 +1543,16 @@ app.get("/login", async (req, res) => {
     $("panelSignup").style.display = isLogin ? "none" : "block";
     setHint("");
   }
+
   $("tabLogin").onclick = () => setTab("login");
   $("tabSignup").onclick = () => setTab("signup");
 
   async function postJson(url, body){
-    const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{}) });
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body || {})
+    });
     const j = await r.json().catch(()=> ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || "Falha");
     return j;
@@ -1463,7 +1567,9 @@ app.get("/login", async (req, res) => {
       if (!password) return setHint("Digite a senha.");
       await postJson("/api/auth/login", { email, password });
       window.location.href = nextUrl || "/create";
-    }catch(e){ setHint(String(e.message || e)); }
+    }catch(e){
+      setHint(String(e.message || e));
+    }
   };
 
   $("btnDoSignup").onclick = async () => {
@@ -1481,7 +1587,9 @@ app.get("/login", async (req, res) => {
         return;
       }
       window.location.href = nextUrl || "/create";
-    }catch(e){ setHint(String(e.message || e)); }
+    }catch(e){
+      setHint(String(e.message || e));
+    }
   };
 </script>
 </body>
@@ -1489,7 +1597,7 @@ app.get("/login", async (req, res) => {
 });
 
 // ------------------------------
-// AUTH API
+// AUTH API (Supabase Auth) ✅ corrigido p/ salvar access+refresh e evitar expiração
 // ------------------------------
 app.post("/api/auth/signup", async (req, res) => {
   try {
@@ -1501,25 +1609,38 @@ app.post("/api/auth/signup", async (req, res) => {
 
     if (!name || name.length < 2) return res.status(400).json({ ok: false, error: "Nome inválido." });
     if (!email || !email.includes("@")) return res.status(400).json({ ok: false, error: "E-mail inválido." });
-    if (!password || password.length < 6) return res.status(400).json({ ok: false, error: "Senha deve ter no mínimo 6 caracteres." });
+    if (!password || password.length < 6)
+      return res.status(400).json({ ok: false, error: "Senha deve ter no mínimo 6 caracteres." });
 
-    const { data, error } = await supabaseAnon.auth.signUp({ email, password, options: { data: { name } } });
+    // Cria usuário
+    const { data, error } = await supabaseAnon.auth.signUp({
+      email,
+      password,
+      options: { data: { name } },
+    });
     if (error) throw error;
 
+    // Se o projeto exigir confirmação de e-mail, session pode vir null
     const accessToken = data?.session?.access_token || "";
     const refreshToken = data?.session?.refresh_token || "";
 
+    // Tenta criar/atualizar profile (se service role disponível)
     const uid = data?.user?.id || "";
     if (uid && supabaseAdmin) {
-      try { await dbInsertProfileAdmin(uid, name); }
-      catch (e) { console.warn("⚠️  Falha ao upsert profiles:", String(e?.message || e)); }
+      try {
+        await dbInsertProfileAdmin(uid, name);
+      } catch (e) {
+        console.warn("⚠️  Falha ao upsert profiles (admin):", String(e?.message || e));
+      }
     }
 
+    // Se já vier logado, seta cookies
     if (accessToken) {
       setUserTokens(res, { access: accessToken, refresh: refreshToken });
       return res.json({ ok: true, needs_email_confirm: false });
     }
 
+    // Caso exija confirmação de e-mail
     return res.json({ ok: true, needs_email_confirm: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -1560,230 +1681,873 @@ app.post("/api/auth/logout", async (req, res) => {
 });
 
 // ------------------------------
-// UI / SALES
+// UI / SALES (opcional)
 // ------------------------------
 app.get("/sales", (req, res) => {
   if (existsSyncSafe(LANDING_HTML)) return res.sendFile(LANDING_HTML);
-  res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Meu Livro Mágico</title></head>
-<body style="font-family:system-ui;margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#fff;">
-  <div style="max-width:820px;margin:24px;padding:24px;border-radius:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);">
-    <h1 style="margin:0 0 10px 0;font-size:28px;">📚 Meu Livro Mágico</h1>
-    <p style="opacity:.9;line-height:1.6;margin:0 0 14px 0;">Gere um livro infantil personalizado com foto, história e imagens.</p>
-    <a href="/create" style="display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:14px;background:#ff6b6b;color:#fff;text-decoration:none;font-weight:900;">✨ Ir para o gerador</a>
-  </div>
-</body></html>`);
-});
 
-app.get("/como-funciona", (req, res) => {
-  if (existsSyncSafe(HOW_IT_WORKS_HTML)) return res.sendFile(HOW_IT_WORKS_HTML);
-  res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Como funciona</title></head>
-<body style="font-family:system-ui;margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827;">
-  <div style="max-width:860px;margin:24px;padding:24px;border-radius:18px;background:#fff;border:1px solid rgba(0,0,0,.08);box-shadow:0 20px 50px rgba(0,0,0,.10);">
-    <h1 style="margin:0 0 10px 0;font-size:28px;">✨ Como funciona</h1>
-    <ol style="line-height:1.7;font-weight:800;">
-      <li>Envie a foto</li>
-      <li>Escolha tema e estilo</li>
-      <li>Geramos história + imagens</li>
-      <li>Geramos PDF</li>
-    </ol>
-    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
-      <a href="/sales" style="padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff;text-decoration:none;font-weight:1000;">🛒 Voltar</a>
-      <a href="/create" style="padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff;text-decoration:none;font-weight:1000;">📚 Gerador</a>
-    </div>
-  </div>
-</body></html>`);
-});
-
-app.get("/exemplos", (req, res) => {
-  if (existsSyncSafe(EXEMPLOS_HTML)) return res.sendFile(EXEMPLOS_HTML);
-  return res.status(404).type("html").send(`<h1>exemplos.html não encontrado</h1><p>Coloque um arquivo <code>exemplos.html</code> ao lado do <code>app.js</code>.</p>`);
-});
-
-// ------------------------------
-// UI / GERADOR (mantive simples: você pode colar seu HTML completo aqui se quiser)
-// ------------------------------
-function renderGeneratorHtml(req, res) {
   res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Criar — Meu Livro Mágico</title>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Meu Livro Mágico — Vendas</title>
 <style>
-  :root{--bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--violet:#7c3aed;--pink:#db2777;}
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));min-height:100vh;color:var(--text);padding:24px;}
-  .card{max-width:720px;margin:0 auto;background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px;}
-  h1{margin:0;font-size:24px;font-weight:1000;}
-  p{margin:8px 0 0;color:var(--muted);font-weight:800;}
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
-  .btn{border:0;border-radius:999px;padding:12px 16px;font-weight:1000;cursor:pointer;color:#fff;background:linear-gradient(90deg,var(--violet),var(--pink));}
-  .ghost{background:transparent;color:#4c1d95;border:1px solid rgba(124,58,237,.25);}
-  input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:14px;font-weight:900;}
-  .field{margin-top:12px;}
-  .hint{margin-top:12px;padding:10px 12px;border-radius:14px;background:rgba(219,39,119,.06);border:1px solid rgba(219,39,119,.14);color:#7f1d1d;font-weight:900;display:none;white-space:pre-wrap;}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#fff;}
+  .card{max-width:820px;margin:24px;padding:24px;border-radius:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);}
+  h1{margin:0 0 10px 0;font-size:28px;}
+  p{opacity:.9;line-height:1.6;margin:0 0 14px 0;}
+  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:14px;background:#ff6b6b;color:#fff;text-decoration:none;font-weight:900;}
+  .muted{opacity:.75;font-size:13px;margin-top:12px;}
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>📚 Criar livro</h1>
-  <p>Versão Vercel-safe: imagens e PDF persistem no Supabase Storage.</p>
+  <div class="card">
+    <h1>📚 Meu Livro Mágico</h1>
+    <p>Gere um livro infantil personalizado com a foto da criança, história e imagens — tudo automático.</p>
+    <a class="btn" href="/create">✨ Ir para o gerador</a>
+    <div class="muted">Dica: crie um <code>landing.html</code> ao lado do <code>app.js</code> para personalizar.</div>
+  </div>
+</body>
+</html>`);
+});
 
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Foto (PNG/JPG)</div><input id="file" type="file" accept="image/*"/></div>
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Nome</div><input id="childName" placeholder="Ex: Enzo"/></div>
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Idade</div><input id="childAge" type="number" min="2" max="12" value="6"/></div>
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Gênero</div>
-    <select id="childGender"><option value="neutral">Neutro</option><option value="boy">Menino</option><option value="girl">Menina</option></select>
+// ------------------------------
+// UI / COMO FUNCIONA (corrigido)
+// ------------------------------
+app.get("/como-funciona", (req, res) => {
+  if (existsSyncSafe(HOW_IT_WORKS_HTML)) return res.sendFile(HOW_IT_WORKS_HTML);
+
+  res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Como funciona — Meu Livro Mágico</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827;}
+  .card{max-width:860px;margin:24px;padding:24px;border-radius:18px;background:#fff;border:1px solid rgba(0,0,0,.08);box-shadow:0 20px 50px rgba(0,0,0,.10);}
+  h1{margin:0 0 10px 0;font-size:28px;}
+  p{opacity:.92;line-height:1.7;margin:0 0 12px 0;font-weight:700;}
+  ul{margin:10px 0 0; padding-left:18px; line-height:1.7; font-weight:800;}
+  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff;text-decoration:none;font-weight:1000;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+  .muted{opacity:.7;font-size:12px;margin-top:10px;font-weight:800;}
+  code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:8px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>✨ Como funciona</h1>
+    <p>Você envia a foto da criança, escolhe o tema e o estilo do livro.</p>
+    <ul>
+      <li>1) Envie a foto</li>
+      <li>2) Informe nome/idade e escolha o tema</li>
+      <li>3) O sistema cria a história (texto) e gera as imagens uma por vez</li>
+      <li>4) O texto é carimbado dentro do PNG e no final sai um PDF</li>
+    </ul>
+
+    <div class="row">
+      <a class="btn" href="/sales">🛒 Voltar para Vendas</a>
+      <a class="btn" href="/create">📚 Ir para o Gerador</a>
+    </div>
+
+    <div class="muted">
+      Dica: crie um arquivo <code>how-it-works.html</code> ao lado do <code>app.js</code> para personalizar esta página.
+    </div>
   </div>
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Tema</div>
-    <select id="theme"><option value="space">Espaço</option><option value="dragon">Dragões</option><option value="ocean">Mar</option><option value="jungle">Selva</option><option value="superhero">Super-herói</option><option value="dinosaur">Dinossauro</option></select>
-  </div>
-  <div class="field"><div style="font-weight:1000;margin-bottom:6px;">Estilo</div>
-    <select id="style"><option value="read">Leitura</option><option value="color">Leitura + Colorir</option></select>
+</body>
+</html>`);
+});
+
+// ------------------------------
+// UI / EXEMPLOS (galeria) - /exemplos
+// ------------------------------
+app.get("/exemplos", (req, res) => {
+  if (existsSyncSafe(EXEMPLOS_HTML)) return res.sendFile(EXEMPLOS_HTML);
+
+  return res.status(404).type("html").send(`
+    <h1>exemplos.html não encontrado</h1>
+    <p>Coloque um arquivo <code>exemplos.html</code> ao lado do <code>app.js</code>.</p>
+    <p><a href="/sales">Voltar</a></p>
+  `);
+});
+
+// ------------------------------
+// UI / GERADOR (Steps 0–2) — mantém em "/" e "/create"
+// Step 4 fica no /generate (separado)
+// ------------------------------
+function renderGeneratorHtml(req, res) {
+  const imageInfo =
+    IMAGE_PROVIDER === "replicate"
+      ? `Replicate: <span class="mono">${escapeHtml(REPLICATE_MODEL)}</span>`
+      : `OpenAI (fallback): <span class="mono">${escapeHtml(IMAGE_MODEL)}</span>`;
+
+  res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Meu Livro Mágico — Criar</title>
+<style>
+  :root{
+    --bg1:#ede9fe;
+    --bg2:#ffffff;
+    --bg3:#fdf2f8;
+    --card:#ffffff;
+    --text:#111827;
+    --muted:#6b7280;
+    --border:#e5e7eb;
+    --shadow: 0 20px 50px rgba(0,0,0,.10);
+    --shadow2: 0 10px 24px rgba(0,0,0,.08);
+    --violet:#7c3aed;
+    --pink:#db2777;
+    --disabled:#e5e7eb;
+    --disabledText:#9ca3af;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    color:var(--text);
+    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    min-height:100vh;
+    padding-bottom:110px;
+  }
+  .container{max-width: 980px; margin:0 auto; padding: 24px 16px;}
+  .topRow{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin-bottom: 16px;
+  }
+  .backLink{
+    border:0; background:transparent; cursor:pointer;
+    display:inline-flex; align-items:center; gap:10px;
+    color: var(--muted);
+    font-weight:800;
+    padding:10px 12px;
+    border-radius:12px;
+  }
+  .backLink:hover{ color:#374151; background:rgba(0,0,0,.04); }
+  .topActions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:flex-end;
+  }
+  .pill{
+    background: rgba(124,58,237,.10);
+    color: #4c1d95;
+    border:1px solid rgba(124,58,237,.16);
+    padding:6px 10px;
+    border-radius:999px;
+    font-weight:900;
+    text-decoration:none;
+  }
+  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
+
+  .stepper{
+    display:flex; align-items:center; justify-content:center;
+    gap: 10px; flex-wrap:wrap;
+    margin: 10px 0 22px;
+  }
+  .stepItem{ display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .stepDot{
+    width:40px; height:40px; border-radius:999px;
+    display:grid; place-items:center;
+    font-weight:1000; font-size:14px;
+    transition: transform .2s ease;
+    border: 1px solid rgba(0,0,0,.06);
+  }
+  .stepDot.done{ background: linear-gradient(135deg,#34d399,#10b981); color:#fff; border-color:transparent;}
+  .stepDot.active{ background: linear-gradient(135deg,var(--violet),var(--pink)); color:#fff; border-color:transparent; box-shadow: 0 10px 24px rgba(124,58,237,.25); transform: scale(1.08); }
+  .stepDot.todo{ background:#e5e7eb; color:#9ca3af; }
+  .stepLabel{ font-size:12px; font-weight:900; color:#9ca3af; display:none; }
+  @media (min-width: 640px){ .stepLabel{ display:block; } }
+  .stepLabel.active{ color: var(--violet); }
+  .stepLine{
+    width: 56px; height: 6px; border-radius:999px;
+    background:#e5e7eb;
+  }
+  @media (min-width: 768px){ .stepLine{ width: 90px; } }
+  .stepLine.done{ background: linear-gradient(90deg,#34d399,#10b981); }
+
+  .card{
+    background: var(--card);
+    border:1px solid var(--border);
+    border-radius: 26px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .head{
+    text-align:center;
+    padding: 14px 10px 6px;
+  }
+  .head h1{ margin:0; font-size: 26px; font-weight:1000; }
+  .head p{ margin:8px 0 0; color: var(--muted); font-weight:800; }
+
+  .panel{ margin-top: 12px; display:none; animation: fadeIn .18s ease; }
+  .panel.active{ display:block; }
+  @keyframes fadeIn{ from{opacity:0; transform: translateX(10px)} to{opacity:1; transform: translateX(0)} }
+
+  .drop{
+    border:2px dashed rgba(124,58,237,.35);
+    border-radius: 18px;
+    padding: 26px 16px;
+    text-align:center;
+    cursor:pointer;
+    background: rgba(124,58,237,.04);
+    box-shadow: var(--shadow2);
+  }
+  .drop.drag{ border-color: rgba(219,39,119,.55); background: rgba(219,39,119,.04); }
+  .drop .big{ font-size: 40px; }
+  .drop .t{ font-weight:1000; font-size:18px; margin-top:10px; }
+  .drop .s{ color: var(--muted); font-weight:800; margin-top:6px; }
+
+  .twoCol{
+    margin-top: 16px;
+    display:grid;
+    grid-template-columns: 180px 1fr;
+    gap: 14px;
+    align-items:center;
+  }
+  @media (max-width: 640px){ .twoCol{ grid-template-columns:1fr; } }
+
+  .previewWrap{ display:grid; place-items:center; }
+  .previewImg{
+    width:160px; height:160px; border-radius:999px;
+    object-fit:cover;
+    border: 6px solid rgba(250,204,21,.65);
+    box-shadow: var(--shadow2);
+    display:none;
+    background:#fff;
+  }
+  .previewEmpty{
+    width:160px; height:160px; border-radius:999px;
+    background: rgba(0,0,0,.04);
+    display:grid; place-items:center;
+    font-size: 42px;
+  }
+
+  .hint{
+    margin-top:10px;
+    padding:12px;
+    border-radius: 14px;
+    background: rgba(219,39,119,.06);
+    border: 1px solid rgba(219,39,119,.14);
+    color:#7f1d1d;
+    font-weight:900;
+    white-space:pre-wrap;
+    display:none;
+  }
+
+  .field{ margin-top: 14px; }
+  .label{ font-weight:1000; margin-bottom:8px; }
+  .input,.select{
+    width:100%;
+    border:1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px 14px;
+    font-size: 16px;
+    font-weight:900;
+    outline:none;
+    background:#fff;
+  }
+  .input:focus,.select:focus{ border-color: rgba(124,58,237,.4); box-shadow: 0 0 0 4px rgba(124,58,237,.12); }
+
+  .rangeRow{ margin-top: 10px; }
+  .rangeMeta{
+    display:flex; justify-content:space-between;
+    color: var(--muted);
+    font-weight:900;
+    margin-top: 8px;
+    font-size: 12px;
+  }
+
+  .grid3{
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+  }
+  @media (max-width: 900px){ .grid3{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px){ .grid3{ grid-template-columns: 1fr; } }
+
+  .pick{
+    border:1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+    background:#fff;
+    cursor:pointer;
+    box-shadow: var(--shadow2);
+    text-align:left;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  }
+  .pick:active{ transform: translateY(1px); }
+  .pick.active{
+    border-color: rgba(124,58,237,.45);
+    box-shadow: 0 16px 40px rgba(124,58,237,.18);
+    outline: 3px solid rgba(124,58,237,.16);
+  }
+  .pick .ico{ font-size: 34px; }
+  .pick .tt{ margin-top: 10px; font-weight:1000; font-size: 18px; }
+  .pick .dd{ margin-top: 6px; color: var(--muted); font-weight:800; }
+
+  .footer{
+    position: fixed;
+    left:0; right:0; bottom:0;
+    background: rgba(255,255,255,.82);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(0,0,0,.06);
+    padding: 14px 16px;
+  }
+  .footerInner{
+    max-width: 980px; margin:0 auto;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  .btnGroup{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+  }
+  .btn{
+    border:0;
+    cursor:pointer;
+    border-radius: 999px;
+    padding: 12px 18px;
+    font-weight:1000;
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    transition: transform .12s ease, opacity .12s ease;
+    user-select:none;
+  }
+  .btn:active{ transform: translateY(1px); }
+  .btnGhost{
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+  }
+  .btnGhost:hover{ background: rgba(0,0,0,.04); color:#374151; }
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet), var(--pink));
+    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+  }
+  .btnPrimary:disabled{
+    background: var(--disabled);
+    color: var(--disabledText);
+    box-shadow:none;
+    cursor:not-allowed;
+  }
+  .smallNote{
+    margin-top:12px;
+    font-size:12px;
+    color: var(--muted);
+    font-weight:900;
+    text-align:center;
+  }
+</style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="topRow">
+      <button class="backLink" id="btnHome" title="Voltar">← Voltar</button>
+      <div class="topActions">
+        <a class="pill" href="/sales">🛒 Pagina Inicial</a>
+        <a class="pill" href="/books">📚 Meus Livros</a>
+        <a class="pill" href="/como-funciona">❓ Como funciona</a>
+        <button class="pill" id="btnReset" style="cursor:pointer">♻️ Reiniciar</button>
+        <a class="pill" href="/profile">👤 Perfil</a>
+      </div>
+    </div>
+
+    <div class="smallNote">${imageInfo}</div>
+
+    <div class="stepper" id="stepper"></div>
+
+    <div class="card">
+      <div class="head">
+        <h1 id="stepTitle">Foto Mágica</h1>
+        <p id="stepSub">Envie uma foto da criança</p>
+      </div>
+
+      <div class="panel active" id="panel0">
+        <div class="drop" id="drop">
+          <div class="big">📸</div>
+          <div class="t">Clique ou arraste uma foto aqui</div>
+          <div class="s">JPG/PNG até 10MB</div>
+          <input type="file" accept="image/*" id="file" style="display:none"/>
+        </div>
+
+        <div class="twoCol">
+          <div class="previewWrap">
+            <img id="photoPreview" class="previewImg" alt="preview"/>
+            <div id="photoEmpty" class="previewEmpty">🙂</div>
+          </div>
+          <div>
+            <div class="label">Dicas</div>
+            <ul style="margin:0; padding-left:18px; line-height:1.7; font-weight:900; color:#374151;">
+              <li>Rosto bem iluminado</li>
+              <li>Evite fundo muito poluído</li>
+              <li>Evite óculos escuros</li>
+              <li>✅ Texto vai dentro do PNG</li>
+            </ul>
+            <div id="hintPhoto" class="hint"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel1">
+        <div class="field">
+          <div class="label">Nome</div>
+          <input class="input" id="childName" placeholder="Ex: João, Maria..." />
+        </div>
+
+        <div class="field">
+          <div class="label">Idade: <span id="ageLabel">6</span> anos</div>
+          <div class="rangeRow">
+            <input type="range" min="2" max="12" value="6" id="childAge" style="width:100%"/>
+            <div class="rangeMeta"><span>2</span><span>12</span></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="label">Gênero do texto</div>
+          <select class="select" id="childGender">
+            <option value="neutral">Neutro 🌟</option>
+            <option value="boy">Menino 👦</option>
+            <option value="girl">Menina 👧</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel" id="panel2">
+        <div class="field">
+          <div class="label">Tema</div>
+          <div class="grid3">
+            <button class="pick" data-theme="space"><div class="ico">🚀</div><div class="tt">Viagem Espacial</div><div class="dd">Explore planetas e mistérios.</div></button>
+            <button class="pick" data-theme="dragon"><div class="ico">🐉</div><div class="tt">Reino dos Dragões</div><div class="dd">Mundo medieval mágico.</div></button>
+            <button class="pick" data-theme="ocean"><div class="ico">🧜‍♀️</div><div class="tt">Fundo do Mar</div><div class="dd">Tesouros e amigos marinhos.</div></button>
+            <button class="pick" data-theme="jungle"><div class="ico">🦁</div><div class="tt">Safari na Selva</div><div class="dd">Aventura com animais.</div></button>
+            <button class="pick" data-theme="superhero"><div class="ico">🦸</div><div class="tt">Super Herói</div><div class="dd">Salvar o dia com poderes.</div></button>
+            <button class="pick" data-theme="dinosaur"><div class="ico">🦕</div><div class="tt">Dinossauros</div><div class="dd">Uma jornada jurássica.</div></button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="label">Estilo do livro</div>
+          <div class="grid3">
+            <button class="pick styleBtn" data-style="read">
+              <div class="ico">📖</div><div class="tt">Livro para leitura</div><div class="dd">Ilustrações coloridas (semi-realista).</div>
+            </button>
+            <button class="pick styleBtn" data-style="color">
+              <div class="ico">🖍️</div><div class="tt">Leitura + colorir</div><div class="dd">Preto e branco (contornos).</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer;">
+            <input type="checkbox" id="consent"/>
+            <div>
+              <div style="font-weight:1000">Autorização</div>
+              <div style="color:var(--muted); font-weight:900; margin-top:4px;">
+                Confirmo que tenho autorização para usar a foto da criança para gerar este livro.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div id="hintGen" class="hint"></div>
+        <div class="smallNote">Ao criar, você será levado para a tela “Gerando…”</div>
+      </div>
+    </div>
   </div>
 
-  <div class="row">
-    <button class="btn" id="btnCreate">1) Criar Book</button>
-    <button class="btn ghost" id="btnGenerate">2) Ir para /generate</button>
-    <a class="btn ghost" href="/books">📚 Meus Livros</a>
-    <button class="btn ghost" id="btnLogout">Sair</button>
+  <div class="footer">
+    <div class="footerInner">
+      <button class="btn btnGhost" id="btnBack">← Voltar</button>
+      <div class="btnGroup">
+        <button class="btn btnPrimary" id="btnNext">Próximo →</button>
+      </div>
+    </div>
   </div>
-
-  <div class="hint" id="hint"></div>
-</div>
 
 <script>
-  const $ = (id)=>document.getElementById(id);
-  const hint = $("hint");
-  function setHint(msg){ hint.textContent=msg||""; hint.style.display=msg?"block":"none"; }
+  const steps = [
+    { id: "photo",   title: "Foto Mágica",        sub: "Envie uma foto da criança" },
+    { id: "profile", title: "Quem é o Herói?",    sub: "Conte-nos sobre a criança" },
+    { id: "theme",   title: "Escolha a Aventura", sub: "Selecione o tema e estilo" }
+  ];
 
-  async function postJson(url, body){
-    const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{}) });
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || "Falha");
-    return j;
+  const state = {
+    currentStep: Number(localStorage.getItem("currentStep") || "0"),
+    bookId: localStorage.getItem("bookId") || "",
+    photo: localStorage.getItem("photo") || "",
+    mask: localStorage.getItem("mask") || "",
+    theme: localStorage.getItem("theme") || "",
+    style: localStorage.getItem("style") || "read",
+    childName: localStorage.getItem("childName") || "",
+    childAge: Number(localStorage.getItem("childAge") || "6"),
+    childGender: localStorage.getItem("childGender") || "neutral",
+    consent: localStorage.getItem("consent") === "1",
+  };
+
+  const $ = (id) => document.getElementById(id);
+
+  function setHint(el, msg) {
+    el.textContent = msg || "";
+    el.style.display = msg ? "block" : "none";
   }
 
-  function fileToDataURL(file){
-    return new Promise((resolve,reject)=>{
-      const fr = new FileReader();
-      fr.onload = ()=> resolve(fr.result);
-      fr.onerror = ()=> reject(new Error("Falha ao ler arquivo"));
-      fr.readAsDataURL(file);
+  function showPhoto(dataUrl) {
+    const img = $("photoPreview");
+    const empty = $("photoEmpty");
+    if (dataUrl) {
+      img.src = dataUrl;
+      img.style.display = "block";
+      empty.style.display = "none";
+    } else {
+      img.style.display = "none";
+      empty.style.display = "grid";
+    }
+  }
+
+  function buildStepper() {
+    const root = $("stepper");
+    root.innerHTML = "";
+
+    for (let i = 0; i < steps.length; i++) {
+      const item = document.createElement("div");
+      item.className = "stepItem";
+
+      const dot = document.createElement("div");
+      dot.className = "stepDot " + (i < state.currentStep ? "done" : i === state.currentStep ? "active" : "todo");
+      dot.textContent = i < state.currentStep ? "✓" : String(i + 1);
+
+      const lbl = document.createElement("div");
+      lbl.className = "stepLabel " + (i === state.currentStep ? "active" : "");
+      lbl.textContent = steps[i].title;
+
+      item.appendChild(dot);
+      item.appendChild(lbl);
+      root.appendChild(item);
+
+      if (i !== steps.length - 1) {
+        const line = document.createElement("div");
+        line.className = "stepLine " + (i < state.currentStep ? "done" : "");
+        root.appendChild(line);
+      }
+    }
+  }
+
+  function setStepUI() {
+    localStorage.setItem("currentStep", String(state.currentStep));
+    buildStepper();
+
+    $("stepTitle").textContent = steps[state.currentStep].title;
+    $("stepSub").textContent = steps[state.currentStep].sub;
+
+    for (let i = 0; i < steps.length; i++) {
+      $("panel" + i).classList.toggle("active", i === state.currentStep);
+    }
+
+    $("btnBack").disabled = state.currentStep === 0;
+
+    const next = $("btnNext");
+    next.textContent = state.currentStep === 2 ? "✨ Criar Livro Mágico" : "Próximo →";
+    next.disabled = !canProceedStep(state.currentStep);
+  }
+
+  function canProceedStep(step) {
+    if (step === 0) return !!state.photo;
+    if (step === 1) return !!(state.childName && state.childName.trim().length >= 2 && state.childAge);
+    if (step === 2) return !!(state.theme && state.style && state.consent);
+    return false;
+  }
+
+  function selectTheme(themeKey) {
+    state.theme = themeKey || "";
+    localStorage.setItem("theme", state.theme);
+    document.querySelectorAll("[data-theme]").forEach(b => {
+      const active = b.getAttribute("data-theme") === state.theme;
+      b.classList.toggle("active", active);
     });
+    setStepUI();
   }
 
-  let bookId = localStorage.getItem("bookId") || "";
+  function selectStyle(styleKey) {
+    state.style = styleKey || "read";
+    localStorage.setItem("style", state.style);
+    document.querySelectorAll(".styleBtn").forEach(b => {
+      const active = b.getAttribute("data-style") === state.style;
+      b.classList.toggle("active", active);
+    });
+    setStepUI();
+  }
 
-  $("btnCreate").onclick = async ()=>{
-    setHint("");
-    try{
-      const r = await postJson("/api/create", {});
-      bookId = r.id;
-      localStorage.setItem("bookId", bookId);
-      setHint("Book criado: " + bookId);
-    }catch(e){ setHint(String(e.message||e)); }
-  };
+  async function ensureBook() {
+    if (state.bookId) {
+      try {
+        const rr = await fetch("/api/status/" + encodeURIComponent(state.bookId), {
+          method: "GET",
+          headers: { "Accept": "application/json" }
+        });
 
-  $("btnGenerate").onclick = async ()=>{
-    setHint("");
-    try{
-      if (!bookId) throw new Error("Crie o book primeiro.");
-      const f = $("file").files && $("file").files[0];
-      if (!f) throw new Error("Selecione uma foto.");
-      const photo = await fileToDataURL(f);
+        if (rr.ok) {
+          const jj = await rr.json().catch(() => ({}));
+          if (jj && jj.ok) return state.bookId;
+        }
 
-      // cria mask vazia (igual tamanho depois o servidor alinha)
-      const img = new Image();
-      const url = URL.createObjectURL(f);
-      await new Promise((ok,err)=>{ img.onload=ok; img.onerror=()=>err(new Error("Falha ao abrir imagem")); img.src=url; });
-      URL.revokeObjectURL(url);
-      const c = document.createElement("canvas"); c.width = Math.min(img.width,1024); c.height = Math.min(img.height,1024);
-      const ctx = c.getContext("2d"); ctx.drawImage(img,0,0,c.width,c.height);
-      const photoPng = c.toDataURL("image/png");
-      const m = document.createElement("canvas"); m.width=c.width; m.height=c.height;
-      const maskPng = m.toDataURL("image/png");
+        state.bookId = "";
+        localStorage.removeItem("bookId");
+      } catch {
+        state.bookId = "";
+        localStorage.removeItem("bookId");
+      }
+    }
 
-      await postJson("/api/uploadPhoto", { id: bookId, photo: photoPng, mask: maskPng });
+    const r = await fetch("/api/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
 
-      localStorage.setItem("childName", $("childName").value||"");
-      localStorage.setItem("childAge", $("childAge").value||"6");
-      localStorage.setItem("childGender", $("childGender").value||"neutral");
-      localStorage.setItem("theme", $("theme").value||"space");
-      localStorage.setItem("style", $("style").value||"read");
-      window.location.href = "/generate";
-    }catch(e){ setHint(String(e.message||e)); }
-  };
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok || !j.id) throw new Error(j.error || "Falha ao criar book");
 
-  $("btnLogout").onclick = async ()=>{
-    await fetch("/api/auth/logout", { method:"POST" }).catch(()=>{});
+    state.bookId = j.id;
+    localStorage.setItem("bookId", state.bookId);
+    return state.bookId;
+  }
+
+  async function apiUploadPhotoAndMask() {
+    if (!state.photo) throw new Error("Sem foto");
+    if (!state.mask) throw new Error("Sem mask");
+
+    await ensureBook();
+    if (!state.bookId) throw new Error("Sem bookId");
+
+    const r = await fetch("/api/uploadPhoto", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ id: state.bookId, photo: state.photo, mask: state.mask })
+    });
+
+    const j = await r.json().catch(() => ({}));
+
+    if (!r.ok || !j.ok) {
+      const msg = String(j.error || "Falha ao enviar foto/mask");
+
+      if (r.status === 404 && msg.includes("book não existe")) {
+        state.bookId = "";
+        localStorage.removeItem("bookId");
+
+        await ensureBook();
+
+        const r2 = await fetch("/api/uploadPhoto", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({ id: state.bookId, photo: state.photo, mask: state.mask })
+        });
+
+        const j2 = await r2.json().catch(() => ({}));
+        if (!r2.ok || !j2.ok) throw new Error(j2.error || "Falha ao enviar foto/mask (retry)");
+        return true;
+      }
+
+      throw new Error(msg);
+    }
+
+    return true;
+  }
+
+  function canGenerateWhy() {
+    if (!state.photo) return "Envie a foto primeiro.";
+    if (!state.mask) return "Mask não gerou. Reenvie a foto.";
+    if (!state.childName || state.childName.trim().length < 2) return "Digite o nome (mínimo 2 letras).";
+    if (!state.consent) return "Marque a autorização para continuar.";
+    if (!state.theme) return "Selecione um tema.";
+    if (!state.style) return "Selecione o estilo do livro.";
+    return "";
+  }
+
+  async function goToGenerateStep4() {
+    setHint($("hintGen"), "");
+    const why = canGenerateWhy();
+    if (why) { setHint($("hintGen"), why); return; }
+
+    await ensureBook();
+    await apiUploadPhotoAndMask();
+
+    localStorage.setItem("childName", state.childName.trim());
+    localStorage.setItem("childAge", String(state.childAge));
+    localStorage.setItem("childGender", state.childGender);
+    localStorage.setItem("theme", state.theme);
+    localStorage.setItem("style", state.style);
+    localStorage.setItem("consent", state.consent ? "1" : "0");
+
+    window.location.href = "/generate";
+  }
+
+  const drop = $("drop");
+  const file = $("file");
+
+  drop.addEventListener("click", () => file.click());
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault(); drop.classList.remove("drag");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+  file.addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
+  });
+
+  async function handleFile(f) {
+    const hintPhoto = $("hintPhoto");
+    if (!f.type || !f.type.startsWith("image/")) return setHint(hintPhoto, "Envie apenas imagens (JPG/PNG).");
+    if (f.size > 10 * 1024 * 1024) return setHint(hintPhoto, "Imagem muito grande. Máximo 10MB.");
+    setHint(hintPhoto, "");
+
+    const imgUrl = URL.createObjectURL(f);
+    const img = new Image();
+
+    img.onload = async () => {
+      try {
+        const max = 1024;
+        let w = img.width, h = img.height;
+        const scale = Math.min(1, max / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const photoPng = canvas.toDataURL("image/png");
+
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const maskPng = maskCanvas.toDataURL("image/png");
+
+        URL.revokeObjectURL(imgUrl);
+
+        state.photo = photoPng;
+        state.mask = maskPng;
+        localStorage.setItem("photo", photoPng);
+        localStorage.setItem("mask", maskPng);
+        showPhoto(photoPng);
+
+        await ensureBook();
+        await apiUploadPhotoAndMask();
+
+        setStepUI();
+      } catch (err) {
+        setHint(hintPhoto, String(err.message || err || "Erro ao processar/enviar foto"));
+      }
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(imgUrl);
+      setHint($("hintPhoto"), "Falha ao abrir a imagem.");
+    };
+
+    img.src = imgUrl;
+  }
+
+  document.querySelectorAll("[data-theme]").forEach(btn => {
+    btn.addEventListener("click", () => selectTheme(btn.getAttribute("data-theme")));
+  });
+  document.querySelectorAll(".styleBtn").forEach(btn => {
+    btn.addEventListener("click", () => selectStyle(btn.getAttribute("data-style")));
+  });
+
+  $("childName").addEventListener("input", (e) => {
+    state.childName = e.target.value;
+    localStorage.setItem("childName", state.childName);
+    setStepUI();
+  });
+  $("childAge").addEventListener("input", (e) => {
+    state.childAge = Number(e.target.value || "6");
+    $("ageLabel").textContent = String(state.childAge);
+    localStorage.setItem("childAge", String(state.childAge));
+    setStepUI();
+  });
+  $("childGender").addEventListener("change", (e) => {
+    state.childGender = e.target.value;
+    localStorage.setItem("childGender", state.childGender);
+  });
+  $("consent").addEventListener("change", (e) => {
+    state.consent = !!e.target.checked;
+    localStorage.setItem("consent", state.consent ? "1" : "0");
+    setStepUI();
+  });
+
+  $("btnBack").addEventListener("click", () => {
+    if (state.currentStep <= 0) return;
+    state.currentStep -= 1;
+    setStepUI();
+  });
+
+  $("btnNext").addEventListener("click", async () => {
+    if (state.currentStep === 0) {
+      if (!canProceedStep(0)) return;
+      state.currentStep = 1; setStepUI(); return;
+    }
+    if (state.currentStep === 1) {
+      if (!canProceedStep(1)) return;
+      state.currentStep = 2; setStepUI(); return;
+    }
+    if (state.currentStep === 2) {
+      if (!canProceedStep(2)) return;
+      await goToGenerateStep4();
+    }
+  });
+
+  $("btnReset").addEventListener("click", () => {
     localStorage.clear();
-    window.location.href="/sales";
-  };
+    location.reload();
+  });
+
+  $("btnHome").addEventListener("click", () => {
+    if (state.currentStep <= 0) { window.location.href = "/sales"; return; }
+    state.currentStep -= 1;
+    setStepUI();
+  });
+
+  (function init(){
+    showPhoto(state.photo);
+    $("childName").value = state.childName;
+    $("childAge").value = String(state.childAge);
+    $("ageLabel").textContent = String(state.childAge);
+    $("childGender").value = state.childGender;
+    $("consent").checked = state.consent;
+
+    if (state.theme) selectTheme(state.theme);
+    selectStyle(state.style || "read");
+
+    if (state.currentStep < 0 || state.currentStep > 2) state.currentStep = 0;
+    setStepUI();
+  })();
 </script>
-</body></html>`);
+</body>
+</html>`);
 }
 
 app.get("/", requireAuth, renderGeneratorHtml);
 app.get("/create", requireAuth, renderGeneratorHtml);
 
 // ------------------------------
-// (Opcional) /books e /generate como módulos externos (se existirem)
-// ------------------------------
-try {
-  const mountBooks = require(path.join(__dirname, "books"));
-  mountBooks(app, { OUT_DIR, requireAuth });
-  console.log("✅ /books ativo: módulo books/ carregado.");
-} catch {
-  // ok
-}
-
-try {
-  const mountGeneratePage = require(path.join(__dirname, "generate.page.js"));
-  mountGeneratePage(app, { requireAuth });
-  console.log("✅ /generate ativo: generate.page.js carregado.");
-} catch {
-  // ok
-}
-app.get("/api/debug-admin", (req, res) => {
-  const p = require("path");
-  const fs = require("fs");
-  res.json({
-    ok: true,
-    __dirname,
-    hasAdminFile: fs.existsSync(p.join(__dirname, "admin.page.js")),
-    files: fs.readdirSync(__dirname).slice(0, 50)
-  });
-});
- // ------------------------------
-// ✅ /admin (Painel Admin) — FIX Vercel bundle (require estático)
-// ------------------------------
-// ==============================
-// /admin — mount estático (Vercel bundle-safe)
-// ==============================
-const USERS_FILE = path.join(OUT_DIR, "users.json");
-
-try {
-  const mountAdminPage = require("./admin.page"); // arquivo admin.page.js ao lado do app.js
-
-  if (typeof mountAdminPage !== "function") {
-    throw new Error(`admin.page.js export inválido. Esperado function, recebi: ${typeof mountAdminPage}`);
-  }
-
-  mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
-  console.log("✅ /admin ativo! (admin.page.js montado)");
-} catch (e) {
-  console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
-
-  // fallback para não ficar "Cannot GET"
-  app.get("/admin", requireAuth, (req, res) => {
-    res.status(500).type("html").send(`
-      <h1>Admin não carregou</h1>
-      <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
-      <p>Veja os logs da Vercel (Functions/Logs).</p>
-    `);
-  });
-}
-// ------------------------------
-// API: create
+// API
 // ------------------------------
 app.post("/api/create", async (req, res) => {
   try {
@@ -1800,16 +2564,30 @@ app.post("/api/create", async (req, res) => {
     const m = makeEmptyManifest(id, user.id);
     m.ownerId = String(user.id || "");
 
+    // Salva no disco e no DB (RLS ON via req.sb)
     await saveManifestAll(user.id, id, m, { sbUser: req.sb });
+
     return res.json({ ok: true, id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+async function sbUploadBuffer({ pathKey, contentType, buffer }) {
+  if (!supabaseAdmin) throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente (precisa para upload no Storage).");
 
-// ------------------------------
-// API: uploadPhoto (✅ agora faz upload persistente do edit_base e mask_base)
-// ------------------------------
+  const { data, error } = await supabaseAdmin
+    .storage
+    .from("books")
+    .upload(pathKey, buffer, { contentType, upsert: true });
+
+  if (error) throw error;
+  return data;
+}
+
+function sbPublicUrl(pathKey) {
+  const { data } = supabaseAnon.storage.from("books").getPublicUrl(pathKey);
+  return data?.publicUrl || "";
+}
 app.post("/api/uploadPhoto", async (req, res) => {
   try {
     const user = await requireAuthApi(req, res);
@@ -1820,11 +2598,12 @@ app.post("/api/uploadPhoto", async (req, res) => {
     const mask = req.body?.mask;
 
     if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
-    if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo inválida (dataURL)" });
-    if (!mask || !isDataUrl(mask)) return res.status(400).json({ ok: false, error: "mask inválida (dataURL)" });
+    if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
+    if (!mask || !isDataUrl(mask)) return res.status(400).json({ ok: false, error: "mask ausente ou inválida (dataURL)" });
 
     const m = await loadManifestAll(user.id, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+
     if (!canAccessBook(user.id, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
     const buf = dataUrlToBuffer(photo);
@@ -1861,45 +2640,36 @@ app.post("/api/uploadPhoto", async (req, res) => {
 
     const maskBasePath = path.join(bookDir, "mask_base.png");
     await sharp(maskPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskBasePath);
+// ✅ upload persistente (Vercel-safe)
+const photoKey = `${user.id}/${id}/edit_base.png`;
+const maskKey  = `${user.id}/${id}/mask_base.png`;
 
+const editBaseBuf = await fsp.readFile(editBasePath);
+const maskBaseBuf = await fsp.readFile(maskBasePath);
+
+await sbUploadBuffer({ pathKey: photoKey, contentType: "image/png", buffer: editBaseBuf });
+await sbUploadBuffer({ pathKey: maskKey,  contentType: "image/png", buffer: maskBaseBuf });
+
+// guarda no manifest
+m.photo.storageKey = photoKey;
+m.mask.storageKey  = maskKey;
     const mi = await sharp(editBasePath).metadata();
     const mm = await sharp(maskBasePath).metadata();
     if ((mi?.width || 0) !== (mm?.width || 0) || (mi?.height || 0) !== (mm?.height || 0)) {
-      throw new Error(`Falha ao alinhar base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
+   throw new Error(`Falha ao alinhar base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
     }
 
-    // ✅ Upload persistente no Storage (Vercel-safe)
-    const upPhoto = await uploadLocalFileToStorage({
-      userId: user.id,
-      bookId: id,
-      localPath: editBasePath,
-      filename: "edit_base.png",
-      contentType: "image/png",
-    });
-
-    const upMask = await uploadLocalFileToStorage({
-      userId: user.id,
-      bookId: id,
-      localPath: maskBasePath,
-      filename: "mask_base.png",
-      contentType: "image/png",
-    });
-
-    m.photo = { ok: true, file: path.basename(originalPath), mime, editBase: "edit_base.png", storageKey: upPhoto.key, url: upPhoto.url };
-    m.mask = { ok: true, file: "mask.png", editBase: "mask_base.png", storageKey: upMask.key, url: upMask.url };
+    m.photo = { ok: true, file: path.basename(originalPath), mime, editBase: "edit_base.png" };
+    m.mask = { ok: true, file: "mask.png", editBase: "mask_base.png" };
     m.updatedAt = nowISO();
-
     await saveManifestAll(user.id, id, m, { sbUser: req.sb });
 
-    return res.json({ ok: true, base: { w: mi?.width, h: mi?.height }, photoUrl: upPhoto.url, maskUrl: upMask.url });
+    return res.json({ ok: true, base: { w: mi?.width, h: mi?.height } });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
 
-// ------------------------------
-// API: status
-// ------------------------------
 app.get("/api/status/:id", requireAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
@@ -1909,7 +2679,9 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
     const m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
 
-    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(userId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
 
     const images = (m.images || []).map((it) => ({ page: it.page, url: it.url || "" }));
     const coverUrl = m.cover?.ok ? (m.cover?.url || "") : "";
@@ -1933,7 +2705,173 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
 });
 
 // ------------------------------
-// ✅ PROGRESS (usado pelo /generate)
+// ✅ Editar texto de uma página e APLICAR no livro (recarimbar PNG + refazer PDF)
+// POST /api/editPageText  { id, page, title?, text }
+// ------------------------------
+app.post("/api/editPageText", requireAuth, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || "");
+    if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+    const id = String(req.body?.id || "").trim();
+    const pageNum = Number(req.body?.page ?? 0);
+
+    const titleIncoming = req.body?.title;
+    const titleTrimmed = typeof titleIncoming === "string" ? titleIncoming.trim() : "";
+    const text = String(req.body?.text || "").trim().replace(/\s+/g, " ");
+
+    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+    if (!Number.isFinite(pageNum) || pageNum < 1 || pageNum > 99) return res.status(400).json({ ok: false, error: "page inválida" });
+    if (!text) return res.status(400).json({ ok: false, error: "text ausente" });
+
+    const m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const jobKey = `${userId}:${id}`;
+    if (jobs.get(jobKey)?.running || m.status === "generating") {
+      return res.status(409).json({ ok: false, error: "book está gerando. Tente novamente quando terminar." });
+    }
+
+    const bookDir = bookDirOf(userId, id);
+    await ensureDir(bookDir);
+
+    const pageKey = String(pageNum).padStart(2, "0");
+    const originalBasePath = path.join(bookDir, `page_${pageKey}.png`);
+    if (!existsSyncSafe(originalBasePath)) {
+      return res.status(404).json({ ok: false, error: `Base da página não encontrada: page_${pageKey}.png` });
+    }
+
+    const pagesArr0 = Array.isArray(m.pages) ? m.pages : [];
+    const oldIdx0 = pagesArr0.findIndex((p) => Number(p?.page || 0) === pageNum);
+    const oldTitle0 = oldIdx0 >= 0 ? String(pagesArr0[oldIdx0]?.title || "").trim() : "";
+    const effectiveTitle = titleTrimmed || oldTitle0 || `Página ${pageNum}`;
+
+    const pagesArr = Array.isArray(m.pages) ? m.pages : [];
+    const idx = pagesArr.findIndex((p) => Number(p?.page || 0) === pageNum);
+    const newEntry = { page: pageNum, title: effectiveTitle, text };
+    if (idx >= 0) pagesArr[idx] = { ...pagesArr[idx], ...newEntry };
+    else pagesArr.push(newEntry);
+    pagesArr.sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
+    m.pages = pagesArr;
+
+    const REV = Date.now();
+const editBaseName = `page_${pageKey}_edit.png`;
+const editFinalName = `page_${pageKey}_final.png`;
+
+    const editBasePath = path.join(bookDir, editBaseName);
+    const editFinalPath = path.join(bookDir, editFinalName);
+
+    await fsp.copyFile(originalBasePath, editBasePath);
+    await stampStoryTextOnImage({
+      inputPath: editBasePath,
+      outputPath: editFinalPath,
+      title: effectiveTitle,
+      text,
+    });
+
+    const imagesArr = Array.isArray(m.images) ? m.images : [];
+    const imgIdx = imagesArr.findIndex((it) => Number(it?.page || 0) === pageNum);
+    const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(path.basename(editFinalPath))}`;
+
+    const imgEntry = {
+      page: pageNum,
+      path: editFinalPath,
+      url,
+      prompt: imgIdx >= 0 ? imagesArr[imgIdx]?.prompt || "" : "",
+      editRev: REV,
+      base: editBaseName,
+      file: editFinalName,
+    };
+
+    if (imgIdx >= 0) imagesArr[imgIdx] = { ...imagesArr[imgIdx], ...imgEntry };
+    else imagesArr.push(imgEntry);
+
+    imagesArr.sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
+    m.images = imagesArr;
+
+    const coverPath = path.join(bookDir, "cover_final.png");
+    const pageImagePaths = imagesArr
+      .sort((a, b) => Number(a.page || 0) - Number(b.page || 0))
+      .map((it) => String(it?.path || ""))
+      .filter((p) => p && existsSyncSafe(p));
+
+    await makePdfImagesOnly({
+      bookId: id,
+      coverPath: existsSyncSafe(coverPath) ? coverPath : "",
+      pageImagePaths,
+      outputDir: bookDir,
+    });
+
+    m.pdf = `/download/${encodeURIComponent(id)}`;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json({
+      ok: true,
+      id,
+      page: pageNum,
+      updatedAt: m.updatedAt,
+      url,
+      rev: REV,
+      file: path.basename(editFinalPath),
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
+
+// ------------------------------
+// Geração
+// ------------------------------
+app.post("/api/generate", requireAuth, async (req, res) => {
+  const userId = String(req.user?.id || "");
+  if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+  const id = String(req.body?.id || "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+
+  try {
+    const m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const jobKey = `${userId}:${id}`;
+    if (jobs.get(jobKey)?.running) return res.status(409).json({ ok: false, error: "book já está gerando" });
+
+    const childName = String(req.body?.childName || m.child?.name || "").trim();
+    const childAge = Number(req.body?.childAge ?? m.child?.age ?? 6);
+    const childGender = String(req.body?.childGender || m.child?.gender || "neutral");
+    const theme = String(req.body?.theme || m.theme || "space");
+    const style = String(req.body?.style || m.style || "read");
+
+    m.child = { name: childName, age: clamp(childAge, 2, 12), gender: childGender };
+    m.theme = theme;
+    m.style = style;
+    m.status = "generating";
+    m.step = "starting";
+    m.error = "";
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    jobs.set(jobKey, { running: true });
+
+    // ✅ CRÍTICO na Vercel: precisa await
+    await runGeneration(userId, id);
+
+    const done = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    return res.json({ ok: true, id, status: done?.status || "done", step: done?.step || "done" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  } finally {
+    const jobKey = `${String(req.user?.id || "")}:${id}`;
+    jobs.set(jobKey, { running: false });
+  }
+});
+// ------------------------------
+// ✅ PROGRESS (detalhado) — usado pelo /generate
+// GET /api/progress/:id
 // ------------------------------
 app.get("/api/progress/:id", requireAuth, async (req, res) => {
   try {
@@ -1947,8 +2885,8 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
-    const totalSteps = 1 + 1 + 8 + 1;
-    const pagesDone = Array.isArray(m.images) ? m.images.filter((x) => x && x.url).length : 0;
+    const totalSteps = 1 /*story*/ + 1 /*cover*/ + 8 /*pages*/ + 1 /*pdf*/;
+    const pagesDone = Array.isArray(m.images) ? m.images.filter(x => x && x.url).length : 0;
 
     let doneSteps = 0;
     if (Array.isArray(m.pages) && m.pages.length >= 8) doneSteps += 1;
@@ -1957,19 +2895,13 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
     if (m.status === "done" && m.pdf) doneSteps += 1;
 
     const message =
-      m.status === "failed"
-        ? "Falhou"
-        : m.status === "done"
-          ? "Livro pronto 🎉"
-          : m.step?.startsWith("page_")
-            ? "Gerando página…"
-            : m.step === "cover"
-              ? "Gerando capa…"
-              : m.step === "story"
-                ? "Criando história…"
-                : m.step === "pdf"
-                  ? "Gerando PDF…"
-                  : "Preparando…";
+      m.status === "failed" ? "Falhou" :
+      m.status === "done" ? "Livro pronto 🎉" :
+      m.step?.startsWith("page_") ? "Gerando página…" :
+      m.step === "cover" ? "Gerando capa…" :
+      m.step === "story" ? "Criando história…" :
+      m.step === "pdf" ? "Gerando PDF…" :
+      "Preparando…";
 
     return res.json({
       ok: true,
@@ -1983,7 +2915,7 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
       totalSteps,
       message,
       coverUrl: m.cover?.url || "",
-      images: (m.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
+      images: (m.images || []).map(it => ({ page: it.page, url: it.url || "" })),
       pdf: m.pdf || "",
       updatedAt: m.updatedAt || "",
     });
@@ -1993,8 +2925,13 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
 });
 
 // ------------------------------
-// ✅ Motor por etapas (VERCEL-SAFE)
+// ✅ Motor por etapas (serverless-safe)
 // POST /api/generateNext
+// - Faz APENAS 1 passo por chamada:
+//   1) story (gera m.pages)
+//   2) cover (gera cover_final.png)
+//   3) pages (gera page_01..08 + _final)
+//   4) pdf
 // ------------------------------
 app.post("/api/generateNext", requireAuth, async (req, res) => {
   const userId = String(req.user?.id || "");
@@ -2004,7 +2941,9 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
   if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
 
   const jobKey = `${userId}:${id}`;
-  if (jobs.get(jobKey)?.running) return res.status(409).json({ ok: false, error: "step já em execução (aguarde e tente novamente)" });
+  if (jobs.get(jobKey)?.running) {
+    return res.status(409).json({ ok: false, error: "step já em execução (aguarde 1s e tente novamente)" });
+  }
   jobs.set(jobKey, { running: true });
 
   try {
@@ -2012,6 +2951,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
+    // se já terminou
     if (m.status === "done") {
       return res.json({
         ok: true,
@@ -2023,15 +2963,25 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         totalSteps: 11,
         message: "Livro pronto 🎉",
         coverUrl: m.cover?.url || "",
-        images: (m.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
+        images: (m.images || []).map(it => ({ page: it.page, url: it.url || "" })),
         pdf: m.pdf || "",
       });
     }
     if (m.status === "failed") {
-      return res.json({ ok: true, id, status: m.status, step: m.step, message: "Falhou", error: m.error || "" });
+      return res.json({
+        ok: true,
+        id,
+        status: m.status,
+        step: m.step,
+        style: m.style,
+        doneSteps: 0,
+        totalSteps: 11,
+        message: "Falhou",
+        error: m.error || "",
+      });
     }
 
-    // aplica configs idempotente
+    // aplica configs do request (idempotente)
     const childName = String(req.body?.childName || m.child?.name || "").trim();
     const childAge = Number(req.body?.childAge ?? m.child?.age ?? 6);
     const childGender = String(req.body?.childGender || m.child?.gender || "neutral");
@@ -2041,7 +2991,6 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     m.child = { name: childName, age: clamp(childAge, 2, 12), gender: childGender };
     m.theme = theme;
     m.style = style;
-
     if (m.status === "created") m.status = "generating";
     if (!m.step || m.step === "created") m.step = "starting";
     m.error = "";
@@ -2050,22 +2999,18 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     const bookDir = bookDirOf(userId, id);
     await ensureDir(bookDir);
 
-    // ✅ garante que edit_base/mask_base existem localmente (baixa do Storage se sumiu)
-   // ✅ garante que edit_base/mask_base existem localmente (baixa do Storage se sumiu)
-const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
-const maskPngPath  = path.join(bookDir, m.mask?.editBase  || "mask_base.png");
+    // bases
+    
+    const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+    if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
-// primeiro tenta garantir local (puxa do Storage se necessário)
-await ensureLocalFromStorage(imagePngPath, m.photo?.storageKey);
-await ensureLocalFromStorage(maskPngPath,  m.mask?.storageKey);
-
-// depois valida
-if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
-if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+    // total passos
     const totalSteps = 1 + 1 + 8 + 1;
 
+    // helper pra responder progresso
     function buildProgress(mm, msg) {
-      const pagesDone = Array.isArray(mm.images) ? mm.images.filter((x) => x && x.url).length : 0;
+      const pagesDone = Array.isArray(mm.images) ? mm.images.filter(x => x && x.url).length : 0;
+
       let doneSteps = 0;
       if (Array.isArray(mm.pages) && mm.pages.length >= 8) doneSteps += 1;
       if (mm.cover?.ok) doneSteps += 1;
@@ -2082,15 +3027,16 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
         totalSteps,
         message: msg || "",
         coverUrl: mm.cover?.url || "",
-        images: (mm.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
+        images: (mm.images || []).map(it => ({ page: it.page, url: it.url || "" })),
         pdf: mm.pdf || "",
         error: mm.error || "",
       };
     }
 
+    // 0) salva manifest (com RLS) antes do passo
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-    // 1) STORY
+    // 1) STORY (gera pages se não tiver)
     const needStory = !(Array.isArray(m.pages) && m.pages.length >= 8);
     if (needStory) {
       m.step = "story";
@@ -2109,19 +3055,30 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
       m.step = "story_done";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
       return res.json(buildProgress(m, "História criada ✅"));
     }
 
-    // 2) COVER
+    // 2) COVER (gera capa se não tiver)
     const coverFinalPath = path.join(bookDir, "cover_final.png");
-    const needCover = !(m.cover?.ok && existsSyncSafe(coverFinalPath) && m.cover?.storageKey && m.cover?.url);
+    const needCover = !(m.cover?.ok && existsSyncSafe(coverFinalPath));
     if (needCover) {
       m.step = "cover";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const coverPrompt = buildCoverPrompt({ themeKey: m.theme, childName: m.child?.name, styleKey: m.style });
-      const coverBuf = await openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt: coverPrompt, size: "1024x1024" });
+      const coverPrompt = buildCoverPrompt({
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey: m.style,
+      });
+
+      const coverBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+      });
 
       const coverBase = path.join(bookDir, "cover.png");
       await fsp.writeFile(coverBase, coverBuf);
@@ -2133,16 +3090,11 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
         subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
       });
 
-      // ✅ upload cover_final.png
-      const up = await uploadLocalFileToStorage({
-        userId,
-        bookId: id,
-        localPath: coverFinalPath,
-        filename: "cover_final.png",
-        contentType: "image/png",
-      });
-
-      m.cover = { ok: true, file: "cover_final.png", storageKey: up.key, url: up.url };
+      m.cover = {
+        ok: true,
+        file: "cover_final.png",
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+      };
       m.step = "cover_done";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2150,9 +3102,9 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
       return res.json(buildProgress(m, "Capa pronta ✅"));
     }
 
-    // 3) NEXT PAGE (1 por request)
+    // 3) NEXT PAGE (1 página por request)
     const imagesArr = Array.isArray(m.images) ? m.images.slice() : [];
-    const hasPage = (n) => imagesArr.some((it) => Number(it?.page || 0) === n && it.url && it.storageKey);
+    const hasPage = (n) => imagesArr.some(it => Number(it?.page||0) === n && it.url);
 
     let nextPage = 0;
     for (let p = 1; p <= 8; p++) {
@@ -2164,7 +3116,7 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const pageObj = (m.pages || []).find((x) => Number(x?.page || 0) === nextPage) || {};
+      const pageObj = (m.pages || []).find(x => Number(x?.page||0) === nextPage) || {};
       const title = String(pageObj.title || `Página ${nextPage}`).trim();
       const text = String(pageObj.text || "").trim();
 
@@ -2175,33 +3127,34 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
         styleKey: m.style,
       });
 
-      const imgBuf = await openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size: "1024x1024" });
-
-      const pageKey = String(nextPage).padStart(2, "0");
-      const baseName = `page_${pageKey}.png`;
-      const finalName = `page_${pageKey}_final.png`;
-
-      const basePath = path.join(bookDir, baseName);
-      await fsp.writeFile(basePath, imgBuf);
-
-      const finalPath = path.join(bookDir, finalName);
-      await stampStoryTextOnImage({ inputPath: basePath, outputPath: finalPath, title, text });
-
-      // ✅ upload final PNG
-      const up = await uploadLocalFileToStorage({
-        userId,
-        bookId: id,
-        localPath: finalPath,
-        filename: finalName,
-        contentType: "image/png",
+      const imgBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
       });
 
-      const idx = imagesArr.findIndex((it) => Number(it?.page || 0) === nextPage);
-      const entry = { page: nextPage, path: finalPath, prompt, file: finalName, storageKey: up.key, url: up.url };
+      const pageKey = String(nextPage).padStart(2, "0");
+      const basePath = path.join(bookDir, `page_${pageKey}.png`);
+      await fsp.writeFile(basePath, imgBuf);
+
+      const finalName = `page_${pageKey}_final.png`;
+      const finalPath = path.join(bookDir, finalName);
+      await stampStoryTextOnImage({
+        inputPath: basePath,
+        outputPath: finalPath,
+        title,
+        text,
+      });
+
+      const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
+
+      const idx = imagesArr.findIndex(it => Number(it?.page||0) === nextPage);
+      const entry = { page: nextPage, path: finalPath, prompt, url, file: finalName };
       if (idx >= 0) imagesArr[idx] = { ...imagesArr[idx], ...entry };
       else imagesArr.push(entry);
 
-      imagesArr.sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
+      imagesArr.sort((a,b)=>Number(a.page||0)-Number(b.page||0));
       m.images = imagesArr;
       m.step = `page_${nextPage}_done`;
       m.updatedAt = nowISO();
@@ -2210,61 +3163,36 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
       return res.json(buildProgress(m, `Página ${nextPage}/8 pronta ✅`));
     }
 
-    // 4) PDF
-    const haveAllPages = (m.images || []).filter((it) => it && it.url && it.storageKey).length >= 8;
+    // 4) PDF (depois de todas páginas)
+    const haveAllPages = (m.images || []).filter(it => it && it.url).length >= 8;
     if (haveAllPages) {
       m.step = "pdf";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      // garante cover local (se sumiu)
-      const coverLocal = path.join(bookDir, "cover_final.png");
-      if (!existsSyncSafe(coverLocal) && m.cover?.storageKey) {
-        await ensureLocalFromStorage(coverLocal, m.cover.storageKey);
-      }
-
-      // garante páginas locais (se sumiram)
       const pageImagePaths = (m.images || [])
         .slice()
-        .sort((a, b) => Number(a.page || 0) - Number(b.page || 0))
-        .map((it) => {
-          const pLocal = path.join(bookDir, String(it.file || ""));
-          return { local: pLocal, key: it.storageKey, file: it.file };
-        });
+        .sort((a,b)=>Number(a.page||0)-Number(b.page||0))
+        .map(it => String(it?.path || ""))
+        .filter(p => p && existsSyncSafe(p));
 
-      for (const it of pageImagePaths) {
-        if (!existsSyncSafe(it.local) && it.key) await ensureLocalFromStorage(it.local, it.key);
-      }
-
-      const pathsOnly = pageImagePaths.map((x) => x.local).filter((p) => p && existsSyncSafe(p));
-
-      const pdfPath = await makePdfImagesOnly({
+      await makePdfImagesOnly({
         bookId: id,
-        coverPath: existsSyncSafe(coverLocal) ? coverLocal : "",
-        pageImagePaths: pathsOnly,
+        coverPath: existsSyncSafe(coverFinalPath) ? coverFinalPath : "",
+        pageImagePaths,
         outputDir: bookDir,
-      });
-
-      // ✅ upload pdf
-      const pdfName = `book-${id}.pdf`;
-      const upPdf = await uploadLocalFileToStorage({
-        userId,
-        bookId: id,
-        localPath: pdfPath,
-        filename: pdfName,
-        contentType: "application/pdf",
       });
 
       m.status = "done";
       m.step = "done";
-      m.pdf_storageKey = upPdf.key;
-      m.pdf = upPdf.url; // ✅ link direto persistente
+      m.pdf = `/download/${encodeURIComponent(id)}`;
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
       return res.json(buildProgress(m, "PDF pronto 🎉"));
     }
 
+    // fallback (não deveria cair aqui)
     m.step = "waiting";
     m.updatedAt = nowISO();
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2285,10 +3213,170 @@ if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrad
     jobs.set(jobKey, { running: false });
   }
 });
+// ------------------------------
+// Geração SEQUENCIAL (com blindagem do job)
+// ------------------------------
+async function runGeneration(userId, bookId) {
+  const jobKey = `${userId}:${bookId}`;
+  const bookDir = bookDirOf(userId, bookId);
+
+  let m = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+  if (!m) {
+    jobs.set(jobKey, { running: false });
+    return;
+  }
+
+  const setStep = async (step, extra = {}) => {
+    const mm = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+    if (!mm) return;
+    mm.step = step;
+    mm.updatedAt = nowISO();
+    Object.assign(mm, extra);
+    await saveManifestAll(userId, bookId, mm, { sbUser: null });
+  };
+
+  const fail = async (err) => {
+    const mm = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+    if (!mm) return;
+    mm.status = "failed";
+    mm.step = "failed";
+    mm.error = String(err?.message || err || "Erro");
+    mm.updatedAt = nowISO();
+    await saveManifestAll(userId, bookId, mm, { sbUser: null });
+  };
+
+  try {
+    await ensureDir(bookDir);
+
+    const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
+    const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+
+    if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
+    if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+
+    const styleKey = String(m.style || "read").trim();
+
+    await setStep("story");
+    const pages = await generateStoryTextPages({
+      childName: m.child?.name,
+      childAge: m.child?.age,
+      childGender: m.child?.gender,
+      themeKey: m.theme,
+      pagesCount: 8,
+    });
+    await setStep("story_done", { pages });
+
+    await setStep("cover");
+    const coverPrompt = buildCoverPrompt({
+      themeKey: m.theme,
+      childName: m.child?.name,
+      styleKey,
+    });
+
+    const coverBuf = await openaiImageEditFromReference({
+      imagePngPath,
+      maskPngPath,
+      prompt: coverPrompt,
+      size: "1024x1024",
+    });
+
+    const coverBase = path.join(bookDir, "cover.png");
+    await fsp.writeFile(coverBase, coverBuf);
+
+    const coverFinal = path.join(bookDir, "cover_final.png");
+    await stampCoverTextOnImage({
+      inputPath: coverBase,
+      outputPath: coverFinal,
+      title: "Meu Livro Mágico",
+      subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+    });
+
+    m = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+    if (m) {
+      m.cover = {
+        ok: true,
+        file: path.basename(coverFinal),
+        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(path.basename(coverFinal))}`,
+      };
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, bookId, m, { sbUser: null });
+    }
+
+    const images = [];
+    for (const p of pages) {
+      await setStep(`image_${p.page}`);
+
+      const prompt = buildScenePromptFromParagraph({
+        paragraphText: p.text,
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey,
+      });
+
+      const imgBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+      });
+
+      const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
+      await fsp.writeFile(basePath, imgBuf);
+
+      const finalPath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}_final.png`);
+      await stampStoryTextOnImage({
+        inputPath: basePath,
+        outputPath: finalPath,
+        title: p.title,
+        text: p.text,
+      });
+
+      images.push({
+        page: p.page,
+        path: finalPath,
+        prompt,
+        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(path.basename(finalPath))}`,
+      });
+
+      const mm = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+      if (mm) {
+        mm.images = images;
+        mm.updatedAt = nowISO();
+        await saveManifestAll(userId, bookId, mm, { sbUser: null });
+      }
+    }
+
+    await setStep("images_done", { images });
+
+    await setStep("pdf");
+    const coverPath = path.join(bookDir, "cover_final.png");
+    const pageImagePaths = images.map((it) => it.path);
+
+    await makePdfImagesOnly({
+      bookId,
+      coverPath,
+      pageImagePaths,
+      outputDir: bookDir,
+    });
+
+    m = await loadManifestAll(userId, bookId, { sbUser: null, allowAdminFallback: true });
+    if (!m) throw new Error("Manifest sumiu");
+
+    m.status = "done";
+    m.step = "done";
+    m.error = "";
+    m.pdf = `/download/${encodeURIComponent(bookId)}`;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, bookId, m, { sbUser: null });
+  } catch (e) {
+    await fail(e);
+  } finally {
+    jobs.set(jobKey, { running: false });
+  }
+}
 
 // ------------------------------
-// /api/image/:id/:file
-// ✅ serve do disco; se não tiver, baixa do Storage e serve
+// Servir imagens do livro: /api/image/:id/:file (ÚNICA rota)
 // ------------------------------
 app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
   try {
@@ -2299,7 +3387,7 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     const file = String(req.params?.file || "").trim();
     if (!id || !file) return res.status(400).send("bad request");
 
-    if (id.includes("..") || id.includes("/") || id.includes("\\") || file.includes("..") || file.includes("/") || file.includes("\\")) {
+    if (id.includes("..") || id.includes("/") || id.includes("\\\\") || file.includes("..") || file.includes("/") || file.includes("\\\\")) {
       return res.status(400).send("bad request");
     }
 
@@ -2308,13 +3396,6 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
 
     const fp = path.join(bookDirOf(userId, id), file);
-
-    // se não existe local, tenta baixar do Storage
-    if (!existsSyncSafe(fp)) {
-      const key = storageKeyFor(userId, id, file);
-      await sbDownloadToLocal({ pathKey: key, localPath: fp });
-    }
-
     if (!existsSyncSafe(fp)) return res.status(404).send("not found");
 
     res.setHeader("Cache-Control", "no-store");
@@ -2326,12 +3407,11 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
 
 // ------------------------------
 // Download PDF
-// ✅ agora redireciona para URL do Storage (persistente)
 // ------------------------------
 app.get("/download/:id", requireAuth, async (req, res) => {
   try {
-    const userId = String(req.user?.id || "");
-    if (!userId) return res.status(401).send("not_logged_in");
+    const userId = req.user?.id || "";
+    if (!userId) return;
 
     const id = String(req.params?.id || "").trim();
     if (!id) return res.status(400).send("id ausente");
@@ -2341,23 +3421,12 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
     if (m.status !== "done") return res.status(409).send("PDF ainda não está pronto");
 
-    // ✅ se m.pdf já é URL público, redireciona
-    const pdfUrl = String(m.pdf || "").trim();
-    if (pdfUrl.startsWith("http://") || pdfUrl.startsWith("https://")) {
-      return res.redirect(pdfUrl);
-    }
-
-    // fallback: tenta local + storageKey
-    const pdfName = `book-${id}.pdf`;
-    const localPdf = path.join(bookDirOf(userId, id), pdfName);
-    if (!existsSyncSafe(localPdf) && m.pdf_storageKey) {
-      await sbDownloadToLocal({ pathKey: m.pdf_storageKey, localPath: localPdf });
-    }
-    if (!existsSyncSafe(localPdf)) return res.status(404).send("pdf não encontrado");
+    const pdfPath = path.join(bookDirOf(userId, id), `book-${id}.pdf`);
+    if (!existsSyncSafe(pdfPath)) return res.status(404).send("pdf não encontrado");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="livro-${id}.pdf"`);
-    fs.createReadStream(localPdf).pipe(res);
+    fs.createReadStream(pdfPath).pipe(res);
   } catch (e) {
     res.status(500).send(String(e?.message || e || "Erro"));
   }
@@ -2370,18 +3439,80 @@ app.get("/download/:id", requireAuth, async (req, res) => {
   await ensureDir(OUT_DIR);
   await ensureDir(BOOKS_DIR);
 
+  // ✅ Na Vercel NÃO pode usar app.listen()
+  // Ela executa como serverless handler.
   if (process.env.VERCEL) {
     console.log("✅ Rodando na Vercel (serverless)");
     return;
   }
+async function sbUploadBuffer({ pathKey, contentType, buffer }) {
+  if (!supabaseAdmin) throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente (precisa para upload no Storage).");
 
+  const { data, error } = await supabaseAdmin
+    .storage
+    .from("books")
+    .upload(pathKey, buffer, { contentType, upsert: true });
+
+  if (error) throw error;
+  return data;
+}
+
+function sbPublicUrl(pathKey) {
+  const { data } = supabaseAnon.storage.from("books").getPublicUrl(pathKey);
+  return data?.publicUrl || "";
+}
   app.listen(PORT, () => {
     console.log("===============================================");
-    console.log(`📚 Meu Livro Mágico — Vercel-safe + Supabase Auth/RLS`);
+    console.log(`📚 Meu Livro Mágico — SEQUENCIAL (Supabase Auth + RLS)`);
     console.log(`✅ http://localhost:${PORT}`);
-    console.log(`🛒 /sales | ✨ /create | ⏳ /generate`);
-    console.log(`Bucket Storage: ${STORAGE_BUCKET}`);
-    console.log(`Service role: ${supabaseAdmin ? "OK" : "AUSENTE (necessário p/ upload no Storage)"}`);
+    console.log(`🛒 Página de Vendas: http://localhost:${PORT}/sales`);
+    console.log(`✨ Gerador:          http://localhost:${PORT}/create`);
+    console.log(`⏳ Step 4 Gerando:   http://localhost:${PORT}/generate`);
+    console.log("-----------------------------------------------");
+
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      console.log("❌ SUPABASE_URL / SUPABASE_ANON_KEY NÃO configurados.");
+      console.log("   ➜ Configure no .env.local para login funcionar.");
+    } else {
+      console.log("✅ SUPABASE ANON OK");
+      console.log("✅ Cookies: sb_token (access) + sb_refresh (refresh) com refresh automático");
+    }
+
+    if (supabaseAdmin) {
+      console.log("✅ SUPABASE SERVICE ROLE OK (sync background + profiles)");
+    } else {
+      console.log("⚠️  SUPABASE_SERVICE_ROLE_KEY ausente -> sync background no DB pode falhar (DISCO continua OK).");
+    }
+
+    if (!OPENAI_API_KEY) {
+      console.log("❌ OPENAI_API_KEY NÃO configurada (texto não vai gerar).");
+      console.log("   ➜ Crie .env.local com: OPENAI_API_KEY=sua_chave");
+    } else {
+      console.log("✅ OPENAI_API_KEY OK");
+      console.log("ℹ️  TEXT_MODEL:", TEXT_MODEL);
+    }
+
+    if (REPLICATE_API_TOKEN) {
+      console.log("✅ REPLICATE_API_TOKEN OK");
+      console.log("ℹ️  IMAGE_PROVIDER: Replicate");
+      console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
+      if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
+      console.log(
+        "ℹ️  RESOLUTION:",
+        REPLICATE_RESOLUTION,
+        "| ASPECT:",
+        REPLICATE_ASPECT_RATIO,
+        "| FORMAT:",
+        REPLICATE_OUTPUT_FORMAT,
+        "| SAFETY:",
+        REPLICATE_SAFETY
+      );
+    } else {
+      console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
+      console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
+    }
+
+    console.log("✅ Estilos: read (leitura) | color (leitura + colorir)");
     console.log("===============================================");
   });
 })();
