@@ -122,7 +122,10 @@ const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
     : null;
-
+console.log("DEBUG SUPABASE_URL ok:", !!SUPABASE_URL);
+console.log("DEBUG ANON startsWith eyJ:", (SUPABASE_ANON_KEY || "").trim().startsWith("eyJ"));
+console.log("DEBUG SERVICE startsWith eyJ:", (SUPABASE_SERVICE_ROLE_KEY || "").trim().startsWith("eyJ"));
+console.log("DEBUG SERVICE len:", (SUPABASE_SERVICE_ROLE_KEY || "").trim().length);
 function supabaseUserClient(accessToken) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1207,7 +1210,7 @@ async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallba
 async function sbUploadBuffer({ pathKey, contentType, buffer }) {
   if (!supabaseAdmin) throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente (precisa para upload no Storage).");
   const { data, error } = await supabaseAdmin.storage.from("books").upload(pathKey, buffer, { contentType, upsert: true });
-  if (error) throw error;
+  if (error) throw new Error(`Storage upload falhou: ${error.message || JSON.stringify(error)}`);
   return data;
 }
 
