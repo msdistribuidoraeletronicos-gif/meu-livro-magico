@@ -504,7 +504,33 @@ async function uploadLocalFileToStorage({ userId, bookId, localPath, filename, c
   await sbUploadBuffer({ pathKey: key, contentType, buffer: buf });
   return { key, url: sbPublicUrl(key) };
 }
+function assertSupabaseAdmin() {
+  if (!supabaseAdmin) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente. Necessário para upload no Supabase Storage.");
+  }
+}
 
+async function sbUploadBuffer({ pathKey, contentType, buffer }) {
+  assertSupabaseAdmin();
+
+  const { error } = await supabaseAdmin
+    .storage
+    .from(STORAGE_BUCKET)
+    .upload(pathKey, buffer, {
+      contentType: contentType || "application/octet-stream",
+      upsert: true,
+      cacheControl: "3600",
+    });
+
+  if (error) throw error;
+  return true;
+}
+
+function sbPublicUrl(pathKey) {
+  if (!supabaseAnon) throw new Error("Supabase ANON não configurado.");
+  const { data } = supabaseAnon.storage.from(STORAGE_BUCKET).getPublicUrl(pathKey);
+  return data?.publicUrl || "";
+}
 // ------------------------------
 // OpenAI (texto)
 // ------------------------------
@@ -1097,11 +1123,11 @@ async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir 
 // ------------------------------
 // Manifest (disco)
 // ------------------------------
-function bookDirOf(_userId, bookId) {
-  return path.join(BOOKS_DIR, String(bookId));
+function bookDirOf(userId, bookId) {
+  return path.join(BOOKS_DIR, String(userId), String(bookId));
 }
-function manifestPathOf(_userId, bookId) {
-  return path.join(bookDirOf("", bookId), "book.json");
+function manifestPathOf(userId, bookId) {
+  return path.join(bookDirOf(userId, bookId), "book.json");
 }
 
 async function loadManifest(userId, bookId) {
