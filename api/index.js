@@ -1,6 +1,2 @@
-// api/index.js
 "use strict";
-
-const app = require("../app.js");
-
-module.exports = (req, res) => app(req, res);
+module.exports = require("../app.js");
