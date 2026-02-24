@@ -44,6 +44,7 @@ const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
 const { createClient } = require("@supabase/supabase-js");
 
+
 // ------------------------------
 // dotenv: .env.local (prioridade) e .env (fallback)
 // ------------------------------
@@ -1744,29 +1745,34 @@ try {
 const USERS_FILE = path.join(OUT_DIR, "users.json");
 
 // ✅ /admin (Painel Admin) — versão robusta (Vercel-friendly)
+// ------------------------------
+// ✅ /admin (Painel Admin) — Vercel-friendly (bundle-safe)
+// ------------------------------
+const USERS_FILE = path.join(OUT_DIR, "users.json");
+
 (() => {
-  const adminPath = path.join(__dirname, "admin.page.js");
+  // ✅ agora o admin.page.js está dentro de /api
+  const adminPath = path.join(__dirname, "api", "admin.page.js");
 
   try {
     if (!fs.existsSync(adminPath)) {
-      throw new Error(`Arquivo admin.page.js NÃO encontrado em: ${adminPath} (confira commit/deploy)`);
+      throw new Error(`Arquivo api/admin.page.js NÃO encontrado em: ${adminPath} (confira commit/deploy)`);
     }
 
     const mountAdminPage = require(adminPath);
 
     if (typeof mountAdminPage !== "function") {
       throw new Error(
-        `admin.page.js export inválido. Esperado "module.exports = function(...)". Recebi: ${typeof mountAdminPage}`
+        `api/admin.page.js export inválido. Esperado "module.exports = function(...)". Recebi: ${typeof mountAdminPage}`
       );
     }
 
     mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
     console.log("✅ /admin ativo! (admin.page.js carregado de:", adminPath, ")");
   } catch (e) {
-    // ✅ log completo (stack) para ver o motivo real na Vercel
     console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
 
-    // ✅ fallback: não deixa "Cannot GET /admin"
+    // ✅ fallback para não ficar "Cannot GET /admin"
     app.get("/admin", requireAuth, (req, res) => {
       res
         .status(500)
