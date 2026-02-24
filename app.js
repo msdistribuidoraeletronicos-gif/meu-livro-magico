@@ -108,9 +108,20 @@ const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
-// 🔒 Se estiver na Vercel, FORÇA /tmp sempre (não depende de __dirname)
-const IS_VERCEL = !!process.env.VERCEL;
-const OUT_ROOT = IS_VERCEL ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
+function isServerlessReadOnlyFs() {
+  // Vercel / AWS Lambda costumam ter /var/task e FS read-only fora do /tmp
+  const d = String(__dirname || "");
+  return (
+    !!process.env.VERCEL ||
+    !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    !!process.env.LAMBDA_TASK_ROOT ||
+    d.startsWith("/var/task")
+  );
+}
+
+const OUT_ROOT = isServerlessReadOnlyFs()
+  ? path.join(os.tmpdir(), "meu-livro-magico")
+  : __dirname;
 
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
