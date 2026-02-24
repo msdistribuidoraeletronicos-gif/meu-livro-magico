@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/index.js": {
+    "api/[...all].js": {
       "includeFiles": [
         "app.js",
         "admin.page.js",
@@ -12,8 +12,5 @@
         "exemplos.html"
       ]
     }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index.js" }
-  ]
+  }
 }
