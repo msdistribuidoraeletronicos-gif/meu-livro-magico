@@ -4,10 +4,15 @@
  *
  * ✅ Nesta versão (SUPABASE AUTH + RLS de verdade):
  * - ✅ Remove login local (users.json / sessions Map)
- * - ✅ Login/Cadastro via Supabase Auth (JWT em cookie sb_token)
+ * - ✅ Login/Cadastro via Supabase Auth (JWT em cookie)
  * - ✅ Rotas do usuário usam ANON KEY + Bearer JWT (RLS ON) para books/profiles
  * - ✅ Geração em background continua salvando no DISCO e também atualiza no DB (admin) para manter sincronizado
  * - ✅ Mantém rotas e comportamento do app (livros em output/books, /books, /generate, etc.)
+ *
+ * ✅ CORREÇÕES IMPORTANTES NESTA VERSÃO:
+ * - ✅ Corrige sessão expirando: agora salva access_token + refresh_token (cookies sb_token + sb_refresh)
+ *   e faz refresh automático quando o access_token expira.
+ * - ✅ Logout limpa ambos cookies.
  *
  * Requisitos:
  *  - Node 18+ (fetch global)
@@ -20,6 +25,7 @@
  *   SUPABASE_ANON_KEY=...
  *   SUPABASE_SERVICE_ROLE_KEY=...   (opcional, recomendado p/ sync background + profiles insert)
  *   ADMIN_EMAILS=email1@x.com,email2@y.com
+ *   COOKIE_SECURE=1   (opcional: força Secure no cookie quando HTTPS)
  *
  * Rodar:
  *   node app.js
@@ -98,10 +104,13 @@ const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "1:1
 const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "png").trim();
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
-const OUT_DIR = path.join(__dirname, "output");
-const USERS_DIR = path.join(OUT_DIR, "users"); // mantido para compat com módulo books (se usar)
-const BOOKS_DIR = path.join(OUT_DIR, "books"); // livros ficam aqui
+// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
+const IS_VERCEL = !!process.env.VERCEL;
+const OUT_ROOT = IS_VERCEL ? "/tmp" : __dirname;
 
+const OUT_DIR = path.join(OUT_ROOT, "output");
+const USERS_DIR = path.join(OUT_DIR, "users");
+const BOOKS_DIR = path.join(OUT_DIR, "books");
 const JSON_LIMIT = "25mb";
 
 // Base de edição (mantém performance e garante match image/mask)
@@ -122,7 +131,9 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-const SB_COOKIE = "sb_token"; // access_token do usuário
+// ✅ Cookies (corrigido): salva access + refresh para evitar expiração e logout "aleatório"
+const SB_ACCESS_COOKIE = "sb_token"; // access_token
+const SB_REFRESH_COOKIE = "sb_refresh"; // refresh_token
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn("❌ SUPABASE_URL / SUPABASE_ANON_KEY não configurados. Auth/RLS NÃO vai funcionar.");
@@ -183,21 +194,68 @@ function clearCookie(res, name) {
   res.setHeader("Set-Cookie", parts.join("; "));
 }
 
-function getUserToken(req) {
+function getUserTokens(req) {
   const cookies = parseCookies(req);
-  return String(cookies[SB_COOKIE] || "");
+  const access = String(cookies[SB_ACCESS_COOKIE] || "");
+  const refresh = String(cookies[SB_REFRESH_COOKIE] || "");
+  return { access, refresh };
 }
 
-async function getCurrentUser(req) {
-  try {
-    const token = getUserToken(req);
-    if (!token) return null;
+function setUserTokens(res, { access, refresh }) {
+  if (access) setCookie(res, SB_ACCESS_COOKIE, access, { maxAgeSec: 60 * 60 * 24 * 30 });
+  if (refresh) setCookie(res, SB_REFRESH_COOKIE, refresh, { maxAgeSec: 60 * 60 * 24 * 30 });
+}
 
-    const sb = supabaseUserClient(token);
+function clearUserTokens(res) {
+  clearCookie(res, SB_ACCESS_COOKIE);
+  clearCookie(res, SB_REFRESH_COOKIE);
+}
+
+async function refreshAccessTokenIfNeeded(req, res) {
+  // Tenta refresh usando refresh_token se access_token estiver inválido/expirado.
+  try {
+    assertSupabaseAnon();
+    const { refresh } = getUserTokens(req);
+    if (!refresh) return null;
+
+    const { data, error } = await supabaseAnon.auth.refreshSession({ refresh_token: refresh });
+    if (error || !data?.session?.access_token) return null;
+
+    const access = data.session.access_token;
+    const newRefresh = data.session.refresh_token || refresh;
+
+    // atualiza cookies
+    if (res) setUserTokens(res, { access, refresh: newRefresh });
+
+    return { access, refresh: newRefresh };
+  } catch {
+    return null;
+  }
+}
+
+async function getCurrentUser(req, resForCookieUpdate = null) {
+  try {
+    const { access } = getUserTokens(req);
+    if (!access) return null;
+
+    let sb = supabaseUserClient(access);
     if (!sb) return null;
 
-    const { data, error } = await sb.auth.getUser();
-    if (error || !data?.user) return null;
+    let { data, error } = await sb.auth.getUser();
+
+    // Se token expirou/invalidou, tenta refresh
+    if (error || !data?.user) {
+      const refreshed = await refreshAccessTokenIfNeeded(req, resForCookieUpdate);
+      if (!refreshed?.access) return null;
+
+      sb = supabaseUserClient(refreshed.access);
+      if (!sb) return null;
+
+      const r2 = await sb.auth.getUser();
+      data = r2?.data;
+      error = r2?.error;
+      if (error || !data?.user) return null;
+    }
 
     const u = data.user;
     return { id: u.id, email: u.email || "", sb };
@@ -224,7 +282,7 @@ function canAccessBook(userId, manifest, reqUser) {
 }
 
 function requireAuth(req, res, next) {
-  getCurrentUser(req)
+  getCurrentUser(req, res)
     .then((user) => {
       if (!user) {
         const nextUrl = encodeURIComponent(req.originalUrl || "/create");
@@ -241,7 +299,7 @@ function requireAuth(req, res, next) {
 }
 
 async function requireAuthApi(req, res) {
-  const u = await getCurrentUser(req);
+  const u = await getCurrentUser(req, res);
   if (!u) {
     res.status(401).json({ ok: false, error: "not_logged_in" });
     return null;
@@ -1283,6 +1341,7 @@ try {
   console.warn("   Motivo:", String(e?.message || e));
   console.warn("   Caminho esperado:", path.join(__dirname, "admin.page.js"));
 }
+
 // ------------------------------
 // profile.page.js (/profile)
 // ------------------------------
@@ -1295,12 +1354,13 @@ try {
   console.warn("   Motivo:", String(e?.message || e));
   console.warn("   Caminho esperado:", path.join(__dirname, "profile.page.js"));
 }
+
 // ------------------------------
 // LOGIN UI
 // ------------------------------
 app.get("/login", async (req, res) => {
   const nextUrl = String(req.query?.next || "/create");
-  const user = await getCurrentUser(req).catch(() => null);
+  const user = await getCurrentUser(req, res).catch(() => null);
   if (user) return res.redirect(nextUrl || "/create");
 
   res.type("html").send(`<!doctype html>
@@ -1462,7 +1522,11 @@ app.get("/login", async (req, res) => {
       if (!name || name.length < 2) return setHint("Digite seu nome (mín. 2 letras).");
       if (!email) return setHint("Digite o e-mail.");
       if (!password || password.length < 6) return setHint("Senha muito curta (mín. 6).");
-      await postJson("/api/auth/signup", { name, email, password });
+      const r = await postJson("/api/auth/signup", { name, email, password });
+      if (r.needs_email_confirm) {
+        setHint("Conta criada! Confirme seu e-mail e depois faça login.");
+        return;
+      }
       window.location.href = nextUrl || "/create";
     }catch(e){
       setHint(String(e.message || e));
@@ -1474,7 +1538,7 @@ app.get("/login", async (req, res) => {
 });
 
 // ------------------------------
-// AUTH API (Supabase Auth)
+// AUTH API (Supabase Auth) ✅ corrigido p/ salvar access+refresh e evitar expiração
 // ------------------------------
 app.post("/api/auth/signup", async (req, res) => {
   try {
@@ -1499,6 +1563,7 @@ app.post("/api/auth/signup", async (req, res) => {
 
     // Se o projeto exigir confirmação de e-mail, session pode vir null
     const accessToken = data?.session?.access_token || "";
+    const refreshToken = data?.session?.refresh_token || "";
 
     // Tenta criar/atualizar profile (se service role disponível)
     const uid = data?.user?.id || "";
@@ -1510,9 +1575,9 @@ app.post("/api/auth/signup", async (req, res) => {
       }
     }
 
-    // Se já vier logado, seta cookie
+    // Se já vier logado, seta cookies
     if (accessToken) {
-      setCookie(res, SB_COOKIE, accessToken, { maxAgeSec: 60 * 60 * 24 * 30 });
+      setUserTokens(res, { access: accessToken, refresh: refreshToken });
       return res.json({ ok: true, needs_email_confirm: false });
     }
 
@@ -1537,9 +1602,10 @@ app.post("/api/auth/login", async (req, res) => {
     if (error) return res.status(401).json({ ok: false, error: "E-mail ou senha incorretos." });
 
     const accessToken = data?.session?.access_token || "";
+    const refreshToken = data?.session?.refresh_token || "";
     if (!accessToken) return res.status(500).json({ ok: false, error: "Falha ao obter token." });
 
-    setCookie(res, SB_COOKIE, accessToken, { maxAgeSec: 60 * 60 * 24 * 30 });
+    setUserTokens(res, { access: accessToken, refresh: refreshToken });
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -1548,7 +1614,7 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/logout", async (req, res) => {
   try {
-    clearCookie(res, SB_COOKIE);
+    clearUserTokens(res);
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -2399,7 +2465,7 @@ function renderGeneratorHtml(req, res) {
     setStepUI();
   });
 
-    (function init(){
+  (function init(){
     showPhoto(state.photo);
     $("childName").value = state.childName;
     $("childAge").value = String(state.childAge);
@@ -2504,7 +2570,7 @@ app.post("/api/uploadPhoto", async (req, res) => {
     const mi = await sharp(editBasePath).metadata();
     const mm = await sharp(maskBasePath).metadata();
     if ((mi?.width || 0) !== (mm?.width || 0) || (mi?.height || 0) !== (mm?.height || 0)) {
-      throw new Error(`Falha ao alinhar base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
+   throw new Error(`Falha ao alinhar base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
     }
 
     m.photo = { ok: true, file: path.basename(originalPath), mime, editBase: "edit_base.png" };
@@ -2566,7 +2632,7 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
 
     const titleIncoming = req.body?.title;
     const titleTrimmed = typeof titleIncoming === "string" ? titleIncoming.trim() : "";
-    const text = String(req.body?.text || "").trim().replace(/\s+/g, " ");
+    const text = String(req.body?.text || "").trim().replace(/\\s+/g, " ");
 
     if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
     if (!Number.isFinite(pageNum) || pageNum < 1 || pageNum > 99) return res.status(400).json({ ok: false, error: "page inválida" });
@@ -2576,7 +2642,7 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
-    const jobKey = `${userId}:${id}`;
+    const jobKey = `\${userId}:\${id}`;
     if (jobs.get(jobKey)?.running || m.status === "generating") {
       return res.status(409).json({ ok: false, error: "book está gerando. Tente novamente quando terminar." });
     }
@@ -2605,8 +2671,8 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
 
     const REV = Date.now();
 
-    const editBaseName = `page_${pageKey}_edit.png`;
-    const editFinalName = `page_${pageKey}_final.png`;
+    const editBaseName = `page_\${pageKey}_edit.png`;
+    const editFinalName = `page_\${pageKey}_final.png`;
 
     const editBasePath = path.join(bookDir, editBaseName);
     const editFinalPath = path.join(bookDir, editFinalName);
@@ -2887,7 +2953,7 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     const file = String(req.params?.file || "").trim();
     if (!id || !file) return res.status(400).send("bad request");
 
-    if (id.includes("..") || id.includes("/") || id.includes("\\") || file.includes("..") || file.includes("/") || file.includes("\\")) {
+    if (id.includes("..") || id.includes("/") || id.includes("\\\\") || file.includes("..") || file.includes("/") || file.includes("\\\\")) {
       return res.status(400).send("bad request");
     }
 
@@ -2933,9 +2999,6 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 });
 
 // ------------------------------
-// Start
-// ------------------------------
-// ------------------------------
 // Start (local) + export (Vercel)
 // ------------------------------
 (async () => {
@@ -2963,6 +3026,7 @@ app.get("/download/:id", requireAuth, async (req, res) => {
       console.log("   ➜ Configure no .env.local para login funcionar.");
     } else {
       console.log("✅ SUPABASE ANON OK");
+      console.log("✅ Cookies: sb_token (access) + sb_refresh (refresh) com refresh automático");
     }
 
     if (supabaseAdmin) {
