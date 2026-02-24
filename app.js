@@ -2803,13 +2803,363 @@ app.post("/api/generate", requireAuth, async (req, res) => {
 
     jobs.set(jobKey, { running: true });
 
-    runGeneration(userId, id).catch(() => {});
-    return res.json({ ok: true, id });
+    // ✅ CRÍTICO na Vercel: precisa await
+    await runGeneration(userId, id);
+
+    const done = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    return res.json({ ok: true, id, status: done?.status || "done", step: done?.step || "done" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  } finally {
+    const jobKey = `${String(req.user?.id || "")}:${id}`;
+    jobs.set(jobKey, { running: false });
+  }
+});
+// ------------------------------
+// ✅ PROGRESS (detalhado) — usado pelo /generate
+// GET /api/progress/:id
+// ------------------------------
+app.get("/api/progress/:id", requireAuth, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || "");
+    if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+    const id = String(req.params?.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+
+    const m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const totalSteps = 1 /*story*/ + 1 /*cover*/ + 8 /*pages*/ + 1 /*pdf*/;
+    const pagesDone = Array.isArray(m.images) ? m.images.filter(x => x && x.url).length : 0;
+
+    let doneSteps = 0;
+    if (Array.isArray(m.pages) && m.pages.length >= 8) doneSteps += 1;
+    if (m.cover?.ok) doneSteps += 1;
+    doneSteps += Math.min(8, pagesDone);
+    if (m.status === "done" && m.pdf) doneSteps += 1;
+
+    const message =
+      m.status === "failed" ? "Falhou" :
+      m.status === "done" ? "Livro pronto 🎉" :
+      m.step?.startsWith("page_") ? "Gerando página…" :
+      m.step === "cover" ? "Gerando capa…" :
+      m.step === "story" ? "Criando história…" :
+      m.step === "pdf" ? "Gerando PDF…" :
+      "Preparando…";
+
+    return res.json({
+      ok: true,
+      id: m.id,
+      status: m.status,
+      step: m.step,
+      error: m.error || "",
+      theme: m.theme || "",
+      style: m.style || "read",
+      doneSteps,
+      totalSteps,
+      message,
+      coverUrl: m.cover?.url || "",
+      images: (m.images || []).map(it => ({ page: it.page, url: it.url || "" })),
+      pdf: m.pdf || "",
+      updatedAt: m.updatedAt || "",
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
 
+// ------------------------------
+// ✅ Motor por etapas (serverless-safe)
+// POST /api/generateNext
+// - Faz APENAS 1 passo por chamada:
+//   1) story (gera m.pages)
+//   2) cover (gera cover_final.png)
+//   3) pages (gera page_01..08 + _final)
+//   4) pdf
+// ------------------------------
+app.post("/api/generateNext", requireAuth, async (req, res) => {
+  const userId = String(req.user?.id || "");
+  if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+  const id = String(req.body?.id || "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+
+  const jobKey = `${userId}:${id}`;
+  if (jobs.get(jobKey)?.running) {
+    return res.status(409).json({ ok: false, error: "step já em execução (aguarde 1s e tente novamente)" });
+  }
+  jobs.set(jobKey, { running: true });
+
+  try {
+    let m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    // se já terminou
+    if (m.status === "done") {
+      return res.json({
+        ok: true,
+        id,
+        status: m.status,
+        step: m.step,
+        style: m.style,
+        doneSteps: 11,
+        totalSteps: 11,
+        message: "Livro pronto 🎉",
+        coverUrl: m.cover?.url || "",
+        images: (m.images || []).map(it => ({ page: it.page, url: it.url || "" })),
+        pdf: m.pdf || "",
+      });
+    }
+    if (m.status === "failed") {
+      return res.json({
+        ok: true,
+        id,
+        status: m.status,
+        step: m.step,
+        style: m.style,
+        doneSteps: 0,
+        totalSteps: 11,
+        message: "Falhou",
+        error: m.error || "",
+      });
+    }
+
+    // aplica configs do request (idempotente)
+    const childName = String(req.body?.childName || m.child?.name || "").trim();
+    const childAge = Number(req.body?.childAge ?? m.child?.age ?? 6);
+    const childGender = String(req.body?.childGender || m.child?.gender || "neutral");
+    const theme = String(req.body?.theme || m.theme || "space");
+    const style = String(req.body?.style || m.style || "read");
+
+    m.child = { name: childName, age: clamp(childAge, 2, 12), gender: childGender };
+    m.theme = theme;
+    m.style = style;
+    if (m.status === "created") m.status = "generating";
+    if (!m.step || m.step === "created") m.step = "starting";
+    m.error = "";
+    m.updatedAt = nowISO();
+
+    const bookDir = bookDirOf(userId, id);
+    await ensureDir(bookDir);
+
+    // bases
+    const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
+    const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+    if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
+    if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+
+    // total passos
+    const totalSteps = 1 + 1 + 8 + 1;
+
+    // helper pra responder progresso
+    function buildProgress(mm, msg) {
+      const pagesDone = Array.isArray(mm.images) ? mm.images.filter(x => x && x.url).length : 0;
+
+      let doneSteps = 0;
+      if (Array.isArray(mm.pages) && mm.pages.length >= 8) doneSteps += 1;
+      if (mm.cover?.ok) doneSteps += 1;
+      doneSteps += Math.min(8, pagesDone);
+      if (mm.status === "done" && mm.pdf) doneSteps += 1;
+
+      return {
+        ok: true,
+        id,
+        status: mm.status,
+        step: mm.step,
+        style: mm.style || "read",
+        doneSteps,
+        totalSteps,
+        message: msg || "",
+        coverUrl: mm.cover?.url || "",
+        images: (mm.images || []).map(it => ({ page: it.page, url: it.url || "" })),
+        pdf: mm.pdf || "",
+        error: mm.error || "",
+      };
+    }
+
+    // 0) salva manifest (com RLS) antes do passo
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    // 1) STORY (gera pages se não tiver)
+    const needStory = !(Array.isArray(m.pages) && m.pages.length >= 8);
+    if (needStory) {
+      m.step = "story";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      const pages = await generateStoryTextPages({
+        childName: m.child?.name,
+        childAge: m.child?.age,
+        childGender: m.child?.gender,
+        themeKey: m.theme,
+        pagesCount: 8,
+      });
+
+      m.pages = pages;
+      m.step = "story_done";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(buildProgress(m, "História criada ✅"));
+    }
+
+    // 2) COVER (gera capa se não tiver)
+    const coverFinalPath = path.join(bookDir, "cover_final.png");
+    const needCover = !(m.cover?.ok && existsSyncSafe(coverFinalPath));
+    if (needCover) {
+      m.step = "cover";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      const coverPrompt = buildCoverPrompt({
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey: m.style,
+      });
+
+      const coverBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+      });
+
+      const coverBase = path.join(bookDir, "cover.png");
+      await fsp.writeFile(coverBase, coverBuf);
+
+      await stampCoverTextOnImage({
+        inputPath: coverBase,
+        outputPath: coverFinalPath,
+        title: "Meu Livro Mágico",
+        subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+      });
+
+      m.cover = {
+        ok: true,
+        file: "cover_final.png",
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+      };
+      m.step = "cover_done";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(buildProgress(m, "Capa pronta ✅"));
+    }
+
+    // 3) NEXT PAGE (1 página por request)
+    const imagesArr = Array.isArray(m.images) ? m.images.slice() : [];
+    const hasPage = (n) => imagesArr.some(it => Number(it?.page||0) === n && it.url);
+
+    let nextPage = 0;
+    for (let p = 1; p <= 8; p++) {
+      if (!hasPage(p)) { nextPage = p; break; }
+    }
+
+    if (nextPage) {
+      m.step = `page_${nextPage}`;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      const pageObj = (m.pages || []).find(x => Number(x?.page||0) === nextPage) || {};
+      const title = String(pageObj.title || `Página ${nextPage}`).trim();
+      const text = String(pageObj.text || "").trim();
+
+      const prompt = buildScenePromptFromParagraph({
+        paragraphText: text,
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey: m.style,
+      });
+
+      const imgBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+      });
+
+      const pageKey = String(nextPage).padStart(2, "0");
+      const basePath = path.join(bookDir, `page_${pageKey}.png`);
+      await fsp.writeFile(basePath, imgBuf);
+
+      const finalName = `page_${pageKey}_final.png`;
+      const finalPath = path.join(bookDir, finalName);
+      await stampStoryTextOnImage({
+        inputPath: basePath,
+        outputPath: finalPath,
+        title,
+        text,
+      });
+
+      const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
+
+      const idx = imagesArr.findIndex(it => Number(it?.page||0) === nextPage);
+      const entry = { page: nextPage, path: finalPath, prompt, url, file: finalName };
+      if (idx >= 0) imagesArr[idx] = { ...imagesArr[idx], ...entry };
+      else imagesArr.push(entry);
+
+      imagesArr.sort((a,b)=>Number(a.page||0)-Number(b.page||0));
+      m.images = imagesArr;
+      m.step = `page_${nextPage}_done`;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(buildProgress(m, `Página ${nextPage}/8 pronta ✅`));
+    }
+
+    // 4) PDF (depois de todas páginas)
+    const haveAllPages = (m.images || []).filter(it => it && it.url).length >= 8;
+    if (haveAllPages) {
+      m.step = "pdf";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      const pageImagePaths = (m.images || [])
+        .slice()
+        .sort((a,b)=>Number(a.page||0)-Number(b.page||0))
+        .map(it => String(it?.path || ""))
+        .filter(p => p && existsSyncSafe(p));
+
+      await makePdfImagesOnly({
+        bookId: id,
+        coverPath: existsSyncSafe(coverFinalPath) ? coverFinalPath : "",
+        pageImagePaths,
+        outputDir: bookDir,
+      });
+
+      m.status = "done";
+      m.step = "done";
+      m.pdf = `/download/${encodeURIComponent(id)}`;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(buildProgress(m, "PDF pronto 🎉"));
+    }
+
+    // fallback (não deveria cair aqui)
+    m.step = "waiting";
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.json(buildProgress(m, "Aguardando…"));
+  } catch (e) {
+    try {
+      const m2 = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+      if (m2) {
+        m2.status = "failed";
+        m2.step = "failed";
+        m2.error = String(e?.message || e || "Erro");
+        m2.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m2, { sbUser: req.sb });
+      }
+    } catch {}
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  } finally {
+    jobs.set(jobKey, { running: false });
+  }
+});
 // ------------------------------
 // Geração SEQUENCIAL (com blindagem do job)
 // ------------------------------
