@@ -2935,9 +2935,19 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 // ------------------------------
 // Start
 // ------------------------------
+// ------------------------------
+// Start (local) + export (Vercel)
+// ------------------------------
 (async () => {
   await ensureDir(OUT_DIR);
   await ensureDir(BOOKS_DIR);
+
+  // ✅ Na Vercel NÃO pode usar app.listen()
+  // Ela executa como serverless handler.
+  if (process.env.VERCEL) {
+    console.log("✅ Rodando na Vercel (serverless)");
+    return;
+  }
 
   app.listen(PORT, () => {
     console.log("===============================================");
@@ -2974,7 +2984,16 @@ app.get("/download/:id", requireAuth, async (req, res) => {
       console.log("ℹ️  IMAGE_PROVIDER: Replicate");
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
-      console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
+      console.log(
+        "ℹ️  RESOLUTION:",
+        REPLICATE_RESOLUTION,
+        "| ASPECT:",
+        REPLICATE_ASPECT_RATIO,
+        "| FORMAT:",
+        REPLICATE_OUTPUT_FORMAT,
+        "| SAFETY:",
+        REPLICATE_SAFETY
+      );
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
@@ -2984,3 +3003,6 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     console.log("===============================================");
   });
 })();
+
+// ✅ necessário para Vercel (@vercel/node)
+module.exports = app;
