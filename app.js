@@ -2399,14 +2399,14 @@ function renderGeneratorHtml(req, res) {
     setStepUI();
   });
 
-  (function init(){
+    (function init(){
     showPhoto(state.photo);
     $("childName").value = state.childName;
     $("childAge").value = String(state.childAge);
     $("ageLabel").textContent = String(state.childAge);
     $("childGender").value = state.childGender;
     $("consent").checked = state.consent;
-await loadBooks(true);
+
     if (state.theme) selectTheme(state.theme);
     selectStyle(state.style || "read");
 
