@@ -1260,45 +1260,44 @@ app.get("/api/debug-fs", (req, res) => {
 });
 
 /* -------------------- Mount extra pages/modules -------------------- */
-
 try {
-  const mountBooks = require(path.join(__dirname, "books")); // books/index.js
+  const mountBooks = require("./books"); // ./books/index.js
   mountBooks(app, { OUT_DIR, USERS_DIR, requireAuth });
   console.log("✅ /books ativo: módulo books/ carregado com sucesso.");
 } catch (e) {
   console.warn("❌ módulo books/ NÃO carregou. /books desativado.");
   console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "books", "index.js"));
+  console.warn("   Stack:", String(e?.stack || ""));
 }
 
 try {
-  const mountGeneratePage = require(path.join(__dirname, "generate.page.js"));
+  const mountGeneratePage = require("./generate.page.js");
   mountGeneratePage(app, { requireAuth });
   console.log("✅ /generate ativo: generate.page.js carregado com sucesso.");
 } catch (e) {
   console.warn("❌ generate.page.js NÃO carregou. /generate desativado.");
   console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "generate.page.js"));
+  console.warn("   Stack:", String(e?.stack || ""));
 }
 
 try {
-  const mountAdminPage = require(path.join(__dirname, "admin.page.js"));
+  const mountAdminPage = require("./admin.page.js");
   mountAdminPage(app, { OUT_DIR, BOOKS_DIR, USERS_FILE: "", requireAuth });
   console.log("✅ /admin ativo: admin.page.js carregado com sucesso.");
 } catch (e) {
   console.warn("❌ admin.page.js NÃO carregou. /admin desativado.");
   console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "admin.page.js"));
+  console.warn("   Stack:", String(e?.stack || ""));
 }
 
 try {
-  const mountProfilePage = require(path.join(__dirname, "profile.page.js"));
+  const mountProfilePage = require("./profile.page.js");
   mountProfilePage(app, { requireAuth });
   console.log("✅ /profile ativo: profile.page.js carregado com sucesso.");
 } catch (e) {
   console.warn("❌ profile.page.js NÃO carregou. /profile desativado.");
   console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "profile.page.js"));
+  console.warn("   Stack:", String(e?.stack || ""));
 }
 
 /* -------------------- Login page -------------------- */
