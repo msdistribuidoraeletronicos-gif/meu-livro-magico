@@ -1735,6 +1735,16 @@ try {
 } catch {
   // ok
 }
+app.get("/api/debug-admin", (req, res) => {
+  const p = require("path");
+  const fs = require("fs");
+  res.json({
+    ok: true,
+    __dirname,
+    hasAdminFile: fs.existsSync(p.join(__dirname, "admin.page.js")),
+    files: fs.readdirSync(__dirname).slice(0, 50)
+  });
+});
  // ------------------------------
 // ✅ /admin (Painel Admin) — FIX Vercel bundle (require estático)
 // ------------------------------
