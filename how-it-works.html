@@ -1,0 +1,891 @@
+<!-- how-it-works.html — Página "Como funciona" (standalone) -->
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Meu Livro Mágico — Como funciona</title>
+  <meta name="description" content="Veja como o Meu Livro Mágico transforma a foto da criança em um livro personalizado: história, ilustrações, texto dentro das páginas e PDF pronto para imprimir."/>
+
+  <style>
+    :root{
+      --violet-50:#f5f3ff;
+      --pink-50:#fff1f2;
+      --white:#ffffff;
+      --gray-800:#1f2937;
+      --gray-600:#4b5563;
+      --violet-600:#7c3aed;
+      --violet-700:#6d28d9;
+      --pink-600:#db2777;
+      --pink-700:#be185d;
+      --amber-500:#f59e0b;
+      --amber-300:#fcd34d;
+      --violet-200:#ddd6fe;
+      --shadow: 0 22px 55px rgba(124,58,237,.18);
+      --shadow2: 0 12px 30px rgba(17,24,39,.10);
+      --r: 22px;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: var(--gray-800);
+      background: linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
+      overflow-x:hidden;
+    }
+
+    a{ color:inherit; text-decoration:none; }
+    .wrap{ max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+
+    /* Top nav */
+    .nav{
+      padding: 16px 0;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-weight:1000;
+      letter-spacing:-.2px;
+    }
+    .brand .logo{
+      width:42px;height:42px;border-radius:14px;
+      display:grid;place-items:center;
+      background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
+      border: 1px solid rgba(124,58,237,.18);
+      box-shadow: var(--shadow2);
+      font-size:20px;
+    }
+    .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    /* Buttons */
+    .btn{
+      border:0;
+      cursor:pointer;
+      user-select:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      padding: 14px 18px;
+      border-radius: 999px;
+      font-weight: 900;
+      transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
+      white-space:nowrap;
+    }
+    .btn:active{ transform: translateY(1px); }
+    .btnPrimary{
+      color:#fff;
+      background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+      box-shadow: 0 18px 40px rgba(124,58,237,.20);
+    }
+    .btnPrimary:hover{
+      background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+      box-shadow: 0 18px 46px rgba(124,58,237,.26);
+    }
+    .btnOutline{
+      color: var(--violet-700);
+      background: rgba(255,255,255,.78);
+      border: 2px solid rgba(221,214,254,.95);
+      box-shadow: 0 12px 26px rgba(17,24,39,.06);
+    }
+    .btnOutline:hover{
+      background: rgba(245,243,255,.95);
+      border-color: rgba(196,181,253,.95);
+    }
+    .btnWhite{
+      background:#fff;
+      color: var(--violet-700);
+      box-shadow: 0 18px 40px rgba(0,0,0,.18);
+    }
+    .btnWhite:hover{ background: rgba(255,255,255,.92); }
+
+    /* Hero */
+    .hero{
+      position:relative;
+      overflow:hidden;
+      padding: 30px 0 44px;
+    }
+
+    /* Floating stars layer */
+    .stars{
+      position:absolute; inset:0;
+      pointer-events:none;
+      overflow:hidden;
+    }
+    .star{
+      position:absolute;
+      width: 18px; height: 18px;
+      opacity:.55;
+      animation: floatY var(--dur, 4s) ease-in-out infinite;
+      will-change: transform, opacity;
+      filter: drop-shadow(0 10px 10px rgba(245,158,11,.10));
+    }
+    .star svg{ width:100%; height:100%; display:block; }
+    @keyframes floatY{
+      0%{ transform: translateY(0); opacity:.30; }
+      50%{ transform: translateY(-18px); opacity:.65; }
+      100%{ transform: translateY(0); opacity:.30; }
+    }
+
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(124,58,237,.12), rgba(219,39,119,.12));
+      color: rgba(109,40,217,1);
+      border: 1px solid rgba(124,58,237,.16);
+      font-weight: 850;
+      font-size: 13px;
+      box-shadow: 0 14px 28px rgba(124,58,237,.08);
+    }
+
+    .heroCenter{
+      text-align:center;
+      padding-top: 18px;
+      padding-bottom: 18px;
+      position:relative;
+      z-index: 2;
+    }
+
+    .h1{
+      margin: 16px 0 10px;
+      font-size: 38px;
+      line-height: 1.06;
+      font-weight: 1000;
+      letter-spacing: -1px;
+    }
+    @media (min-width: 768px){
+      .h1{ font-size: 56px; }
+    }
+    @media (min-width: 1024px){
+      .h1{ font-size: 64px; }
+    }
+
+    .gradText{
+      background: linear-gradient(90deg, var(--violet-600), var(--pink-600), var(--amber-500));
+      -webkit-background-clip:text;
+      background-clip:text;
+      color:transparent;
+    }
+
+    .lead{
+      margin: 0 auto;
+      max-width: 74ch;
+      font-size: 18px;
+      line-height: 1.65;
+      color: var(--gray-600);
+      font-weight: 750;
+    }
+    @media (min-width: 768px){
+      .lead{ font-size: 20px; }
+    }
+
+    .ctaRow{
+      margin-top: 18px;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      align-items:center;
+      justify-content:center;
+    }
+    @media (min-width: 640px){
+      .ctaRow{ flex-direction:row; }
+    }
+
+    /* Sections */
+    .sectionWhite{
+      background: #fff;
+      padding: 70px 0;
+      border-top: 1px solid rgba(17,24,39,.05);
+    }
+
+    .sectionSoft{
+      padding: 74px 0;
+    }
+
+    .sectionHead{
+      text-align:center;
+      margin-bottom: 44px;
+    }
+
+    .h2{
+      margin:0 0 10px;
+      font-size: 28px;
+      font-weight: 1000;
+      letter-spacing: -.4px;
+    }
+    @media (min-width: 768px){
+      .h2{ font-size: 38px; }
+    }
+
+    .subP{
+      margin: 0 auto;
+      max-width: 64ch;
+      color: var(--gray-600);
+      font-weight: 750;
+      line-height: 1.6;
+    }
+
+    .grid3{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 22px;
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    @media (min-width: 900px){
+      .grid3{ grid-template-columns: 1fr 1fr 1fr; }
+    }
+
+    .grid2{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+      max-width: 980px;
+      margin: 0 auto;
+      align-items:stretch;
+    }
+    @media (min-width: 900px){
+      .grid2{ grid-template-columns: 1fr 1fr; }
+    }
+
+    .card{
+      background:#fff;
+      border: 1px solid rgba(17,24,39,.06);
+      border-radius: var(--r);
+      box-shadow: var(--shadow2);
+      padding: 18px;
+    }
+    .cardT{
+      margin: 0 0 8px;
+      font-weight: 1000;
+      font-size: 18px;
+      letter-spacing:-.2px;
+    }
+    .cardP{
+      margin: 0;
+      color: var(--gray-600);
+      font-weight: 750;
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .stepCard{ text-align:center; }
+    .stepIconWrap{ position:relative; display:inline-block; margin-bottom: 16px; }
+    .stepIcon{
+      width: 84px; height: 84px;
+      border-radius: 22px;
+      display:grid; place-items:center;
+      font-size: 40px;
+      color:#fff;
+      box-shadow: 0 18px 40px rgba(17,24,39,.12);
+    }
+    .stepBubble{
+      position:absolute;
+      top:-10px; right:-10px;
+      width: 34px; height: 34px;
+      border-radius: 999px;
+      background:#fff;
+      box-shadow: 0 12px 26px rgba(17,24,39,.12);
+      display:grid; place-items:center;
+      font-weight: 1000;
+      color: var(--gray-800);
+    }
+    .stepT{ font-size: 20px; font-weight: 1000; margin: 0 0 8px; }
+    .stepD{ margin:0 auto; max-width: 36ch; color: var(--gray-600); font-weight: 750; line-height: 1.6; }
+
+    .g1{ background: linear-gradient(135deg, #7c3aed, #6d28d9); }
+    .g2{ background: linear-gradient(135deg, #db2777, #e11d48); }
+    .g3{ background: linear-gradient(135deg, #f59e0b, #f97316); }
+
+    /* Timeline / flow */
+    .flow{
+      max-width: 980px;
+      margin: 0 auto;
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    .flowRow{
+      display:grid;
+      grid-template-columns: 44px 1fr;
+      gap: 14px;
+      align-items:flex-start;
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.78);
+      border: 1px solid rgba(17,24,39,.06);
+      box-shadow: 0 12px 26px rgba(17,24,39,.06);
+    }
+    .flowDot{
+      width: 44px; height: 44px;
+      border-radius: 16px;
+      display:grid; place-items:center;
+      font-size: 22px;
+      color:#fff;
+      background: linear-gradient(135deg, rgba(124,58,237,1), rgba(219,39,119,1));
+      box-shadow: 0 18px 40px rgba(124,58,237,.18);
+    }
+    .flowT{
+      margin: 0 0 6px;
+      font-weight: 1000;
+      letter-spacing:-.2px;
+      font-size: 18px;
+    }
+    .flowP{
+      margin: 0;
+      color: var(--gray-600);
+      font-weight: 750;
+      line-height: 1.65;
+      font-size: 15px;
+    }
+    .pillRow{
+      margin-top: 10px;
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-weight: 900;
+      font-size: 12px;
+      border: 1px solid rgba(124,58,237,.18);
+      background: rgba(124,58,237,.08);
+      color: rgba(109,40,217,1);
+    }
+    .pill2{
+      border-color: rgba(219,39,119,.18);
+      background: rgba(219,39,119,.08);
+      color: rgba(190,24,93,1);
+    }
+    .pill3{
+      border-color: rgba(245,158,11,.22);
+      background: rgba(245,158,11,.10);
+      color: rgba(146,64,14,1);
+    }
+
+    /* CTA section */
+    .cta{
+      padding: 80px 0;
+      background: linear-gradient(135deg, #7c3aed, #6d28d9, #db2777);
+      color:#fff;
+    }
+    .ctaBox{
+      max-width: 860px;
+      margin: 0 auto;
+      text-align:center;
+      padding: 0 16px;
+    }
+    .heart{
+      width: 54px; height: 54px;
+      margin: 0 auto 18px;
+      opacity:.92;
+      color: rgba(244,114,182,.85);
+      filter: drop-shadow(0 14px 24px rgba(0,0,0,.15));
+    }
+    .ctaH{
+      margin: 0 0 12px;
+      font-size: 30px;
+      font-weight: 1000;
+      letter-spacing: -.4px;
+    }
+    @media (min-width: 768px){
+      .ctaH{ font-size: 40px; }
+    }
+    .ctaP{
+      margin: 0 auto 22px;
+      max-width: 66ch;
+      color: rgba(255,255,255,.82);
+      font-weight: 750;
+      line-height: 1.7;
+      font-size: 18px;
+    }
+
+    /* FAQ */
+    .faq{
+      max-width: 980px;
+      margin: 0 auto;
+      display:grid;
+      gap: 12px;
+    }
+    details{
+      border-radius: 18px;
+      overflow:hidden;
+      background:#fff;
+      border: 1px solid rgba(17,24,39,.06);
+      box-shadow: 0 12px 26px rgba(17,24,39,.06);
+    }
+    summary{
+      list-style:none;
+      cursor:pointer;
+      padding: 16px 16px;
+      font-weight: 1000;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    summary::-webkit-details-marker{ display:none; }
+    .chev{
+      width: 26px; height: 26px;
+      border-radius: 999px;
+      display:grid; place-items:center;
+      background: rgba(124,58,237,.10);
+      border: 1px solid rgba(124,58,237,.14);
+      color: rgba(109,40,217,1);
+      transition: transform .2s ease;
+      flex: 0 0 auto;
+    }
+    details[open] .chev{ transform: rotate(180deg); }
+    .faqBody{
+      padding: 0 16px 16px 16px;
+      color: var(--gray-600);
+      font-weight: 750;
+      line-height: 1.7;
+    }
+    .faqBody p{ margin: 0; }
+
+    /* Footer */
+    .footer{
+      padding: 26px 0 34px;
+      background: #f8fafc;
+      color: rgba(75,85,99,.9);
+      text-align:center;
+      font-weight: 750;
+      font-size: 13px;
+      border-top: 1px solid rgba(17,24,39,.06);
+    }
+
+    /* Reveal */
+    .reveal{
+      opacity:0;
+      transform: translateY(18px);
+      transition: opacity .55s ease, transform .55s ease;
+    }
+    .reveal.on{
+      opacity:1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a class="brand" href="/sales" title="Voltar para a página inicial">
+        <div class="logo">📚</div>
+        <div>Meu Livro Mágico</div>
+      </a>
+      <div class="navRight">
+        <a class="btn btnOutline" href="/sales" title="Página inicial">Página inicial</a>
+        <a class="btn btnPrimary" href="/create" title="Criar agora">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Criar Livro Mágico
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="stars" id="stars"></div>
+
+    <div class="wrap">
+      <div class="heroCenter">
+        <div class="badge reveal" id="b1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l1.2 4.1L17 7.2l-3.8 1.1L12 12l-1.2-3.7L7 7.2l3.8-1.1L12 2z" stroke="rgba(124,58,237,1)" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M19 12l.7 2.3L22 15l-2.3.7L19 18l-.7-2.3L16 15l2.3-.7L19 12z" stroke="rgba(219,39,119,1)" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          <span>Entenda o passo a passo</span>
+        </div>
+
+        <h1 class="h1 reveal" id="b2">
+          <span>Como o </span><span class="gradText">Meu Livro Mágico</span><br/>
+          <span>funciona na prática</span>
+        </h1>
+
+        <p class="lead reveal" id="b3">
+          Você envia a foto, escolhe o tema e o estilo do livro.
+          E nós criamos uma história, com imagens lindas do seu pequeno(a) em todas as cenas!<br>
+          Assim que você concluir o pedido, daremos vida ao seu exemplar! O processo de fabricação é ágil: em no máximo 5 dias, seu livro estará a caminho da sua casa, pronto para ser apreciado.
+          <br/>
+          <span style="font-weight:900;color:rgba(124,58,237,.95)">Destaque:</span> o texto fica <b>dentro das páginas</b> Perfeito para voce ler e interagir com as cenas.
+        </p>
+
+        <div class="ctaRow reveal" id="b4">
+          <a class="btn btnPrimary" href="/create">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            Criar meu livro agora
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 12h12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M13 6l6 6-6 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+
+          <a class="btn btnOutline" href="/sales">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 19c-3-2-7-2-9-1V5c2-1 6-1 9 1" stroke="rgba(109,40,217,1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M12 19c3-2 7-2 9-1V5c-2-1-6-1-9 1" stroke="rgba(109,40,217,1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Voltar para a página inicial
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 STEPS (same vibe) -->
+  <section class="sectionWhite">
+    <div class="wrap">
+      <div class="sectionHead">
+        <h2 class="h2 reveal" id="f1">O processo em 3 passos</h2>
+        <p class="subP reveal" id="f2">
+          Simples, rápido e pensado para manter a identidade da criança consistente em todo o livro.
+        </p>
+      </div>
+
+      <div class="grid3">
+        <div class="stepCard reveal" id="s1">
+          <div class="stepIconWrap">
+            <div class="stepIcon g1">📸</div>
+            <div class="stepBubble">1</div>
+          </div>
+          <h3 class="stepT">Você envia a foto</h3>
+          <p class="stepD">A foto vira a referência principal para manter todo o livro personalizado co seu pequeno em todas as cenas.</p>
+        </div>
+
+        <div class="stepCard reveal" id="s2">
+          <div class="stepIconWrap">
+            <div class="stepIcon g2">🎨</div>
+            <div class="stepBubble">2</div>
+          </div>
+          <h3 class="stepT">Escolhe tema + estilo</h3>
+          <p class="stepD">Tema (espaço, dragões, mar, selva…) e estilo: <b>Leitura</b> (colorido) ou <b>Leitura + Colorir</b> (P&B).</p>
+        </div>
+
+        <div class="stepCard reveal" id="s3">
+          <div class="stepIconWrap">
+            <div class="stepIcon g3">📄</div>
+            <div class="stepBubble">3</div>
+          </div>
+          <h3 class="stepT">Recebe o livro pronto</h3>
+          <p class="stepD">Todas as cenas e a historia sao personalizadas para o seu pequeno, para que ele se sinta especial sempre que ler o LIVRO MAGICO.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DETAILED FLOW -->
+  <section class="sectionSoft">
+    <div class="wrap">
+      <div class="sectionHead">
+        <h2 class="h2 reveal" id="d1">O que acontece por trás da magia</h2>
+        <p class="subP reveal" id="d2">
+          Este é o “motor” do app: primeiro ele escreve a história, depois cria a capa e as páginas (uma por vez).
+        </p>
+      </div>
+
+      <div class="flow">
+        <div class="flowRow reveal" id="p1">
+          <div class="flowDot">🧠</div>
+          <div>
+            <h3 class="flowT">1) A história é criada em páginas</h3>
+            <p class="flowP">
+              O texto é gerado em <b>parágrafos</b> (1 parágrafo = 1 página), com linguagem adequada para a idade e com o nome da criança.
+            </p>
+            <div class="pillRow">
+              <span class="pill">📚 1 parágrafo = 1 página</span>
+              <span class="pill pill2">🧒 nome sempre aparece</span>
+              <span class="pill pill3">✨ lição positiva</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flowRow reveal" id="p2">
+          <div class="flowDot">🖼️</div>
+          <div>
+            <h3 class="flowT">2) Capa + imagens (sequencial)</h3>
+            <p class="flowP">
+              Primeiro a capa é criada. Depois, para cada parágrafo, <b>uma cena</b> para aquele texto.
+              Isso evita sobrecarga e mantém a qualidade.
+            </p>
+            <div class="pillRow">
+              <span class="pill">⏱️ 1 imagem por vez</span>
+              <span class="pill pill2">🧩 mesma identidade</span>
+              <span class="pill pill3">🌈 tema escolhido</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flowRow reveal" id="p3">
+          <div class="flowDot">📝</div>
+          <div>
+            <h3 class="flowT">3) Texto dentro das páginas</h3>
+            <p class="flowP">
+              Após a imagem chegar, o app “carimba” o título e o texto <b>dentro do PNG</b> (estilo livro infantil).
+              Assim o livro já sai pronto.
+            </p>
+            <div class="pillRow">
+              <span class="pill">✅ texto no PNG</span>
+              <span class="pill pill2">📄 pronto para imprimir</span>
+              <span class="pill pill3">📦 resultado final</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flowRow reveal" id="p4">
+          <div class="flowDot">📎</div>
+          <div>
+            <h3 class="flowT">4) PDF montado automaticamente</h3>
+            <p class="flowP">
+              O app junta capa + páginas finais em um único ambiente e encaminhado para a fabricação.
+            </p>
+            <div class="pillRow">
+              <span class="pill">⬇️ download em 1 clique</span>
+              <span class="pill pill2">🖨️ imprimir</span>
+              <span class="pill pill3">📚 encadernar</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:26px" class="reveal" id="d3">
+        <a class="btn btnPrimary" href="/create" title="Ir para o gerador">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l1.2 4.1L17 7.2l-3.8 1.1L12 12l-1.2-3.7L7 7.2l3.8-1.1L12 2z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M19 12l.7 2.3L22 15l-2.3.7L19 18l-.7-2.3L16 15l2.3-.7L19 12z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          Quero criar meu livro agora
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- STYLES COMPARISON -->
+  <section class="sectionWhite">
+    <div class="wrap">
+      <div class="sectionHead">
+        <h2 class="h2 reveal" id="st1">Escolha o estilo ideal</h2>
+        <p class="subP reveal" id="st2">
+          Você pode gerar um livro pronto para leitura, ou uma versão para leitura + colorir (perfeita para atividades).
+        </p>
+      </div>
+
+      <div class="grid2">
+        <div class="card reveal" id="st3">
+          <h3 class="cardT">📖 Livro para leitura (colorido)</h3>
+          <p class="cardP">
+            Ilustrações em estilo <b>semi-realista</b> com cores agradáveis e luz suave.
+            Ideal para contar a história na hora de dormir e guardar como lembrança.
+          </p>
+          <div class="pillRow" style="margin-top:14px">
+            <span class="pill">🌈 colorido</span>
+            <span class="pill pill2">✨ mais detalhes</span>
+            <span class="pill pill3">📚 leitura</span>
+          </div>
+        </div>
+
+        <div class="card reveal" id="st4">
+          <h3 class="cardT">🖍️ Leitura + colorir (P&B)</h3>
+          <p class="cardP">
+            Imagens em <b>preto e branco</b>, com contornos bem definidos e fundo mais limpo.
+            A criança pode ler e depois colorir as páginas.
+          </p>
+          <div class="pillRow" style="margin-top:14px">
+            <span class="pill">⚫ P&B</span>
+            <span class="pill pill2">🧸 contornos fortes</span>
+            <span class="pill pill3">🖌️ para colorir</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:22px" class="reveal" id="st5">
+        <a class="btn btnPrimary" href="/create">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Criar com o estilo que eu escolher
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="sectionSoft">
+    <div class="wrap">
+      <div class="sectionHead">
+        <h2 class="h2 reveal" id="q1">Dúvidas comuns</h2>
+        <p class="subP reveal" id="q2">Respostas rápidas para o usuário se sentir seguro antes de criar.</p>
+      </div>
+
+      <div class="faq">
+        <details class="reveal" id="q3">
+          <summary>
+            O texto fica dentro das páginas mesmo?
+            <span class="chev">⌄</span>
+          </summary>
+          <div class="faqBody">
+            <p>Sim. O app coloca o título e o parágrafo <b>dentro do PNG</b> antes de montar o PDF — fica como página de livro infantil.</p>
+          </div>
+        </details>
+
+        <details class="reveal" id="q4">
+          <summary>
+            Quanto tempo demora?
+            <span class="chev">⌄</span>
+          </summary>
+          <div class="faqBody">
+            <p>Depende do tamanho do livro e da geração das imagens. O app cria tudo <b>sequencialmente</b> (uma imagem por vez) para manter estabilidade e qualidade.</p>
+          </div>
+        </details>
+
+        <details class="reveal" id="q5">
+          <summary>
+            A identidade da criança é mantida?
+            <span class="chev">⌄</span>
+          </summary>
+          <div class="faqBody">
+            <p>A foto é usada como referência, e o app reforça isso em todos os prompts para manter rosto, cabelo e traços consistentes ao longo do livro.</p>
+          </div>
+        </details>
+
+        <details class="reveal" id="q6">
+          <summary>
+            Posso imprimir e encadernar?
+            <span class="chev">⌄</span>
+          </summary>
+          <div class="faqBody">
+            <p>Sim. O resultado final é um <b>PDF</b> pronto para impressão. Você pode imprimir em casa ou em gráfica e encadernar como preferir.</p>
+          </div>
+        </details>
+      </div>
+
+      <div style="text-align:center;margin-top:22px" class="reveal" id="q7">
+        <a class="btn btnPrimary" href="/create">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 12h12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M13 6l6 6-6 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Ok, quero criar meu livro
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="ctaBox">
+      <svg class="heart reveal" id="c1" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 21s-7-4.6-9.5-9C.7 8.4 3 5.5 6.2 5.5c1.8 0 3.4.9 4.3 2.2.9-1.3 2.5-2.2 4.3-2.2 3.2 0 5.5 2.9 3.7 6.5C19 16.4 12 21 12 21z"
+              stroke="rgba(244,114,182,.95)" stroke-width="2" stroke-linejoin="round"/>
+      </svg>
+
+      <h2 class="ctaH reveal" id="c2">Pronto para criar a aventura do seu pequeno?</h2>
+      <p class="ctaP reveal" id="c3">
+        Clique no botão abaixo, envie a foto, escolha o tema e o estilo (Leitura ou Colorir) e baixe seu PDF.
+      </p>
+
+      <div class="reveal" id="c4">
+        <a class="btn btnWhite" href="/create">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l1.2 4.1L17 7.2l-3.8 1.1L12 12l-1.2-3.7L7 7.2l3.8-1.1L12 2z" stroke="rgba(109,40,217,1)" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M19 12l.7 2.3L22 15l-2.3.7L19 18l-.7-2.3L16 15l2.3-.7L19 12z" stroke="rgba(219,39,119,1)" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          Começar Agora
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="wrap">
+      <p style="margin:0">
+        Feito com 💜 para criar momentos mágicos •
+        <a href="/create" style="text-decoration:underline;">Abrir gerador</a> •
+        <a href="/sales" style="text-decoration:underline;">Página inicial</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Stars (background)
+    (function renderStars(){
+      const root = document.getElementById("stars");
+      const N = 18;
+
+      function rnd(a,b){ return a + Math.random()*(b-a); }
+
+      const starSvg = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2l2.1 6.4L21 9.6l-5.4 4 2.1 6.4L12 16.2 6.3 20l2.1-6.4L3 9.6l6.9-1.2L12 2z"
+            fill="rgba(252,211,77,.95)"/>
+        </svg>`;
+
+      for(let i=0;i<N;i++){
+        const el = document.createElement("div");
+        el.className = "star";
+        el.style.top  = rnd(0, 100).toFixed(2) + "%";
+        el.style.left = rnd(0, 100).toFixed(2) + "%";
+        el.style.setProperty("--dur", rnd(3.2, 5.8).toFixed(2) + "s");
+        el.style.animationDelay = rnd(0, 2.2).toFixed(2) + "s";
+        el.innerHTML = starSvg;
+        root.appendChild(el);
+      }
+    })();
+
+    // Simple reveal (load + scroll)
+    (function reveal(){
+      const els = Array.from(document.querySelectorAll(".reveal"));
+
+      function inView(el){
+        const r = el.getBoundingClientRect();
+        return r.top < window.innerHeight * 0.92;
+      }
+
+      function tick(){
+        els.forEach(el => {
+          if(el.classList.contains("on")) return;
+          if(inView(el)) el.classList.add("on");
+        });
+      }
+
+      const staged = ["b1","b2","b3","b4","f1","f2"];
+      staged.forEach((id, idx) => {
+        const el = document.getElementById(id);
+        if(el) setTimeout(() => el.classList.add("on"), 90 + idx*120);
+      });
+
+      window.addEventListener("scroll", tick, { passive:true });
+      window.addEventListener("resize", tick);
+      setTimeout(tick, 650);
+    })();
+  </script>
+</body>
+</html>

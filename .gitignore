@@ -1,0 +1,23 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# Env (segredos)
+.env
+.env.local
+.env.*.local
+
+# Output gerado (livros, imagens, pdfs)
+output/
+*.pdf
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Cache
+.cache/
