@@ -107,17 +107,11 @@ const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
-// ✅ Serverless (Vercel / AWS Lambda): filesystem do projeto (/var/task) é READ-ONLY.
-// ✅ Só /tmp (os.tmpdir()) é gravável.
-const IS_SERVERLESS =
-  String(process.env.VERCEL || "") === "1" ||
-  !!process.env.VERCEL_REGION ||
-  !!process.env.NOW_REGION ||
-  !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
-  !!process.env.LAMBDA_TASK_ROOT;
+// ✅ /var/task é READ-ONLY em Vercel/Lambda; /tmp é gravável.
+const IS_READONLY_FS = String(__dirname || "").startsWith("/var/task");
 
-// (Opcional) prefixo para não misturar com outras apps no /tmp
-const OUT_ROOT = IS_SERVERLESS ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
+// você pode manter o IS_SERVERLESS se quiser, mas o que manda é o filesystem
+const OUT_ROOT = IS_READONLY_FS ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
 
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
@@ -2643,7 +2637,7 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
 
     const titleIncoming = req.body?.title;
     const titleTrimmed = typeof titleIncoming === "string" ? titleIncoming.trim() : "";
-    const text = String(req.body?.text || "").trim().replace(/\\s+/g, " ");
+    const text = String(req.body?.text || "").trim().replace(/\s+/g, " ");
 
     if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
     if (!Number.isFinite(pageNum) || pageNum < 1 || pageNum > 99) return res.status(400).json({ ok: false, error: "page inválida" });
@@ -2653,7 +2647,7 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
-    const jobKey = `\${userId}:\${id}`;
+    const jobKey = `${userId}:${id}`;
     if (jobs.get(jobKey)?.running || m.status === "generating") {
       return res.status(409).json({ ok: false, error: "book está gerando. Tente novamente quando terminar." });
     }
@@ -2681,9 +2675,8 @@ app.post("/api/editPageText", requireAuth, async (req, res) => {
     m.pages = pagesArr;
 
     const REV = Date.now();
-
-    const editBaseName = `page_\${pageKey}_edit.png`;
-    const editFinalName = `page_\${pageKey}_final.png`;
+const editBaseName = `page_${pageKey}_edit.png`;
+const editFinalName = `page_${pageKey}_final.png`;
 
     const editBasePath = path.join(bookDir, editBaseName);
     const editFinalPath = path.join(bookDir, editFinalName);
