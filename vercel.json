@@ -1,6 +1,7 @@
 {
+  "version": 2,
   "functions": {
-    "api/[...all].js": {
+    "api/index.js": {
       "includeFiles": [
         "app.js",
         "admin.page.js",
@@ -13,7 +14,7 @@
       ]
     }
   },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/[...all].js" }
+  "routes": [
+    { "src": "/(.*)", "dest": "/api/index.js" }
   ]
 }
