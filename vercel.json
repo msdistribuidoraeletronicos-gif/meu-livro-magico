@@ -1,20 +1,23 @@
 {
   "version": 2,
+  "builds": [
+    { "src": "api/index.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "api/index.js" }
+  ],
   "functions": {
     "api/index.js": {
       "includeFiles": [
-        "../app.js",
-        "../admin.page.js",
-        "../generate.page.js",
-        "../books/**",
-        "../public/**",
-        "../landing.html",
-        "../how-it-works.html",
-        "../exemplos.html"
+        "app.js",
+        "admin.page.js",
+        "generate.page.js",
+        "books/**",
+        "public/**",
+        "landing.html",
+        "how-it-works.html",
+        "exemplos.html"
       ]
     }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index.js" }
-  ]
+  }
 }
