@@ -1,10 +1,8 @@
 // api/index.js
 "use strict";
 
-/**
- * Entry point da Vercel Function.
- * Importa o Express app do arquivo raiz (app.js) e exporta direto.
- */
 const app = require("../app.js");
 
-module.exports = app;
+// Express app é uma função (req,res), então pode exportar direto.
+// Mas deixo explícito pra ficar 100% compatível com @vercel/node.
+module.exports = (req, res) => app(req, res);
