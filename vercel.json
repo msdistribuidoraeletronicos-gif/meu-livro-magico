@@ -12,5 +12,8 @@
         "exemplos.html"
       ]
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/[...all].js" }
+  ]
 }
