@@ -1751,40 +1751,36 @@ const USERS_FILE = path.join(OUT_DIR, "users.json");
 const USERS_FILE = path.join(OUT_DIR, "users.json");
 
 (() => {
-  // ✅ agora o admin.page.js está dentro de /api
-  const adminPath = path.join(__dirname, "api", "admin.page.js");
+ // ------------------------------
+// ✅ /admin (Painel Admin) — FIX Vercel bundle (require estático)
+// ------------------------------
+const USERS_FILE = path.join(OUT_DIR, "users.json");
 
-  try {
-    if (!fs.existsSync(adminPath)) {
-      throw new Error(`Arquivo api/admin.page.js NÃO encontrado em: ${adminPath} (confira commit/deploy)`);
-    }
+try {
+  // ✅ IMPORTANTÍSSIMO: require estático para a Vercel incluir no bundle
+  const mountAdminPage = require("./admin.page"); // (funciona com admin.page.js)
 
-    const mountAdminPage = require(adminPath);
-
-    if (typeof mountAdminPage !== "function") {
-      throw new Error(
-        `api/admin.page.js export inválido. Esperado "module.exports = function(...)". Recebi: ${typeof mountAdminPage}`
-      );
-    }
-
-    mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
-    console.log("✅ /admin ativo! (admin.page.js carregado de:", adminPath, ")");
-  } catch (e) {
-    console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
-
-    // ✅ fallback para não ficar "Cannot GET /admin"
-    app.get("/admin", requireAuth, (req, res) => {
-      res
-        .status(500)
-        .type("html")
-        .send(
-          `<h1>Admin não carregou</h1>
-           <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
-           <p>Confira os logs do deploy na Vercel (Functions/Logs).</p>`
-        );
-    });
+  if (typeof mountAdminPage !== "function") {
+    throw new Error(`admin.page.js export inválido. Esperado function. Recebi: ${typeof mountAdminPage}`);
   }
-})();
+
+  mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
+  console.log("✅ /admin ativo! (admin.page.js carregado via require estático)");
+} catch (e) {
+  console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
+
+  // ✅ fallback para você ver o erro (não virar Cannot GET)
+  app.get("/admin", requireAuth, (req, res) => {
+    res
+      .status(500)
+      .type("html")
+      .send(
+        `<h1>Admin não carregou</h1>
+         <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
+         <p>Confira os logs do deploy na Vercel (Functions/Logs).</p>`
+      );
+  });
+}
 // ------------------------------
 // API: create
 // ------------------------------
