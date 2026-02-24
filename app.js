@@ -1342,7 +1342,7 @@ app.get("/api/debug-fs", (req, res) => {
     hasServiceRole: !!supabaseAdmin,
   });
 });
-app.get("/api/version", (req, res) => {
+app.get("/version", (req, res) => {
   res.json({
     ok: true,
     now: new Date().toISOString(),
