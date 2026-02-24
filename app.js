@@ -1734,42 +1734,51 @@ try {
 } catch {
   // ok
 }
-// ------------------------------
-// ✅ /admin (Painel Admin)
-// ------------------------------
-const USERS_FILE = path.join(OUT_DIR, "users.json");
 
 // ------------------------------
 // ✅ /admin (Painel Admin) — Vercel-safe path
 // ------------------------------
+// ------------------------------
+// ✅ /admin (Painel Admin) — Vercel-friendly
+// ------------------------------
 const USERS_FILE = path.join(OUT_DIR, "users.json");
 
-try {
-  const candidates = [
-    path.join(__dirname, "admin.page.js"),                 // mesma pasta do app.js
-    path.join(process.cwd(), "admin.page.js"),             // raiz do projeto
-    path.join(process.cwd(), "api", "admin.page.js"),      // /api (comum na Vercel)
-  ];
+// ✅ /admin (Painel Admin) — versão robusta (Vercel-friendly)
+(() => {
+  const adminPath = path.join(__dirname, "admin.page.js");
 
-  const adminPath = candidates.find((p) => {
-    try { return fs.existsSync(p); } catch { return false; }
-  });
+  try {
+    if (!fs.existsSync(adminPath)) {
+      throw new Error(`Arquivo admin.page.js NÃO encontrado em: ${adminPath} (confira commit/deploy)`);
+    }
 
-  if (!adminPath) {
-    throw new Error(
-      "admin.page.js não encontrado. Procurei em:\n" + candidates.join("\n")
-    );
+    const mountAdminPage = require(adminPath);
+
+    if (typeof mountAdminPage !== "function") {
+      throw new Error(
+        `admin.page.js export inválido. Esperado "module.exports = function(...)". Recebi: ${typeof mountAdminPage}`
+      );
+    }
+
+    mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
+    console.log("✅ /admin ativo! (admin.page.js carregado de:", adminPath, ")");
+  } catch (e) {
+    // ✅ log completo (stack) para ver o motivo real na Vercel
+    console.warn("⚠️  /admin NÃO carregou:", e?.stack || String(e?.message || e));
+
+    // ✅ fallback: não deixa "Cannot GET /admin"
+    app.get("/admin", requireAuth, (req, res) => {
+      res
+        .status(500)
+        .type("html")
+        .send(
+          `<h1>Admin não carregou</h1>
+           <pre style="white-space:pre-wrap">${escapeHtml(e?.stack || String(e?.message || e))}</pre>
+           <p>Confira os logs do deploy na Vercel (Functions/Logs).</p>`
+        );
+    });
   }
-
-  console.log("✅ admin.page.js encontrado em:", adminPath);
-
-  const mountAdminPage = require(adminPath);
-  mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
-
-  console.log("✅ /admin ativo!");
-} catch (e) {
-  console.warn("⚠️  /admin NÃO carregou:", String(e?.message || e));
-}
+})();
 // ------------------------------
 // API: create
 // ------------------------------
