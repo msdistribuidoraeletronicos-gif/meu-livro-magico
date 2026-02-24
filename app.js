@@ -107,10 +107,10 @@ const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
+// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 function pickWritableRoot() {
   const tmpRoot = path.join(os.tmpdir(), "meu-livro-magico");
 
-  // Sinais fortes de serverless (Vercel/Lambda)
   const serverless =
     !!process.env.VERCEL ||
     !!process.env.VERCEL_ENV ||
@@ -120,7 +120,6 @@ function pickWritableRoot() {
 
   if (serverless) return tmpRoot;
 
-  // Fallback: testa se dá para escrever no __dirname
   try {
     const testDir = path.join(__dirname, ".fs_write_test");
     fs.mkdirSync(testDir, { recursive: true });
@@ -132,7 +131,6 @@ function pickWritableRoot() {
 }
 
 const OUT_ROOT = pickWritableRoot();
-if (process.env.VERCEL) return path.join(os.tmpdir(), "meu-livro-magico");
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
 const BOOKS_DIR = path.join(OUT_DIR, "books");
