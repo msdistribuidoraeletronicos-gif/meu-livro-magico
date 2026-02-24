@@ -105,8 +105,19 @@ const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "p
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
-const IS_VERCEL = !!process.env.VERCEL;
-const OUT_ROOT = IS_VERCEL ? "/tmp" : __dirname;
+const os = require("os");
+
+// ✅ Serverless (Vercel / AWS Lambda): filesystem do projeto (/var/task) é READ-ONLY.
+// ✅ Só /tmp (os.tmpdir()) é gravável.
+const IS_SERVERLESS =
+  String(process.env.VERCEL || "") === "1" ||
+  !!process.env.VERCEL_REGION ||
+  !!process.env.NOW_REGION ||
+  !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  !!process.env.LAMBDA_TASK_ROOT;
+
+// (Opcional) prefixo para não misturar com outras apps no /tmp
+const OUT_ROOT = IS_SERVERLESS ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
 
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
