@@ -1734,7 +1734,19 @@ try {
 } catch {
   // ok
 }
+// ------------------------------
+// ✅ /admin (Painel Admin)
+// ------------------------------
+const USERS_FILE = path.join(OUT_DIR, "users.json");
 
+try {
+  const mountAdminPage = require(path.join(__dirname, "admin.page.js"));
+  mountAdminPage(app, { OUT_DIR, USERS_FILE, requireAuth });
+  console.log("✅ /admin ativo: admin.page.js carregado.");
+} catch (e) {
+  console.warn("⚠️  /admin NÃO carregou. Verifique se admin.page.js está ao lado do app.js.");
+  console.warn(String(e?.message || e));
+}
 // ------------------------------
 // API: create
 // ------------------------------
