@@ -1342,7 +1342,15 @@ app.get("/api/debug-fs", (req, res) => {
     hasServiceRole: !!supabaseAdmin,
   });
 });
-
+app.get("/api/version", (req, res) => {
+  res.json({
+    ok: true,
+    now: new Date().toISOString(),
+    vercel: !!process.env.VERCEL,
+    commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
+    env: process.env.VERCEL_ENV || null,
+  });
+});
 // ------------------------------
 // LOGIN UI (mantive simples e funcional)
 // ------------------------------
