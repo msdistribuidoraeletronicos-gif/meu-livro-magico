@@ -105,11 +105,12 @@ const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "p
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
 // ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
+// ✅ Vercel: /var/task é read-only. Só /tmp é gravável.
 const os = require("os");
 
-// 🔒 Se rodar em /var/task (Vercel/Lambda), filesystem é READ-ONLY → usar /tmp
-const IS_READONLY_FS = String(__dirname || "").startsWith("/var/task");
-const OUT_ROOT = IS_READONLY_FS ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
+// 🔒 Se estiver na Vercel, FORÇA /tmp sempre (não depende de __dirname)
+const IS_VERCEL = !!process.env.VERCEL;
+const OUT_ROOT = IS_VERCEL ? path.join(os.tmpdir(), "meu-livro-magico") : __dirname;
 
 const OUT_DIR = path.join(OUT_ROOT, "output");
 const USERS_DIR = path.join(OUT_DIR, "users");
@@ -1332,7 +1333,16 @@ async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallba
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-
+app.get("/api/debug-fs", (req, res) => {
+  res.json({
+    ok: true,
+    VERCEL: !!process.env.VERCEL,
+    __dirname,
+    OUT_ROOT,
+    OUT_DIR,
+    tmpdir: require("os").tmpdir(),
+  });
+});
 // ------------------------------
 // books module (/books)
 // ------------------------------
