@@ -103,9 +103,10 @@ const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
 const EXEMPLOS_HTML = path.join(__dirname, "exemplos.html");
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const cleanKey = (v) => String(v || "").replace(/[\r\n\t ]+/g, "").trim();
 
+const SUPABASE_ANON_KEY = cleanKey(process.env.SUPABASE_ANON_KEY);
+const SUPABASE_SERVICE_ROLE_KEY = cleanKey(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const SB_ACCESS_COOKIE = "sb_token"; // access_token
 const SB_REFRESH_COOKIE = "sb_refresh"; // refresh_token
 
