@@ -180,6 +180,20 @@ function parseCookies(req) {
   return out;
 }
 
+// ✅ adiciona cookie sem sobrescrever os anteriores
+function pushSetCookie(res, cookieStr) {
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) {
+    res.setHeader("Set-Cookie", cookieStr);
+    return;
+  }
+  if (Array.isArray(prev)) {
+    res.setHeader("Set-Cookie", [...prev, cookieStr]);
+    return;
+  }
+  res.setHeader("Set-Cookie", [prev, cookieStr]);
+}
+
 function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
@@ -188,15 +202,28 @@ function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
     "SameSite=Lax",
     `Max-Age=${maxAgeSec}`,
   ];
+
   // Se você usar HTTPS em produção, pode habilitar Secure:
-  if (String(process.env.COOKIE_SECURE || "").trim() === "1") parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  // Dica: na Vercel é HTTPS, então isso deve estar ON.
+  const secureOn =
+    String(process.env.COOKIE_SECURE || "").trim() === "1" ||
+    !!process.env.VERCEL;
+
+  if (secureOn) parts.push("Secure");
+
+  pushSetCookie(res, parts.join("; "));
 }
 
 function clearCookie(res, name) {
   const parts = [`${name}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
-  if (String(process.env.COOKIE_SECURE || "").trim() === "1") parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+
+  const secureOn =
+    String(process.env.COOKIE_SECURE || "").trim() === "1" ||
+    !!process.env.VERCEL;
+
+  if (secureOn) parts.push("Secure");
+
+  pushSetCookie(res, parts.join("; "));
 }
 
 function getUserTokens(req) {
