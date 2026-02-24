@@ -1247,8 +1247,10 @@ const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-
+// ✅ DEBUG: confirma se admin.page.js existe e se o Node consegue resolver/require no runtime (Vercel)
 app.get("/api/debug-fs", (req, res) => {
+  const p = (f) => path.join(__dirname, f);
+
   res.json({
     ok: true,
     VERCEL: !!process.env.VERCEL,
@@ -1256,6 +1258,36 @@ app.get("/api/debug-fs", (req, res) => {
     OUT_ROOT,
     OUT_DIR,
     tmpdir: os.tmpdir(),
+
+    exists: {
+      "app.js": fs.existsSync(p("app.js")),
+      "admin.page.js": fs.existsSync(p("admin.page.js")),
+      "generate.page.js": fs.existsSync(p("generate.page.js")),
+      "profile.page.js": fs.existsSync(p("profile.page.js")),
+      "books/index.js": fs.existsSync(p("books/index.js")),
+      "landing.html": fs.existsSync(p("landing.html")),
+      "how-it-works.html": fs.existsSync(p("how-it-works.html")),
+      "exemplos.html": fs.existsSync(p("exemplos.html")),
+    },
+
+    resolve: {
+      "admin.page.js": (() => {
+        try { return require.resolve("./admin.page.js"); }
+        catch (e) { return String(e?.message || e); }
+      })(),
+      "generate.page.js": (() => {
+        try { return require.resolve("./generate.page.js"); }
+        catch (e) { return String(e?.message || e); }
+      })(),
+      "profile.page.js": (() => {
+        try { return require.resolve("./profile.page.js"); }
+        catch (e) { return String(e?.message || e); }
+      })(),
+      "books": (() => {
+        try { return require.resolve("./books"); }
+        catch (e) { return String(e?.message || e); }
+      })(),
+    },
   });
 });
 
@@ -1285,9 +1317,11 @@ try {
   mountAdminPage(app, { OUT_DIR, BOOKS_DIR, USERS_FILE: "", requireAuth });
   console.log("✅ /admin ativo: admin.page.js carregado com sucesso.");
 } catch (e) {
-  console.warn("❌ admin.page.js NÃO carregou. /admin desativado.");
-  console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Stack:", String(e?.stack || ""));
+  console.error("❌ admin.page.js NÃO carregou. /admin desativado.");
+  console.error("Motivo:", String(e?.message || e));
+  console.error("Stack:", String(e?.stack || ""));
+  // ⚠️ opcional: descomente para não deixar deploy “passar”
+  // throw e;
 }
 
 try {
