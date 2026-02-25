@@ -1,7 +1,7 @@
 /**
  * generate.page.js — Página /generate (Step 4)
- * ✅ Vercel-safe: chama /api/generateNext em LOOP (1 passo por request)
- * ✅ Usa localStorage: bookId, childName, childAge, childGender, theme, style
+ * ✅ Vercel-safe: chama /api/generateNext em LOOP (1 passo por request).
+ * ✅ DIAGNÓSTICO NA TELA: mostra cada request/response (HTTP + body).
  *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
@@ -60,6 +60,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     .btnGhost{background:transparent;color:var(--muted);border:1px solid rgba(0,0,0,.08)}
     .btnPrimary{color:#fff;background:linear-gradient(90deg,var(--violet),var(--pink));box-shadow:0 16px 34px rgba(124,58,237,.22)}
     .btnDanger{color:#fff;background:#111827}
+    .btnMini{padding:10px 12px;font-size:13px}
     .hint{
       margin-top:12px;padding:12px;border-radius:14px;background:rgba(219,39,119,.06);
       border:1px solid rgba(219,39,119,.14);color:#7f1d1d;font-weight:900;white-space:pre-wrap;display:none
@@ -70,6 +71,29 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     .thumb{border:1px solid rgba(0,0,0,.08);border-radius:16px;overflow:hidden;background:#fff}
     .thumb img{width:100%;display:block}
     .thumb .cap{padding:10px;font-weight:900;color:#374151}
+
+    .diag{
+      margin-top:14px;
+      border:1px solid rgba(0,0,0,.10);
+      background:#0b1220;
+      color:#e5e7eb;
+      border-radius:16px;
+      padding:12px;
+      box-shadow: var(--shadow2);
+    }
+    .diag h3{margin:0 0 10px 0;font-size:14px}
+    .log{
+      white-space:pre-wrap;
+      font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:12px;
+      line-height:1.4;
+      max-height:240px;
+      overflow:auto;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:12px;
+      padding:10px;
+    }
   </style>
 </head>
 <body>
@@ -102,6 +126,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
           <div class="row">
             <div class="muted" id="progressTxt">Progresso: 0/11 · Preparando…</div>
             <div class="btns">
+              <button class="btn btnGhost btnMini" id="btnWhoami">👤 whoami</button>
+              <button class="btn btnGhost btnMini" id="btnTest">🧪 Testar 1 passo</button>
               <button class="btn btnGhost" id="btnRefresh">🔄 Atualizar status</button>
               <button class="btn btnDanger" id="btnStop">⏸️ Parar</button>
               <button class="btn btnPrimary" id="btnStart">🚀 Iniciar geração</button>
@@ -113,6 +139,11 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         <div class="hint" id="hint"></div>
 
         <div class="gridPreview" id="preview" style="display:none"></div>
+
+        <div class="diag">
+          <h3>🧩 Diagnóstico (últimas chamadas)</h3>
+          <div class="log" id="log"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -123,6 +154,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   let running = false;
   let stopFlag = false;
   let inflight = false;
+
+  const logs = [];
+  function addLog(line){
+    const ts = new Date().toISOString();
+    logs.push("[" + ts + "] " + line);
+    while (logs.length > 60) logs.shift();
+    $("log").textContent = logs.join("\\n");
+  }
 
   function setHint(msg){
     const el = $("hint");
@@ -158,12 +197,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const pdf = data?.pdf || "";
 
     const cards = [];
-    if (cover) {
-      cards.push({ title: "Capa", url: cover });
-    }
-    for (const it of imgs) {
-      cards.push({ title: "Página " + (it.page || "?"), url: it.url });
-    }
+    if (cover) cards.push({ title: "Capa", url: cover });
+    for (const it of imgs) cards.push({ title: "Página " + (it.page || "?"), url: it.url });
 
     if (!cards.length){
       wrap.style.display = "none";
@@ -180,26 +215,49 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     )).join("");
 
     if (pdf && data?.status === "done") {
-      // quando pronto, mostra link
       setHint("✅ Livro pronto! Baixe o PDF em: " + location.origin + pdf);
     }
   }
 
+  async function fetchJsonLogged(url, opts){
+    const o = opts || {};
+    // MUITO IMPORTANTE: mandar cookies sempre
+    o.credentials = "include";
+    o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
+    addLog("→ " + (o.method || "GET") + " " + url);
+
+    const r = await fetch(url, o);
+    const text = await r.text();
+    let j = null;
+    try { j = JSON.parse(text); } catch {}
+
+    addLog("← HTTP " + r.status + " " + url + " | body: " + (text ? text.slice(0, 600) : "(vazio)"));
+
+    if (!r.ok) {
+      throw new Error((j && j.error) ? j.error : ("HTTP " + r.status + ": " + text.slice(0, 200)));
+    }
+    return j || {};
+  }
+
   async function apiProgress(bookId){
-    const r = await fetch("/api/progress/" + encodeURIComponent(bookId), { method:"GET", headers:{ "Accept":"application/json" }});
-    const j = await r.json().catch(()=>({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || ("Falha /api/progress ("+r.status+")"));
+    const j = await fetchJsonLogged("/api/progress/" + encodeURIComponent(bookId), { method:"GET" });
+    if (!j.ok) throw new Error(j.error || "Falha /api/progress");
+    return j;
+  }
+
+  async function apiWhoami(){
+    const j = await fetchJsonLogged("/api/whoami", { method:"GET" });
+    if (!j.ok) throw new Error(j.error || "Falha /api/whoami");
     return j;
   }
 
   async function apiGenerateNext(payload){
-    const r = await fetch("/api/generateNext", {
+    const j = await fetchJsonLogged("/api/generateNext", {
       method:"POST",
-      headers:{ "Content-Type":"application/json", "Accept":"application/json" },
+      headers:{ "Content-Type":"application/json" },
       body: JSON.stringify(payload || {})
     });
-    const j = await r.json().catch(()=>({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || ("Falha /api/generateNext ("+r.status+")"));
+    if (!j.ok) throw new Error(j.error || "Falha /api/generateNext");
     return j;
   }
 
@@ -232,6 +290,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const st = getState();
     if (!st.bookId) {
       setHint("Sem bookId. Volte em /create e crie um livro.");
+      addLog("⚠️ sem bookId no localStorage");
       return null;
     }
     const p = await apiProgress(st.bookId);
@@ -239,9 +298,38 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     return p;
   }
 
+  function buildPayload(){
+    const st = getState();
+    return {
+      id: st.bookId,
+      childName: st.childName,
+      childAge: st.childAge,
+      childGender: st.childGender,
+      theme: st.theme,
+      style: st.style
+    };
+  }
+
+  async function testOneStep(){
+    setHint("");
+    const st = getState();
+
+    addLog("STATE: " + JSON.stringify(st));
+
+    if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
+    if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
+    if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
+    if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
+
+    const g = await apiGenerateNext(buildPayload());
+    applyProgressUI(g);
+  }
+
   async function startLoop(){
     setHint("");
     const st = getState();
+
+    addLog("START LOOP | STATE: " + JSON.stringify(st));
 
     if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
     if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
@@ -252,34 +340,24 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     stopFlag = false;
     uiSetDot("run");
 
-    // loop: chama generateNext e depois atualiza progress
     while (!stopFlag) {
-      if (inflight) { await new Promise(r=>setTimeout(r, 600)); continue; }
+      if (inflight) { await new Promise(r=>setTimeout(r, 500)); continue; }
       inflight = true;
 
       try {
-        const payload = {
-          id: st.bookId,
-          childName: st.childName,
-          childAge: st.childAge,
-          childGender: st.childGender,
-          theme: st.theme,
-          style: st.style
-        };
-
-        const g = await apiGenerateNext(payload);
+        const g = await apiGenerateNext(buildPayload());
         applyProgressUI(g);
 
         if (g.status === "done") break;
         if (g.status === "failed") break;
 
-        // pequena pausa pra não espancar a função
         await new Promise(r=>setTimeout(r, 900));
       } catch (e) {
-        setHint("Erro no loop: " + String(e?.message || e));
-        // tenta só atualizar o status e aguarda um pouco
+        const msg = String(e?.message || e);
+        setHint("Erro no loop: " + msg);
+        addLog("❌ ERRO: " + msg);
         try { await refreshOnce(); } catch {}
-        await new Promise(r=>setTimeout(r, 1500));
+        await new Promise(r=>setTimeout(r, 1200));
       } finally {
         inflight = false;
       }
@@ -291,17 +369,35 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   $("btnStart").onclick = async ()=>{
     if (running) return;
-    await startLoop();
+    try { await startLoop(); }
+    catch(e){ setHint(String(e?.message||e)); addLog("❌ " + String(e?.message||e)); }
   };
 
   $("btnStop").onclick = ()=>{
     stopFlag = true;
     running = false;
     uiSetDot("");
+    addLog("STOP clicado");
   };
 
   $("btnRefresh").onclick = async ()=>{
-    try { await refreshOnce(); } catch (e) { setHint(String(e?.message || e)); }
+    try { await refreshOnce(); }
+    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
+  };
+
+  $("btnWhoami").onclick = async ()=>{
+    try {
+      setHint("");
+      const w = await apiWhoami();
+      setHint("✅ Logado: " + (w.email || w.id));
+    } catch (e) {
+      setHint("❌ whoami: " + String(e?.message || e));
+    }
+  };
+
+  $("btnTest").onclick = async ()=>{
+    try { await testOneStep(); }
+    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
   };
 
   $("btnReset").onclick = ()=>{
@@ -310,11 +406,9 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   };
 
   (async function init(){
-    try {
-      await refreshOnce();
-    } catch (e) {
-      setHint(String(e?.message || e));
-    }
+    addLog("INIT /generate");
+    try { await refreshOnce(); }
+    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
   })();
 </script>
 </body>
