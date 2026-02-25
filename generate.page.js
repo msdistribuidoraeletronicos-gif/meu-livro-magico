@@ -4,6 +4,8 @@
  * ✅ AUTO-START: inicia automaticamente ao abrir /generate (sem clique).
  * ✅ BACKOFF 409: se "step já em execução", espera e tenta de novo (sem travar).
  * ✅ RETRY E003 / HIGH DEMAND: trata como erro temporário e tenta novamente com backoff.
+ * ✅ RESPEITA COOLDOWN DO BACKEND: se /api/generateNext retornar nextTryAt, espera até lá.
+ * ✅ HARD-LIMIT: para após 10min tentando (pra não ficar eternamente).
  *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
@@ -265,7 +267,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   function isHighDemandError(msg){
     const s = String(msg || "");
-    return /high demand/i.test(s) || /unavailable/i.test(s) || /\\(E003\\)/i.test(s);
+    return /high demand/i.test(s) || /unavailable/i.test(s) || /\\(E003\\)/i.test(s) || /service is currently unavailable/i.test(s);
+  }
+
+  function getNextTryAtFromResponse(g){
+    const n = Number(g?.nextTryAt || 0);
+    return Number.isFinite(n) ? n : 0;
   }
 
   async function apiProgress(bookId){
@@ -323,15 +330,16 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     $("progressTxt").textContent = "Progresso: " + done + "/" + total + " · " + (p?.message || "");
     setBar(done, total);
 
+    // ✅ Se "failed" mas é HIGH DEMAND, não pinta como erro final
     if (status === "done") uiSetDot("ok");
-    else if (status === "failed") uiSetDot("bad");
+    else if (status === "failed" && !isHighDemandError(p?.error || p?.message || "")) uiSetDot("bad");
     else if (running) uiSetDot("run");
     else uiSetDot("");
 
     renderPreview(p);
 
     if (status === "failed") {
-      const err = p?.error || "erro desconhecido";
+      const err = p?.error || p?.message || "erro desconhecido";
       if (isHighDemandError(err)) {
         setHint("⏳ Serviço ocupado (E003). Vou tentar novamente automaticamente…\\n" + err);
       } else {
@@ -403,6 +411,10 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     applyProgressUI(g);
   }
 
+  async function sleep(ms){
+    await new Promise(r=>setTimeout(r, ms));
+  }
+
   async function startLoop(){
     setHint("");
     const st = getState();
@@ -417,6 +429,9 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     stopFlag = false;
     uiSetDot("run");
 
+    const startedAt = Date.now();
+    const HARD_LIMIT_MS = 10 * 60 * 1000; // 10 min
+
     try {
       $("btnStart").textContent = "⏳ Gerando…";
       $("btnStart").disabled = true;
@@ -426,7 +441,17 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     let demandBackoffMs = 2500;
 
     while (!stopFlag) {
-      if (inflight) { await new Promise(r=>setTimeout(r, 250)); continue; }
+      // ✅ hard limit pra não travar infinito
+      if (Date.now() - startedAt > HARD_LIMIT_MS) {
+        stopFlag = true;
+        running = false;
+        uiSetDot("bad");
+        setHint("⏳ O serviço ficou indisponível por muito tempo (10min).\\nTente novamente mais tarde ou mude o provedor de imagem.");
+        addLog("🛑 HARD LIMIT atingido (10min)");
+        break;
+      }
+
+      if (inflight) { await sleep(250); continue; }
       inflight = true;
 
       try {
@@ -434,7 +459,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
         if (g && g._busy) {
           addLog("⏳ busy (409) — aguardando " + busyBackoffMs + "ms");
-          await new Promise(r=>setTimeout(r, busyBackoffMs));
+          await sleep(busyBackoffMs);
           busyBackoffMs = Math.min(2500, Math.round(busyBackoffMs * 1.25));
           continue;
         }
@@ -443,10 +468,19 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         busyBackoffMs = 900;
         applyProgressUI(g);
 
+        // ✅ RESPEITA COOLDOWN DO BACKEND (nextTryAt)
+        const nextTryAt = getNextTryAtFromResponse(g);
+        if (nextTryAt && nextTryAt > Date.now()) {
+          const waitMs = Math.max(300, nextTryAt - Date.now());
+          addLog("⏳ cooldown backend — aguardando " + Math.ceil(waitMs/1000) + "s (nextTryAt)");
+          await sleep(waitMs);
+          continue;
+        }
+
         // ✅ se falhou por HIGH DEMAND, não para
         if (g.status === "failed" && isHighDemandError(g.error || g.message || "")) {
           addLog("⏳ HIGH DEMAND (E003) — aguardando " + demandBackoffMs + "ms e tentando novamente");
-          await new Promise(r=>setTimeout(r, demandBackoffMs));
+          await sleep(demandBackoffMs);
           demandBackoffMs = Math.min(15000, Math.round(demandBackoffMs * 1.35));
           continue;
         }
@@ -456,7 +490,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         if (g.status === "done") break;
         if (g.status === "failed") break;
 
-        await new Promise(r=>setTimeout(r, 900));
+        await sleep(900);
       } catch (e) {
         const msg = String(e?.message || e);
         addLog("❌ ERRO: " + msg);
@@ -486,14 +520,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         if (isHighDemandError(msg)) {
           setHint("⏳ Serviço ocupado (E003). Tentando novamente em instantes…\\n" + msg);
           addLog("⏳ HIGH DEMAND — aguardando " + demandBackoffMs + "ms");
-          await new Promise(r=>setTimeout(r, demandBackoffMs));
+          await sleep(demandBackoffMs);
           demandBackoffMs = Math.min(15000, Math.round(demandBackoffMs * 1.35));
           continue;
         }
 
         // fallback: tenta atualizar status e continua
         try { await refreshOnce(); } catch {}
-        await new Promise(r=>setTimeout(r, 1400));
+        await sleep(1400);
       } finally {
         inflight = false;
       }
@@ -556,7 +590,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     if (autoStarted) return;
     autoStarted = true;
 
-    await new Promise(r=>setTimeout(r, 300));
+    await sleep(300);
 
     let p = null;
     try { p = await refreshOnce(); } catch {}

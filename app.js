@@ -320,7 +320,17 @@ function nowISO() {
 }
 function isHighDemandError(msg) {
   const s = String(msg || "");
-  return /high demand/i.test(s) || /unavailable/i.test(s) || /\(E003\)/i.test(s);
+  return (
+    /\bE003\b/i.test(s) ||
+    /high demand/i.test(s) ||
+    /currently unavailable/i.test(s) ||
+    /temporarily unavailable/i.test(s) ||
+    /try again later/i.test(s) ||
+    /\bunavailable\b/i.test(s)
+  );
+}
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 function isDataUrl(s) {
   return typeof s === "string" && s.startsWith("data:") && s.includes("base64,");
@@ -641,39 +651,60 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
  * - Retorna Buffer PNG
  */
 async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
-  if (REPLICATE_API_TOKEN) {
-    const imgBuf = await fsp.readFile(imagePngPath);
+  // Força provider por env (opcional)
+  const forced = String(process.env.FORCE_IMAGE_PROVIDER || "").trim().toLowerCase();
+  const forceOpenAI = forced === "openai";
+  const forceReplicate = forced === "replicate";
 
-    const input = {
-      prompt,
-      image_input: [bufferToDataUrlPng(imgBuf)],
-      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-      resolution: REPLICATE_RESOLUTION || "2K",
-      output_format: REPLICATE_OUTPUT_FORMAT || "png",
-      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-    };
-
-    const created = await replicateCreatePrediction({
-      model: REPLICATE_MODEL || "google/nano-banana-pro",
-      input,
-      timeoutMs: 120000,
-    });
-
-    const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
-
-    let url = "";
-    if (typeof pred?.output === "string") url = pred.output;
-    else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
-
-    if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
-
-    const buf = await downloadToBuffer(url, 240000);
-    return await sharp(buf).png().toBuffer();
+  // Se o user quiser forçar OpenAI
+  if (forceOpenAI) {
+    return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
   }
 
+  // Replicate (se token existe e não forçou openai)
+  if (REPLICATE_API_TOKEN && !forceOpenAI) {
+    try {
+      const imgBuf = await fsp.readFile(imagePngPath);
+
+      const input = {
+        prompt,
+        image_input: [bufferToDataUrlPng(imgBuf)],
+        aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+        resolution: REPLICATE_RESOLUTION || "2K",
+        output_format: REPLICATE_OUTPUT_FORMAT || "png",
+        safety_filter_level: REPLICATE_SAFETY || "block_only_high",
+      };
+
+      const created = await replicateCreatePrediction({
+        model: REPLICATE_MODEL || "google/nano-banana-pro",
+        input,
+        timeoutMs: 120000,
+      });
+
+      const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+
+      let url = "";
+      if (typeof pred?.output === "string") url = pred.output;
+      else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
+
+      if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
+
+      const buf = await downloadToBuffer(url, 240000);
+      return await sharp(buf).png().toBuffer();
+    } catch (e) {
+      const msg = String(e?.message || e || "");
+      // ✅ Se Replicate estiver ocupado, cai para OpenAI em vez de loop infinito
+      if (isHighDemandError(msg) && !forceReplicate) {
+        console.warn("⚠️ Replicate em high demand (E003). Fazendo fallback para OpenAI Images...");
+        return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
+      }
+      throw e;
+    }
+  }
+
+  // Sem Replicate: OpenAI
   return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
 }
-
 /* -------------------- Story + prompts -------------------- */
 
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
@@ -2093,21 +2124,28 @@ app.post("/api/generateNext", async (req, res) => {
       if (mm.status === "done" && mm.pdf) doneSteps += 1;
 
       return {
-        ok: true,
-        id,
-        status: mm.status,
-        step: mm.step,
-        style: mm.style || "read",
-        doneSteps,
-        totalSteps,
-        message: msg || "",
-        coverUrl: mm.cover?.url || "",
-        images: (mm.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
-        pdf: mm.pdf || "",
-        error: mm.error || "",
-      };
+  ok: true,
+  id,
+  status: mm.status,
+  step: mm.step,
+  style: mm.style || "read",
+  doneSteps,
+  totalSteps,
+  message: msg || "",
+  coverUrl: mm.cover?.url || "",
+  images: (mm.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
+  pdf: mm.pdf || "",
+  error: mm.error || "",
+  nextTryAt: mm.nextTryAt || 0,
+  e003Count: mm.e003Count || 0,
+};
     }
-
+// ✅ Backoff: se recebeu E003 recentemente, não tenta gerar ainda
+const now = Date.now();
+if (m?.nextTryAt && Number(m.nextTryAt) > now) {
+  const sec = Math.ceil((Number(m.nextTryAt) - now) / 1000);
+  return res.json(buildProgress(m, `Aguardando cooldown (${sec}s)…`));
+}
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
     // 1) STORY
@@ -2305,24 +2343,35 @@ app.post("/api/generateNext", async (req, res) => {
       const m2 = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
       if (m2) {
         if (isHighDemandError(errMsg)) {
-          m2.status = "generating";
-          if (!m2.step || m2.step === "failed") m2.step = "starting";
-          m2.error = errMsg;
-          m2.updatedAt = nowISO();
-          await saveManifestAll(userId, id, m2, { sbUser: req.sb });
+  const now = Date.now();
+  const prevCount = Number(m2.e003Count || 0);
+  const nextCount = prevCount + 1;
 
-          return res.json({
-            ok: true,
-            id,
-            status: m2.status,
-            step: m2.step,
-            style: m2.style,
-            doneSteps: 0,
-            totalSteps: 11,
-            message: "Serviço ocupado (E003). Tentando novamente…",
-            error: m2.error,
-          });
-        }
+  // backoff: 2s, 4s, 8s, 16s, 25s (cap)
+  const waitMs = Math.min(25000, 2000 * Math.pow(2, Math.min(4, nextCount - 1)));
+
+  m2.status = "generating";
+  if (!m2.step || m2.step === "failed") m2.step = "starting";
+  m2.error = errMsg;
+
+  m2.e003Count = nextCount;
+  m2.nextTryAt = now + waitMs;
+
+  m2.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m2, { sbUser: req.sb });
+
+  return res.json({
+    ok: true,
+    id,
+    status: m2.status,
+    step: m2.step,
+    style: m2.style,
+    doneSteps: 0,
+    totalSteps: 11,
+    message: `Serviço ocupado (E003). Aguardando ${Math.ceil(waitMs / 1000)}s para tentar de novo…`,
+    error: m2.error,
+  });
+}
 
         m2.status = "failed";
         m2.step = "failed";
@@ -2561,9 +2610,15 @@ if (!existsSyncSafe(fp)) {
   console.warn("❌ /api/image não encontrou:", { id, file });
   return res.status(404).send("not found");
 }
-
 res.setHeader("Cache-Control", "no-store");
-res.type("png").send(fs.readFileSync(fp));
+
+const ext = String(path.extname(fp) || "").toLowerCase();
+if (ext === ".png") res.type("png");
+else if (ext === ".jpg" || ext === ".jpeg") res.type("jpg");
+else if (ext === ".webp") res.type("webp");
+else res.type("application/octet-stream");
+
+res.send(fs.readFileSync(fp));
   } catch (e) {
     res.status(500).send(String(e?.message || e || "Erro"));
   }
