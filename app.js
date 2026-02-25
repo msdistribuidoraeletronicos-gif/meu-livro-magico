@@ -318,7 +318,10 @@ function safeId() {
 function nowISO() {
   return new Date().toISOString();
 }
-
+function isHighDemandError(msg) {
+  const s = String(msg || "");
+  return /high demand/i.test(s) || /unavailable/i.test(s) || /\(E003\)/i.test(s);
+}
 function isDataUrl(s) {
   return typeof s === "string" && s.startsWith("data:") && s.includes("base64,");
 }
@@ -1987,8 +1990,14 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
  * ✅ /api/generateNext — 1 passo por request
  * CORREÇÃO: define imagePngPath (antes não existia) e faz fallback do Storage quando disco não tem.
  */
-app.post("/api/generateNext", requireAuth, async (req, res) => {
-  const userId = String(req.user?.id || "");
+/**
+ * ✅ /api/generateNext — 1 passo por request (SEM lock duplicado)
+ */
+app.post("/api/generateNext", async (req, res) => {
+  const user = await requireAuthApi(req, res);
+  if (!user) return;
+
+  const userId = String(user.id || req.user?.id || "");
   if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
 
   const id = String(req.body?.id || "").trim();
@@ -2020,18 +2029,28 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         pdf: m.pdf || "",
       });
     }
+
     if (m.status === "failed") {
-      return res.json({
-        ok: true,
-        id,
-        status: m.status,
-        step: m.step,
-        style: m.style,
-        doneSteps: 0,
-        totalSteps: 11,
-        message: "Falhou",
-        error: m.error || "",
-      });
+      // ✅ Se foi E003/high demand, permite tentar novamente
+      if (isHighDemandError(m.error || "")) {
+        m.status = "generating";
+        m.step = (m.step && m.step !== "failed") ? m.step : "starting";
+        m.error = "";
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      } else {
+        return res.json({
+          ok: true,
+          id,
+          status: m.status,
+          step: m.step,
+          style: m.style,
+          doneSteps: 0,
+          totalSteps: 11,
+          message: "Falhou",
+          error: m.error || "",
+        });
+      }
     }
 
     // aplica configs do request (idempotente)
@@ -2052,11 +2071,10 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     const bookDir = bookDirOf(userId, id);
     await ensureDir(bookDir);
 
-    // ✅ CORREÇÃO CRÍTICA: define imagePngPath e maskPngPath aqui
+    // ✅ define paths base + fallback Storage
     const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
     const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
 
-    // ✅ VERCEL SAFE: baixa do Storage se estiver faltando no disco
     await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.storageKey || "");
     await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.storageKey || "");
 
@@ -2116,59 +2134,54 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     }
 
     // 2) COVER
-  // 2) COVER
-const coverFinalPath = path.join(bookDir, "cover_final.png");
+    const coverFinalPath = path.join(bookDir, "cover_final.png");
+    const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
 
-// ✅ NÃO dependa do arquivo existir no disco (Vercel troca instância)
-const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
+    if (needCover) {
+      m.step = "cover";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-if (needCover) {
-  m.step = "cover";
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      const coverPrompt = buildCoverPrompt({
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey: m.style,
+      });
 
-  const coverPrompt = buildCoverPrompt({
-    themeKey: m.theme,
-    childName: m.child?.name,
-    styleKey: m.style,
-  });
+      const coverBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+      });
 
-  const coverBuf = await openaiImageEditFromReference({
-    imagePngPath,
-    maskPngPath,
-    prompt: coverPrompt,
-    size: "1024x1024",
-  });
+      const coverBase = path.join(bookDir, "cover.png");
+      await fsp.writeFile(coverBase, coverBuf);
 
-  const coverBase = path.join(bookDir, "cover.png");
-  await fsp.writeFile(coverBase, coverBuf);
+      await stampCoverTextOnImage({
+        inputPath: coverBase,
+        outputPath: coverFinalPath,
+        title: "Meu Livro Mágico",
+        subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+      });
 
-  // ✅ carimba texto na CAPA (sem placeholder "{ ... }")
-  await stampCoverTextOnImage({
-    inputPath: coverBase,
-    outputPath: coverFinalPath,
-    title: "Meu Livro Mágico",
-    subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
-  });
+      const coverStorageKey = `${m.ownerId || userId}/${id}/cover_final.png`;
+      const coverFinalBuf = await fsp.readFile(coverFinalPath);
+      await sbUploadBuffer({ pathKey: coverStorageKey, contentType: "image/png", buffer: coverFinalBuf });
 
-  // ✅ UPLOAD da capa final pro Storage (Vercel-safe)
-  const coverStorageKey = `${m.ownerId || userId}/${id}/cover_final.png`;
-  const coverFinalBuf = await fsp.readFile(coverFinalPath);
-  await sbUploadBuffer({ pathKey: coverStorageKey, contentType: "image/png", buffer: coverFinalBuf });
+      m.cover = {
+        ok: true,
+        file: "cover_final.png",
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+        storageKey: coverStorageKey,
+      };
 
-  m.cover = {
-    ok: true,
-    file: "cover_final.png",
-    url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
-    storageKey: coverStorageKey,
-  };
+      m.step = "cover_done";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-  m.step = "cover_done";
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-  return res.json(buildProgress(m, "Capa pronta ✅"));
-}
+      return res.json(buildProgress(m, "Capa pronta ✅"));
+    }
 
     // 3) NEXT PAGE
     const imagesArr = Array.isArray(m.images) ? m.images.slice() : [];
@@ -2176,10 +2189,7 @@ if (needCover) {
 
     let nextPage = 0;
     for (let p = 1; p <= 8; p++) {
-      if (!hasPage(p)) {
-        nextPage = p;
-        break;
-      }
+      if (!hasPage(p)) { nextPage = p; break; }
     }
 
     if (nextPage) {
@@ -2211,118 +2221,122 @@ if (needCover) {
 
       const finalName = `page_${pageKey}_final.png`;
       const finalPath = path.join(bookDir, finalName);
-      await stampStoryTextOnImage({
-        inputPath: basePath,
-        outputPath: finalPath,
-        title,
-        text,
-      });
+      await stampStoryTextOnImage({ inputPath: basePath, outputPath: finalPath, title, text });
 
-    // ✅ UPLOAD da página final pro Storage
-const pageStorageKey = `${m.ownerId || userId}/${id}/${finalName}`;
-const pageFinalBuf = await fsp.readFile(finalPath);
-await sbUploadBuffer({ pathKey: pageStorageKey, contentType: "image/png", buffer: pageFinalBuf });
+      const pageStorageKey = `${m.ownerId || userId}/${id}/${finalName}`;
+      const pageFinalBuf = await fsp.readFile(finalPath);
+      await sbUploadBuffer({ pathKey: pageStorageKey, contentType: "image/png", buffer: pageFinalBuf });
 
-const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
+      const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
 
-  const entry = {
-    page: nextPage,
-    path: finalPath,
-    prompt,
-    url,
-    file: finalName,
-    storageKey: pageStorageKey,
-  };
-  // ✅ salva a página no manifest (sem isso o progresso não anda e o PDF nunca sai)
-const idx = imagesArr.findIndex((it) => Number(it?.page || 0) === nextPage);
-if (idx >= 0) imagesArr[idx] = entry;
-else imagesArr.push(entry);
-m.images = imagesArr;
-        m.step = `page_${nextPage}_done`;
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      const entry = { page: nextPage, path: finalPath, prompt, url, file: finalName, storageKey: pageStorageKey };
+
+      const idx = imagesArr.findIndex((it) => Number(it?.page || 0) === nextPage);
+      if (idx >= 0) imagesArr[idx] = entry;
+      else imagesArr.push(entry);
+
+      m.images = imagesArr;
+      m.step = `page_${nextPage}_done`;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
       return res.json(buildProgress(m, `Página ${nextPage}/8 pronta ✅`));
     }
 
     // 4) PDF
-    // 4) PDF
-const haveAllPages = (m.images || []).filter((it) => it && it.url).length >= 8;
-if (haveAllPages) {
-  m.step = "pdf";
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    const haveAllPages = (m.images || []).filter((it) => it && it.url).length >= 8;
+    if (haveAllPages) {
+      m.step = "pdf";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-  // ✅ garante capa no disco (ou baixa do storage)
-  const coverName = "cover_final.png";
-  const coverLocalPath = path.join(bookDir, coverName);
-  const coverKey = m.cover?.storageKey || `${m.ownerId || userId}/${id}/${coverName}`;
-  await ensureFileFromStorageIfMissing(coverLocalPath, coverKey);
+      const coverName = "cover_final.png";
+      const coverLocalPath = path.join(bookDir, coverName);
+      const coverKey = m.cover?.storageKey || `${m.ownerId || userId}/${id}/${coverName}`;
+      await ensureFileFromStorageIfMissing(coverLocalPath, coverKey);
 
-  // ✅ garante as 8 páginas no disco (ou baixa do storage)
-  const sorted = (m.images || [])
-    .slice()
-    .sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
+      const sorted = (m.images || []).slice().sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
 
-  const pageImagePaths = [];
-  for (const it of sorted) {
-    const fileName = String(it?.file || "");
-    if (!fileName) continue;
+      const pageImagePaths = [];
+      for (const it of sorted) {
+        const fileName = String(it?.file || "");
+        if (!fileName) continue;
 
-    const localPath = path.join(bookDir, fileName);
-    const key = it?.storageKey || `${m.ownerId || userId}/${id}/${fileName}`;
+        const localPath = path.join(bookDir, fileName);
+        const key = it?.storageKey || `${m.ownerId || userId}/${id}/${fileName}`;
+        await ensureFileFromStorageIfMissing(localPath, key);
 
-    await ensureFileFromStorageIfMissing(localPath, key);
+        if (existsSyncSafe(localPath)) pageImagePaths.push(localPath);
+      }
 
-    if (existsSyncSafe(localPath)) pageImagePaths.push(localPath);
-  }
+      if (pageImagePaths.length < 8) {
+        throw new Error(`PDF: faltam páginas no disco (${pageImagePaths.length}/8). Verifique Storage keys/perm.`);
+      }
 
-  if (pageImagePaths.length < 8) {
-    throw new Error(`PDF: faltam páginas no disco (${pageImagePaths.length}/8). Verifique Storage keys/perm.`);
-  }
+      const pdfPath = await makePdfImagesOnly({
+        bookId: id,
+        coverPath: existsSyncSafe(coverLocalPath) ? coverLocalPath : "",
+        pageImagePaths,
+        outputDir: bookDir,
+      });
 
-  const pdfPath = await makePdfImagesOnly({
-    bookId: id,
-    coverPath: existsSyncSafe(coverLocalPath) ? coverLocalPath : "",
-    pageImagePaths,
-    outputDir: bookDir,
-  });
+      const pdfStorageKey = `${m.ownerId || userId}/${id}/book-${id}.pdf`;
+      const pdfBuf = await fsp.readFile(pdfPath);
+      await sbUploadBuffer({ pathKey: pdfStorageKey, contentType: "application/pdf", buffer: pdfBuf });
 
-  // ✅ upload do PDF pro Storage
-  const pdfStorageKey = `${m.ownerId || userId}/${id}/book-${id}.pdf`;
-  const pdfBuf = await fsp.readFile(pdfPath);
-  await sbUploadBuffer({ pathKey: pdfStorageKey, contentType: "application/pdf", buffer: pdfBuf });
+      m.status = "done";
+      m.step = "done";
+      m.pdf = `/download/${encodeURIComponent(id)}`;
+      m.pdfStorageKey = pdfStorageKey;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-  m.status = "done";
-  m.step = "done";
-  m.pdf = `/download/${encodeURIComponent(id)}`;
-  m.pdfStorageKey = pdfStorageKey;
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      return res.json(buildProgress(m, "PDF pronto 🎉"));
+    }
 
-  return res.json(buildProgress(m, "PDF pronto 🎉"));
-}
     m.step = "waiting";
     m.updatedAt = nowISO();
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
     return res.json(buildProgress(m, "Aguardando…"));
   } catch (e) {
+    const errMsg = String(e?.message || e || "Erro");
+
     try {
       const m2 = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
       if (m2) {
+        if (isHighDemandError(errMsg)) {
+          m2.status = "generating";
+          if (!m2.step || m2.step === "failed") m2.step = "starting";
+          m2.error = errMsg;
+          m2.updatedAt = nowISO();
+          await saveManifestAll(userId, id, m2, { sbUser: req.sb });
+
+          return res.json({
+            ok: true,
+            id,
+            status: m2.status,
+            step: m2.step,
+            style: m2.style,
+            doneSteps: 0,
+            totalSteps: 11,
+            message: "Serviço ocupado (E003). Tentando novamente…",
+            error: m2.error,
+          });
+        }
+
         m2.status = "failed";
         m2.step = "failed";
-        m2.error = String(e?.message || e || "Erro");
+        m2.error = errMsg;
         m2.updatedAt = nowISO();
         await saveManifestAll(userId, id, m2, { sbUser: req.sb });
       }
     } catch {}
-    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+
+    return res.status(500).json({ ok: false, error: errMsg });
   } finally {
     jobs.set(jobKey, { running: false });
   }
 });
-
 /* -------------------- runGeneration (full sequential) -------------------- */
 
 async function runGeneration(userId, bookId) {
@@ -2589,7 +2603,13 @@ fs.createReadStream(pdfPath).pipe(res);
     res.status(500).send(String(e?.message || e || "Erro"));
   }
 });
-
+app.get("/api/whoami", requireAuth, async (req, res) => {
+  return res.json({
+    ok: true,
+    id: String(req.user?.id || ""),
+    email: String(req.user?.email || ""),
+  });
+});
 /* -------------------- Start server (local) / export (vercel) -------------------- */
 
 (async () => {
