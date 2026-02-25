@@ -1,8 +1,8 @@
 /**
  * generate.page.js — Página /generate (Step 4)
- * ✅ Vercel-safe: chama /api/generateNext em LOOP (1 passo por request).
- * ✅ AUTO-START: inicia automaticamente ao abrir /generate (sem clique).
- * ✅ BACKOFF 409: se "step já em execução", espera e tenta de novo (sem travar).
+ * Vercel-safe: chama /api/generateNext em LOOP (1 passo por request).
+ * AUTO-START: inicia automaticamente ao abrir /generate (sem clique).
+ * BACKOFF 409: se "step já em execução", espera e tenta de novo.
  *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
@@ -15,7 +15,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Gerando… — Meu Livro Mágico</title>
+  <title>Gerando — Meu Livro Mágico</title>
   <style>
     :root{
       --bg1:#ede9fe; --bg2:#ffffff; --bg3:#fdf2f8;
@@ -32,7 +32,18 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     }
     .container{max-width:980px;margin:0 auto;padding:24px 16px}
     .topRow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-    .pill{background:rgba(124,58,237,.10);color:#4c1d95;border:1px solid rgba(124,58,237,.16);padding:8px 12px;border-radius:999px;font-weight:900;text-decoration:none;display:inline-flex;gap:8px;align-items:center}
+    .pill{
+      background:rgba(124,58,237,.10);
+      color:#4c1d95;
+      border:1px solid rgba(124,58,237,.16);
+      padding:8px 12px;
+      border-radius:999px;
+      font-weight:900;
+      text-decoration:none;
+      display:inline-flex;
+      gap:8px;
+      align-items:center
+    }
     .pillBtn{cursor:pointer}
     .card{background:var(--card);border:1px solid var(--border);border-radius:26px;box-shadow:var(--shadow);padding:18px}
     .head{text-align:center;padding:10px}
@@ -72,7 +83,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     .thumb{border:1px solid rgba(0,0,0,.08);border-radius:16px;overflow:hidden;background:#fff}
     .thumb img{width:100%;display:block}
     .thumb .cap{padding:10px;font-weight:900;color:#374151}
-
     .diag{
       margin-top:14px;
       border:1px solid rgba(0,0,0,.10);
@@ -100,17 +110,17 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 <body>
   <div class="container">
     <div class="topRow">
-      <a class="pill" href="/create">← Voltar</a>
+      <a class="pill" href="/create">Voltar</a>
       <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
-        <a class="pill" href="/sales">🛒 Página Inicial</a>
-        <a class="pill" href="/books">📚 Meus Livros</a>
-        <button class="pill pillBtn" id="btnReset">♻️ Reiniciar</button>
+        <a class="pill" href="/sales">Pagina Inicial</a>
+        <a class="pill" href="/books">Meus Livros</a>
+        <button class="pill pillBtn" id="btnReset">Reiniciar</button>
       </div>
     </div>
 
     <div class="card">
       <div class="head">
-        <h1>✨ Criando Magia</h1>
+        <h1>Criando Magia</h1>
         <p>Aguarde enquanto criamos o livro</p>
       </div>
 
@@ -118,20 +128,20 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         <div class="row">
           <div class="statusLine">
             <span class="dot" id="dot"></span>
-            <span id="line" class="mono">Status: …</span>
+            <span id="line" class="mono">Status: ...</span>
           </div>
-          <div class="muted mono" id="updated">Atualizado: —</div>
+          <div class="muted mono" id="updated">Atualizado: -</div>
         </div>
 
         <div class="barWrap">
           <div class="row">
-            <div class="muted" id="progressTxt">Progresso: 0/11 · Preparando…</div>
+            <div class="muted" id="progressTxt">Progresso: 0/11 - Preparando...</div>
             <div class="btns">
-              <button class="btn btnGhost btnMini" id="btnWhoami">👤 whoami</button>
-              <button class="btn btnGhost btnMini" id="btnTest">🧪 Testar 1 passo</button>
-              <button class="btn btnGhost" id="btnRefresh">🔄 Atualizar status</button>
-              <button class="btn btnDanger" id="btnStop">⏸️ Parar</button>
-              <button class="btn btnPrimary" id="btnStart">🚀 Iniciar geração</button>
+              <button class="btn btnGhost btnMini" id="btnWhoami">whoami</button>
+              <button class="btn btnGhost btnMini" id="btnTest">Testar 1 passo</button>
+              <button class="btn btnGhost" id="btnRefresh">Atualizar status</button>
+              <button class="btn btnDanger" id="btnStop">Parar</button>
+              <button class="btn btnPrimary" id="btnStart">Iniciar geracao</button>
             </div>
           </div>
           <div class="bar"><div id="barFill"></div></div>
@@ -141,7 +151,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         <div class="gridPreview" id="preview" style="display:none"></div>
 
         <div class="diag">
-          <h3>🧩 Diagnóstico (últimas chamadas)</h3>
+          <h3>Diagnostico (ultimas chamadas)</h3>
           <div class="log" id="log"></div>
         </div>
       </div>
@@ -149,13 +159,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   </div>
 
 <script>
+(function(){
   const $ = (id)=>document.getElementById(id);
 
   let running = false;
   let stopFlag = false;
   let inflight = false;
-
-  // trava pra não auto-iniciar 2x (reload / navegação / double init)
   let autoStarted = false;
 
   const logs = [];
@@ -195,13 +204,13 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   function renderPreview(data){
     const wrap = $("preview");
-    const imgs = Array.isArray(data?.images) ? data.images.filter(x=>x && x.url) : [];
-    const cover = data?.coverUrl || "";
-    const pdf = data?.pdf || "";
+    const imgs = Array.isArray(data && data.images) ? data.images.filter(x=>x && x.url) : [];
+    const cover = (data && data.coverUrl) ? data.coverUrl : "";
+    const pdf = (data && data.pdf) ? data.pdf : "";
 
     const cards = [];
     if (cover) cards.push({ title: "Capa", url: cover });
-    for (const it of imgs) cards.push({ title: "Página " + (it.page || "?"), url: it.url });
+    for (const it of imgs) cards.push({ title: "Pagina " + (it.page || "?"), url: it.url });
 
     if (!cards.length){
       wrap.style.display = "none";
@@ -217,8 +226,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       '</div>'
     )).join("");
 
-    if (pdf && data?.status === "done") {
-      setHint("✅ Livro pronto! Baixe o PDF em: " + location.origin + pdf);
+    if (pdf && data && data.status === "done") {
+      setHint("Livro pronto! Baixe o PDF em: " + location.origin + pdf);
     }
   }
 
@@ -226,15 +235,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const o = opts || {};
     o.credentials = "include";
     o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
-    addLog("→ " + (o.method || "GET") + " " + url);
+    addLog("-> " + (o.method || "GET") + " " + url);
 
     const r = await fetch(url, o);
     const text = await r.text();
     let j = null;
     try { j = JSON.parse(text); } catch {}
 
-    addLog("← HTTP " + r.status + " " + url + " | body: " + (text ? text.slice(0, 600) : "(vazio)"));
-
+    addLog("<- HTTP " + r.status + " " + url + " | body: " + (text ? text.slice(0, 600) : "(vazio)"));
     return { status: r.status, ok: r.ok, json: (j || {}), raw: text };
   }
 
@@ -259,7 +267,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       body: JSON.stringify(payload || {})
     });
 
-    // ✅ TRATAMENTO DO 409: não é erro “real” — só significa que tem request anterior em execução
     if (r.status === 409) {
       return { ok:false, _busy:true, error:(r.json && r.json.error) ? r.json.error : "busy" };
     }
@@ -273,16 +280,16 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   }
 
   function applyProgressUI(p){
-    const status = p?.status || "created";
-    const step = p?.step || "created";
-    const style = p?.style || "read";
+    const status = (p && p.status) ? p.status : "created";
+    const step = (p && p.step) ? p.step : "created";
+    const style = (p && p.style) ? p.style : "read";
 
-    $("line").textContent = "Status: " + status + " · step: " + step + " · style: " + style;
-    $("updated").textContent = "Atualizado: " + (p?.updatedAt || "—");
+    $("line").textContent = "Status: " + status + " | step: " + step + " | style: " + style;
+    $("updated").textContent = "Atualizado: " + ((p && p.updatedAt) ? p.updatedAt : "-");
 
-    const done = Number(p?.doneSteps || 0);
-    const total = Number(p?.totalSteps || 11);
-    $("progressTxt").textContent = "Progresso: " + done + "/" + total + " · " + (p?.message || "");
+    const done = Number((p && p.doneSteps) ? p.doneSteps : 0);
+    const total = Number((p && p.totalSteps) ? p.totalSteps : 11);
+    $("progressTxt").textContent = "Progresso: " + done + "/" + total + " - " + ((p && p.message) ? p.message : "");
     setBar(done, total);
 
     if (status === "done") uiSetDot("ok");
@@ -292,35 +299,36 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     renderPreview(p);
 
-    if (status === "failed") setHint("❌ Falhou: " + (p?.error || "erro desconhecido"));
+    if (status === "failed") setHint("Falhou: " + ((p && p.error) ? p.error : "erro desconhecido"));
   }
 
   async function refreshOnce(){
     const st = getState();
-    if (!st.bookId) {
+    if(!st.bookId){
       setHint("Sem bookId. Volte em /create e crie um livro.");
-      addLog("⚠️ sem bookId no localStorage");
+      addLog("Sem bookId no localStorage");
       return null;
     }
-   try {
-  const p = await apiProgress(st.bookId);
-  applyProgressUI(p);
-  return p;
-} catch (e) {
-  const msg = String(e?.message || e);
-  if (/book não existe/i.test(msg)) {
-    stopFlag = true;
-    running = false;
-    uiSetDot("bad");
-    setHint(
-      "❌ Este bookId não existe no banco (ou não está acessível por RLS).\n" +
-      "Clique em Reiniciar e crie o livro novamente."
-    );
-    addLog("🛑 PARANDO: " + msg);
-    return null;
-  }
-  throw e;
-}
+
+    try {
+      const p = await apiProgress(st.bookId);
+      applyProgressUI(p);
+      return p;
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      if (/book nao existe/i.test(msg) || /book não existe/i.test(msg)) {
+        stopFlag = true;
+        running = false;
+        uiSetDot("bad");
+        setHint(
+          "Este bookId nao existe no banco (ou nao esta acessivel por RLS).\\n" +
+          "Clique em Reiniciar e crie o livro novamente."
+        );
+        addLog("PARANDO: " + msg);
+        return null;
+      }
+      throw e;
+    }
   }
 
   function buildPayload(){
@@ -341,13 +349,13 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     addLog("STATE: " + JSON.stringify(st));
 
     if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
-    if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
+    if (!st.childName || st.childName.length < 2) return setHint("Nome da crianca ausente. Volte e preencha o nome.");
     if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
 
     const g = await apiGenerateNext(buildPayload());
     if (g && g.ok) applyProgressUI(g);
-    else if (g && g._busy) setHint("⏳ Um passo ainda está processando…");
+    else if (g && g._busy) setHint("Um passo ainda esta processando...");
   }
 
   async function startLoop(){
@@ -356,7 +364,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     addLog("START LOOP | STATE: " + JSON.stringify(st));
 
     if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
-    if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
+    if (!st.childName || st.childName.length < 2) return setHint("Nome da crianca ausente. Volte e preencha o nome.");
     if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
 
@@ -364,13 +372,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     stopFlag = false;
     uiSetDot("run");
 
-    // botão vira “rodando”
     try {
-      $("btnStart").textContent = "⏳ Gerando…";
+      $("btnStart").textContent = "Gerando...";
       $("btnStart").disabled = true;
     } catch {}
 
-    let busyBackoffMs = 900; // começa leve e aumenta até um teto
+    let busyBackoffMs = 900;
 
     while (!stopFlag) {
       if (inflight) { await new Promise(r=>setTimeout(r, 250)); continue; }
@@ -379,9 +386,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       try {
         const g = await apiGenerateNext(buildPayload());
 
-        // ✅ se server disse “busy”, só espera um pouco e tenta de novo (SEM erro)
         if (g && g._busy) {
-          addLog("⏳ busy (409) — aguardando " + busyBackoffMs + "ms");
+          addLog("busy (409) - aguardando " + busyBackoffMs + "ms");
           await new Promise(r=>setTimeout(r, busyBackoffMs));
           busyBackoffMs = Math.min(2500, Math.round(busyBackoffMs * 1.25));
           continue;
@@ -396,27 +402,23 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
         await new Promise(r=>setTimeout(r, 900));
       } catch (e) {
-        const msg = String(e?.message || e);
-        addLog("❌ ERRO: " + msg);
+        const msg = String(e && e.message ? e.message : e);
+        addLog("ERRO: " + msg);
 
-// ✅ se o backend diz "book não existe", PARA e manda refazer o livro
-if (/book não existe/i.test(msg)) {
-  stopFlag = true;
-  running = false;
-  uiSetDot("bad");
-  setHint(
-    "❌ Este bookId não existe no banco (ou não está acessível por RLS).\n" +
-    "Clique em Reiniciar e crie o livro novamente."
-  );
-  try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
-  return;
-}
+        if (/book nao existe/i.test(msg) || /book não existe/i.test(msg)) {
+          stopFlag = true;
+          running = false;
+          uiSetDot("bad");
+          setHint(
+            "Este bookId nao existe no banco (ou nao esta acessivel por RLS).\\n" +
+            "Clique em Reiniciar e crie o livro novamente."
+          );
+          try { $("btnStart").textContent = "Iniciar geracao"; $("btnStart").disabled = false; } catch {}
+          return;
+        }
 
-// tenta atualizar status pra mostrar passo atual
-try { await refreshOnce(); } catch {}
-
-// espera um pouco e continua
-await new Promise(r=>setTimeout(r, 1400));
+        try { await refreshOnce(); } catch {}
+        await new Promise(r=>setTimeout(r, 1400));
       } finally {
         inflight = false;
       }
@@ -426,7 +428,7 @@ await new Promise(r=>setTimeout(r, 1400));
     uiSetDot("");
 
     try {
-      $("btnStart").textContent = "🚀 Iniciar geração";
+      $("btnStart").textContent = "Iniciar geracao";
       $("btnStart").disabled = false;
     } catch {}
   }
@@ -439,29 +441,29 @@ await new Promise(r=>setTimeout(r, 1400));
     uiSetDot("");
     addLog("STOP clicado");
     try {
-      $("btnStart").textContent = "🚀 Iniciar geração";
+      $("btnStart").textContent = "Iniciar geracao";
       $("btnStart").disabled = false;
     } catch {}
   };
 
   $("btnRefresh").onclick = async ()=>{
     try { await refreshOnce(); }
-    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
+    catch (e) { setHint(String(e && e.message ? e.message : e)); addLog("ERRO " + String(e && e.message ? e.message : e)); }
   };
 
   $("btnWhoami").onclick = async ()=>{
     try {
       setHint("");
       const w = await apiWhoami();
-      setHint("✅ Logado: " + (w.email || w.id));
+      setHint("Logado: " + ((w && (w.email || w.id)) ? (w.email || w.id) : "ok"));
     } catch (e) {
-      setHint("❌ whoami: " + String(e?.message || e));
+      setHint("whoami: " + String(e && e.message ? e.message : e));
     }
   };
 
   $("btnTest").onclick = async ()=>{
     try { await testOneStep(); }
-    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
+    catch (e) { setHint(String(e && e.message ? e.message : e)); addLog("ERRO " + String(e && e.message ? e.message : e)); }
   };
 
   $("btnReset").onclick = ()=>{
@@ -469,35 +471,31 @@ await new Promise(r=>setTimeout(r, 1400));
     location.href = "/create";
   };
 
-  // ✅ AUTO START (sem clique)
   async function autoStartIfPossible(){
     if (autoStarted) return;
     autoStarted = true;
 
-    // pequeno delay pra página montar + cookies estabilizarem
     await new Promise(r=>setTimeout(r, 300));
 
-    // 1) tenta buscar progresso
     try { await refreshOnce(); } catch {}
 
-    // 2) se não estiver done/failed, começa o loop
     try {
       const p = await refreshOnce();
       if (p && (p.status === "done" || p.status === "failed")) return;
     } catch {}
 
-    // 3) inicia loop automático
     if (!running) {
-      addLog("AUTO-START: iniciando geração automaticamente");
+      addLog("AUTO-START: iniciando geracao automaticamente");
       startLoop();
     }
   }
 
   (async function init(){
     addLog("INIT /generate");
-    try { await refreshOnce(); } catch (e) { addLog("⚠️ " + String(e?.message||e)); }
+    try { await refreshOnce(); } catch (e) { addLog("WARN " + String(e && e.message ? e.message : e)); }
     autoStartIfPossible();
   })();
+})();
 </script>
 </body>
 </html>`);
