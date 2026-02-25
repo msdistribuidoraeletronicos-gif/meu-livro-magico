@@ -265,14 +265,23 @@ function requireAuth(req, res, next) {
   getCurrentUser(req, res)
     .then((user) => {
       if (!user) {
+        // ✅ Se for /api/*, NÃO redireciona. Retorna JSON 401.
+        if (String(req.path || "").startsWith("/api/")) {
+          return res.status(401).json({ ok: false, error: "not_logged_in" });
+        }
+
         const nextUrl = encodeURIComponent(req.originalUrl || "/create");
         return res.redirect(`/login?next=${nextUrl}`);
       }
+
       req.user = { id: user.id, email: user.email };
       req.sb = user.sb; // client com RLS ativo
       next();
     })
     .catch(() => {
+      if (String(req.path || "").startsWith("/api/")) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
       const nextUrl = encodeURIComponent(req.originalUrl || "/create");
       return res.redirect(`/login?next=${nextUrl}`);
     });
@@ -2075,7 +2084,15 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     let m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
-
+console.log("DEBUG generateNext HIT:", {
+  id,
+  userId,
+  status: m?.status,
+  step: m?.step,
+  hasPhotoKey: !!m?.photo?.storageKey,
+  hasMaskKey: !!m?.mask?.storageKey,
+  time: new Date().toISOString(),
+});
     if (m.status === "done") {
       return res.json({
         ok: true,
@@ -2160,7 +2177,11 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         error: mm.error || "",
       };
     }
-
+app.get("/api/whoami", async (req, res) => {
+  const u = await getCurrentUser(req, res).catch(() => null);
+  if (!u) return res.status(401).json({ ok: false, error: "not_logged_in" });
+  return res.json({ ok: true, id: u.id, email: u.email || "" });
+});
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
     // 1) STORY
