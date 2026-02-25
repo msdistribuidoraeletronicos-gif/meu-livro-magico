@@ -427,12 +427,31 @@ async function fetchJson(url, { method = "GET", headers = {}, body = null, timeo
   }
 }
 
-async function downloadToBuffer(url, timeoutMs = 55000) {
+async function downloadToBuffer(url, timeoutMs = 120000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
-    if (!r.ok) throw new Error(`Falha ao baixar imagem: HTTP ${r.status}`);
+    let r;
+    try {
+      r = await fetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          // alguns CDNs do Replicate exigem UA
+          "User-Agent": "MeuLivroMagico/1.0",
+          "Accept": "image/*,*/*",
+        },
+      });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      throw new Error(`Replicate download: fetch failed @ ${url} :: ${msg}`);
+    }
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`Replicate download: HTTP ${r.status} @ ${url} :: ${text.slice(0, 300)}`);
+    }
+
     const ab = await r.arrayBuffer();
     return Buffer.from(ab);
   } finally {
@@ -692,62 +711,88 @@ try {
  * - Senão: fallback OpenAI /v1/images/edits
  * - Retorna Buffer PNG
  */
+/**
+ * IMAGEM SEQUENCIAL (IMAGENS SEMPRE PELO REPLICATE)
+ * - OpenAI: somente TEXTO
+ * - Replicate: SEMPRE IMAGEM
+ * - Retorna Buffer PNG
+ */
 async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
-  // Força provider por env (opcional)
-  const forced = String(process.env.FORCE_IMAGE_PROVIDER || "").trim().toLowerCase();
-  const forceOpenAI = forced === "openai";
-  const forceReplicate = forced === "replicate";
-
-  // Se o user quiser forçar OpenAI
-  if (forceOpenAI) {
-    return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
+  // 🔒 TRAVA para Replicate (não deixa cair em OpenAI Images)
+  if (!REPLICATE_API_TOKEN) {
+    throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
   }
 
-  // Replicate (se token existe e não forçou openai)
-  if (REPLICATE_API_TOKEN && !forceOpenAI) {
-    try {
-      const imgBuf = await fsp.readFile(imagePngPath);
+  // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
+  const imgBuf = await fsp.readFile(imagePngPath);
 
-      const input = {
-        prompt,
-        image_input: [bufferToDataUrlPng(imgBuf)],
-        aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-        resolution: REPLICATE_RESOLUTION || "2K",
-        output_format: REPLICATE_OUTPUT_FORMAT || "png",
-        safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-      };
+  const input = {
+    prompt,
+    image_input: [bufferToDataUrlPng(imgBuf)],
 
-      const created = await replicateCreatePrediction({
-        model: REPLICATE_MODEL || "google/nano-banana-pro",
-        input,
-        timeoutMs: 120000,
-      });
+    // mantém seus ENV (se o modelo suportar)
+    aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+    resolution: REPLICATE_RESOLUTION || "2K",
+    output_format: REPLICATE_OUTPUT_FORMAT || "png",
+    safety_filter_level: REPLICATE_SAFETY || "block_only_high",
+  };
 
-      const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+  // cria + aguarda prediction
+  const created = await replicateCreatePrediction({
+    model: REPLICATE_MODEL || "google/nano-banana-pro",
+    input,
+    timeoutMs: 120000,
+  });
 
-      let url = "";
-      if (typeof pred?.output === "string") url = pred.output;
-      else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
+  const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
 
-      if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
+  // ✅ Extrai saída em vários formatos possíveis
+  let out = pred?.output;
 
-      const buf = await downloadToBuffer(url, 240000);
+  // 1) string URL
+  if (typeof out === "string" && out.startsWith("http")) {
+    const buf = await downloadToBuffer(out, 240000);
+    return await sharp(buf).png().toBuffer();
+  }
+
+  // 2) dataURL base64
+  if (typeof out === "string" && out.startsWith("data:")) {
+    const b = dataUrlToBuffer(out);
+    if (!b) throw new Error("Replicate retornou dataURL inválida.");
+    return await sharp(b).png().toBuffer();
+  }
+
+  // 3) array de strings
+  if (Array.isArray(out) && typeof out[0] === "string") {
+    const first = out[0];
+
+    if (first.startsWith("http")) {
+      const buf = await downloadToBuffer(first, 240000);
       return await sharp(buf).png().toBuffer();
-    } catch (e) {
-      const msg = String(e?.message || e || "");
-      // ✅ Se Replicate estiver ocupado, cai para OpenAI em vez de loop infinito
-      if (isHighDemandError(msg) && !forceReplicate) {
-        console.warn("⚠️ Replicate em high demand (E003). Fazendo fallback para OpenAI Images...");
-        return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
-      }
-      throw e;
+    }
+
+    if (first.startsWith("data:")) {
+      const b = dataUrlToBuffer(first);
+      if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
+      return await sharp(b).png().toBuffer();
     }
   }
 
-  // Sem Replicate: OpenAI
-  return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
+  // 4) objeto { url }
+  if (out && typeof out === "object" && typeof out.url === "string") {
+    const buf = await downloadToBuffer(out.url, 240000);
+    return await sharp(buf).png().toBuffer();
+  }
+
+  // 5) array de objetos [{ url }]
+  if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
+    const buf = await downloadToBuffer(out[0].url, 240000);
+    return await sharp(buf).png().toBuffer();
+  }
+
+  // nada reconhecido
+  throw new Error("Replicate não retornou uma imagem válida em output. Output=" + JSON.stringify(out).slice(0, 800));
 }
-/* -------------------- Story + prompts -------------------- */
 
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
   const theme_key = String(themeKey || "space");
@@ -2378,7 +2423,7 @@ if (m?.nextTryAt && Number(m.nextTryAt) > now) {
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
     return res.json(buildProgress(m, "Aguardando…"));
   } catch (e) {
-    const errMsg = String(e?.message || e || "Erro");
+  const errMsg = String(e?.message || e || "Erro");
 
     try {
       const m2 = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
