@@ -1882,12 +1882,15 @@ app.post("/api/uploadPhoto", async (req, res) => {
   try {
     const user = await requireAuthApi(req, res);
     if (!user) return;
-
-    const id = String(req.body?.id || "").trim();
     const photo = req.body?.photo;
     const mask = req.body?.mask;
+// ✅ Aceita id por body (padrão), query (?id=) ou param (/api/generateNext/:id)
+const id =
+  String(req.body?.id || "").trim() ||
+  String(req.query?.id || "").trim() ||
+  String(req.params?.id || "").trim();
 
-    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
     if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
     if (!mask || !isDataUrl(mask)) return res.status(400).json({ ok: false, error: "mask ausente ou inválida (dataURL)" });
 
@@ -2086,7 +2089,17 @@ app.post("/api/generateNext", async (req, res) => {
         pdf: m.pdf || "",
       });
     }
+// ✅ Permite re-tentar mesmo se o livro ficou "failed"
+const force = String(req.query.force || "").trim() === "1";
 
+if (force && m && m.status === "failed") {
+  m.status = "generating";
+  m.step = (m.step && m.step !== "failed") ? m.step : "starting";
+  m.error = "";
+  m.message = "";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+}
   if (m.status === "failed") {
   // ✅ permite tentar novamente sempre que chamar /api/generateNext
   m.status = "generating";
