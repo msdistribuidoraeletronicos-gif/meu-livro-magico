@@ -1,7 +1,8 @@
 /**
  * generate.page.js — Página /generate (Step 4)
  * ✅ Vercel-safe: chama /api/generateNext em LOOP (1 passo por request).
- * ✅ DIAGNÓSTICO NA TELA: mostra cada request/response (HTTP + body).
+ * ✅ AUTO-START: inicia automaticamente ao abrir /generate (sem clique).
+ * ✅ BACKOFF 409: se "step já em execução", espera e tenta de novo (sem travar).
  *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
@@ -137,7 +138,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         </div>
 
         <div class="hint" id="hint"></div>
-
         <div class="gridPreview" id="preview" style="display:none"></div>
 
         <div class="diag">
@@ -155,11 +155,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   let stopFlag = false;
   let inflight = false;
 
+  // trava pra não auto-iniciar 2x (reload / navegação / double init)
+  let autoStarted = false;
+
   const logs = [];
   function addLog(line){
     const ts = new Date().toISOString();
     logs.push("[" + ts + "] " + line);
-    while (logs.length > 60) logs.shift();
+    while (logs.length > 80) logs.shift();
     $("log").textContent = logs.join("\\n");
   }
 
@@ -221,7 +224,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   async function fetchJsonLogged(url, opts){
     const o = opts || {};
-    // MUITO IMPORTANTE: mandar cookies sempre
     o.credentials = "include";
     o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
     addLog("→ " + (o.method || "GET") + " " + url);
@@ -233,32 +235,41 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     addLog("← HTTP " + r.status + " " + url + " | body: " + (text ? text.slice(0, 600) : "(vazio)"));
 
-    if (!r.ok) {
-      throw new Error((j && j.error) ? j.error : ("HTTP " + r.status + ": " + text.slice(0, 200)));
-    }
-    return j || {};
+    return { status: r.status, ok: r.ok, json: (j || {}), raw: text };
   }
 
   async function apiProgress(bookId){
-    const j = await fetchJsonLogged("/api/progress/" + encodeURIComponent(bookId), { method:"GET" });
-    if (!j.ok) throw new Error(j.error || "Falha /api/progress");
-    return j;
+    const r = await fetchJsonLogged("/api/progress/" + encodeURIComponent(bookId), { method:"GET" });
+    if (!r.ok) throw new Error((r.json && r.json.error) ? r.json.error : ("HTTP " + r.status));
+    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/progress");
+    return r.json;
   }
 
   async function apiWhoami(){
-    const j = await fetchJsonLogged("/api/whoami", { method:"GET" });
-    if (!j.ok) throw new Error(j.error || "Falha /api/whoami");
-    return j;
+    const r = await fetchJsonLogged("/api/whoami", { method:"GET" });
+    if (!r.ok) throw new Error((r.json && r.json.error) ? r.json.error : ("HTTP " + r.status));
+    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/whoami");
+    return r.json;
   }
 
   async function apiGenerateNext(payload){
-    const j = await fetchJsonLogged("/api/generateNext", {
+    const r = await fetchJsonLogged("/api/generateNext", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
       body: JSON.stringify(payload || {})
     });
-    if (!j.ok) throw new Error(j.error || "Falha /api/generateNext");
-    return j;
+
+    // ✅ TRATAMENTO DO 409: não é erro “real” — só significa que tem request anterior em execução
+    if (r.status === 409) {
+      return { ok:false, _busy:true, error:(r.json && r.json.error) ? r.json.error : "busy" };
+    }
+
+    if (!r.ok) {
+      throw new Error((r.json && r.json.error) ? r.json.error : ("HTTP " + r.status + ": " + (r.raw||"").slice(0,200)));
+    }
+
+    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/generateNext");
+    return r.json;
   }
 
   function applyProgressUI(p){
@@ -281,9 +292,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     renderPreview(p);
 
-    if (status === "failed") {
-      setHint("❌ Falhou: " + (p?.error || "erro desconhecido"));
-    }
+    if (status === "failed") setHint("❌ Falhou: " + (p?.error || "erro desconhecido"));
   }
 
   async function refreshOnce(){
@@ -313,7 +322,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   async function testOneStep(){
     setHint("");
     const st = getState();
-
     addLog("STATE: " + JSON.stringify(st));
 
     if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
@@ -322,13 +330,13 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
 
     const g = await apiGenerateNext(buildPayload());
-    applyProgressUI(g);
+    if (g && g.ok) applyProgressUI(g);
+    else if (g && g._busy) setHint("⏳ Um passo ainda está processando…");
   }
 
   async function startLoop(){
     setHint("");
     const st = getState();
-
     addLog("START LOOP | STATE: " + JSON.stringify(st));
 
     if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
@@ -340,12 +348,31 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     stopFlag = false;
     uiSetDot("run");
 
+    // botão vira “rodando”
+    try {
+      $("btnStart").textContent = "⏳ Gerando…";
+      $("btnStart").disabled = true;
+    } catch {}
+
+    let busyBackoffMs = 900; // começa leve e aumenta até um teto
+
     while (!stopFlag) {
-      if (inflight) { await new Promise(r=>setTimeout(r, 500)); continue; }
+      if (inflight) { await new Promise(r=>setTimeout(r, 250)); continue; }
       inflight = true;
 
       try {
         const g = await apiGenerateNext(buildPayload());
+
+        // ✅ se server disse “busy”, só espera um pouco e tenta de novo (SEM erro)
+        if (g && g._busy) {
+          addLog("⏳ busy (409) — aguardando " + busyBackoffMs + "ms");
+          await new Promise(r=>setTimeout(r, busyBackoffMs));
+          busyBackoffMs = Math.min(2500, Math.round(busyBackoffMs * 1.25));
+          continue;
+        }
+
+        busyBackoffMs = 900;
+
         applyProgressUI(g);
 
         if (g.status === "done") break;
@@ -354,10 +381,13 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         await new Promise(r=>setTimeout(r, 900));
       } catch (e) {
         const msg = String(e?.message || e);
-        setHint("Erro no loop: " + msg);
         addLog("❌ ERRO: " + msg);
+
+        // tenta atualizar status pra mostrar passo atual
         try { await refreshOnce(); } catch {}
-        await new Promise(r=>setTimeout(r, 1200));
+
+        // espera um pouco e continua (evita “travamento”)
+        await new Promise(r=>setTimeout(r, 1400));
       } finally {
         inflight = false;
       }
@@ -365,19 +395,24 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     running = false;
     uiSetDot("");
+
+    try {
+      $("btnStart").textContent = "🚀 Iniciar geração";
+      $("btnStart").disabled = false;
+    } catch {}
   }
 
-  $("btnStart").onclick = async ()=>{
-    if (running) return;
-    try { await startLoop(); }
-    catch(e){ setHint(String(e?.message||e)); addLog("❌ " + String(e?.message||e)); }
-  };
+  $("btnStart").onclick = async ()=>{ if (!running) await startLoop(); };
 
   $("btnStop").onclick = ()=>{
     stopFlag = true;
     running = false;
     uiSetDot("");
     addLog("STOP clicado");
+    try {
+      $("btnStart").textContent = "🚀 Iniciar geração";
+      $("btnStart").disabled = false;
+    } catch {}
   };
 
   $("btnRefresh").onclick = async ()=>{
@@ -405,10 +440,34 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     location.href = "/create";
   };
 
+  // ✅ AUTO START (sem clique)
+  async function autoStartIfPossible(){
+    if (autoStarted) return;
+    autoStarted = true;
+
+    // pequeno delay pra página montar + cookies estabilizarem
+    await new Promise(r=>setTimeout(r, 300));
+
+    // 1) tenta buscar progresso
+    try { await refreshOnce(); } catch {}
+
+    // 2) se não estiver done/failed, começa o loop
+    try {
+      const p = await refreshOnce();
+      if (p && (p.status === "done" || p.status === "failed")) return;
+    } catch {}
+
+    // 3) inicia loop automático
+    if (!running) {
+      addLog("AUTO-START: iniciando geração automaticamente");
+      startLoop();
+    }
+  }
+
   (async function init(){
     addLog("INIT /generate");
-    try { await refreshOnce(); }
-    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
+    try { await refreshOnce(); } catch (e) { addLog("⚠️ " + String(e?.message||e)); }
+    autoStartIfPossible();
   })();
 </script>
 </body>
