@@ -2087,28 +2087,14 @@ app.post("/api/generateNext", async (req, res) => {
       });
     }
 
-    if (m.status === "failed") {
-      // ✅ Se foi E003/high demand, permite tentar novamente
-      if (isHighDemandError(m.error || "")) {
-        m.status = "generating";
-        m.step = (m.step && m.step !== "failed") ? m.step : "starting";
-        m.error = "";
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-      } else {
-        return res.json({
-          ok: true,
-          id,
-          status: m.status,
-          step: m.step,
-          style: m.style,
-          doneSteps: 0,
-          totalSteps: 11,
-          message: "Falhou",
-          error: m.error || "",
-        });
-      }
-    }
+  if (m.status === "failed") {
+  // ✅ permite tentar novamente sempre que chamar /api/generateNext
+  m.status = "generating";
+  m.step = (m.step && m.step !== "failed") ? m.step : "starting";
+  m.error = "";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+}
 
     // aplica configs do request (idempotente)
     const childName = String(req.body?.childName || m.child?.name || "").trim();
@@ -2577,7 +2563,18 @@ async function runGeneration(userId, bookId) {
 }
 
 /* -------------------- /api/image + /download (com fallback Storage) -------------------- */
-
+app.get("/api/debug-openai", requireAuth, async (req, res) => {
+  try {
+    const r = await openaiFetchJson(
+      "https://api.openai.com/v1/responses",
+      { model: TEXT_MODEL, input: "ping" },
+      20000
+    );
+    return res.json({ ok: true, ping: true, output: r?.output?.[0]?.content?.[0]?.text || "" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
