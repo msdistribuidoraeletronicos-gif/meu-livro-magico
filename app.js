@@ -1057,34 +1057,13 @@ function manifestToBookRow(userId, m) {
   return {
     id: m.id,
     user_id: userId,
-
     status: m.status || "created",
     step: m.step || "created",
     error: m.error || "",
-
-    theme: m.theme || "",
-    style: m.style || "read",
-
-    child: m.child || {},
-    child_name: String(m.child?.name || ""),
-    child_age: Number(m.child?.age ?? 6),
-    child_gender: String(m.child?.gender || "neutral"),
-
-    cover: m.cover || {},
-    pages: Array.isArray(m.pages) ? m.pages : [],
-    images: Array.isArray(m.images) ? m.images : [],
-
-    photo: m.photo || {},
-    mask: m.mask || {},
-
-    pdf: m.pdf || "",
-    pdf_url: m.pdf || "",
-
     manifest: m,
     updated_at: new Date().toISOString(),
   };
 }
-
 function bookRowToManifest(row) {
   const m = row?.manifest && typeof row.manifest === "object" ? row.manifest : {};
   m.id = m.id || row?.id;
@@ -1094,27 +1073,10 @@ function bookRowToManifest(row) {
   m.step = m.step || row?.step || "created";
   m.error = m.error || row?.error || "";
 
-  m.theme = m.theme || row?.theme || "";
-  m.style = m.style || row?.style || "read";
-
-  if (!m.child || typeof m.child !== "object") m.child = {};
-  m.child.name = m.child.name || row?.child_name || "";
-  m.child.age = Number(m.child.age ?? row?.child_age ?? 6);
-  m.child.gender = m.child.gender || row?.child_gender || "neutral";
-
-  m.cover = m.cover || row?.cover || {};
-  m.pages = Array.isArray(m.pages) ? m.pages : Array.isArray(row?.pages) ? row.pages : [];
-  m.images = Array.isArray(m.images) ? m.images : Array.isArray(row?.images) ? row.images : [];
-
-  m.photo = m.photo || row?.photo || {};
-  m.mask = m.mask || row?.mask || {};
-  m.pdf = m.pdf || row?.pdf || row?.pdf_url || "";
-
   m.updatedAt = m.updatedAt || row?.updated_at || new Date().toISOString();
   m.createdAt = m.createdAt || row?.created_at || new Date().toISOString();
   return m;
 }
-
 async function dbGetBookUser(sbUser, bookId) {
   const { data, error } = await sbUser.from("books").select("*").eq("id", bookId).maybeSingle();
   if (error) throw error;
@@ -1151,25 +1113,32 @@ async function dbInsertProfileAdmin(userId, name) {
 async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {}) {
   await saveManifest(userId, bookId, manifest);
 
+  let savedDb = false;
+
   if (sbUser) {
     try {
       await dbUpsertBookUser(sbUser, userId, manifest);
-      return true;
+      savedDb = true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (user/RLS) falhou (continuando):", String(e?.message || e));
+      console.warn("⚠️  DB upsert (user/RLS) falhou:", e?.message || e);
     }
   }
 
-  if (supabaseAdmin) {
+  if (!savedDb && supabaseAdmin) {
     try {
       await dbUpsertBookAdmin(userId, manifest);
-      return true;
+      savedDb = true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (admin) falhou (continuando só com disco):", String(e?.message || e));
+      console.warn("⚠️  DB upsert (admin) falhou:", e?.message || e);
     }
   }
 
-  return false;
+  // ✅ na Vercel, se não salvou no DB, isso vai causar o seu 404 depois.
+  if ((process.env.VERCEL || process.env.VERCEL_ENV) && !savedDb) {
+    throw new Error("Falha crítica: não consegui persistir o livro no DB (Supabase). Sem isso, o book some na Vercel.");
+  }
+
+  return savedDb;
 }
 
 async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallback = true } = {}) {
