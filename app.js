@@ -402,34 +402,72 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+// ✅ Guarda a última chamada de rede (para diagnosticar "fetch failed" na Vercel)
+const NET_LAST = {
+  at: "",
+  url: "",
+  stage: "",
+  note: "",
+  error: "",
+};
 
+function netMark(stage, url, note = "") {
+  NET_LAST.at = new Date().toISOString();
+  NET_LAST.stage = String(stage || "");
+  NET_LAST.url = String(url || "");
+  NET_LAST.note = String(note || "");
+  NET_LAST.error = "";
+}
+
+function netFail(stage, url, err) {
+  NET_LAST.at = new Date().toISOString();
+  NET_LAST.stage = String(stage || "");
+  NET_LAST.url = String(url || "");
+  NET_LAST.error = String(err?.message || err || "");
+}
+
+function formatErrFull(e) {
+  const msg = String(e?.message || e || "");
+  const stack = String(e?.stack || "");
+  // deixa curto para caber no manifest, mas com contexto
+  const base = msg || stack || "Erro";
+  return base.slice(0, 1800);
+}
 async function fetchJson(url, { method = "GET", headers = {}, body = null, timeoutMs = 55000 } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
-   try {
+  netMark(`fetchJson:${method}`, url);
+
+  try {
     const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
+
     const text = await r.text();
     let json = null;
     try { json = JSON.parse(text); } catch {}
 
     if (!r.ok) {
       const msg = json?.detail || json?.error || text;
-      throw new Error(`HTTP ${r.status} @ ${url}: ${String(msg).slice(0, 2000)}`);
+      const err = new Error(`HTTP ${r.status} @ ${url}: ${String(msg).slice(0, 2000)}`);
+      netFail(`fetchJson:${method}`, url, err);
+      throw err;
     }
 
     return json ?? {};
   } catch (e) {
     const msg = String(e?.message || e);
-    throw new Error(`fetch failed @ ${url}: ${msg}`);
+    const err = new Error(`fetch failed @ ${url} (${method}) :: ${msg}`);
+    netFail(`fetchJson:${method}`, url, err);
+    throw err;
   } finally {
     clearTimeout(t);
   }
 }
-
 async function downloadToBuffer(url, timeoutMs = 120000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  netMark("downloadToBuffer", url);
 
   try {
     let r;
@@ -437,19 +475,21 @@ async function downloadToBuffer(url, timeoutMs = 120000) {
       r = await fetch(url, {
         signal: ctrl.signal,
         headers: {
-          // alguns CDNs do Replicate exigem UA
           "User-Agent": "MeuLivroMagico/1.0",
-          "Accept": "image/*,*/*",
+          Accept: "image/*,*/*",
         },
       });
     } catch (e) {
-      const msg = String(e?.message || e);
-      throw new Error(`Replicate download: fetch failed @ ${url} :: ${msg}`);
+      const err = new Error(`download fetch failed @ ${url} :: ${String(e?.message || e)}`);
+      netFail("downloadToBuffer", url, err);
+      throw err;
     }
 
     if (!r.ok) {
       const text = await r.text().catch(() => "");
-      throw new Error(`Replicate download: HTTP ${r.status} @ ${url} :: ${text.slice(0, 300)}`);
+      const err = new Error(`download HTTP ${r.status} @ ${url} :: ${text.slice(0, 300)}`);
+      netFail("downloadToBuffer", url, err);
+      throw err;
     }
 
     const ab = await r.arrayBuffer();
@@ -458,8 +498,6 @@ async function downloadToBuffer(url, timeoutMs = 120000) {
     clearTimeout(t);
   }
 }
-
-/* -------------------- OpenAI helpers -------------------- */
 
 async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
   if (!OPENAI_API_KEY) {
@@ -669,20 +707,9 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 const t = setTimeout(() => ctrl.abort(), 180000); // 3 min
 
 let r;
-try {
-  r = await fetch("https://api.openai.com/v1/images/edits", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-    body: form,
-    signal: ctrl.signal,
-  });
 } catch (e) {
   const msg = String(e?.message || e);
-  throw new Error(
-    "OpenAI Images: falha de rede ao chamar /v1/images/edits. " +
-    "Isso costuma ser ENV faltando, bloqueio de saída, DNS/TLS, ou timeout na Vercel. " +
-    "Detalhe: " + msg
-  );
+  throw new Error(`openai image edit fetch failed: ${msg}`);
 } finally {
   clearTimeout(t);
 }
