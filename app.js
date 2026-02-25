@@ -403,30 +403,31 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-async function fetchJson(url, { method = "GET", headers = {}, body = null, timeoutMs = 180000 } = {}) {
+async function fetchJson(url, { method = "GET", headers = {}, body = null, timeoutMs = 55000 } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
-  try {
+   try {
     const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
     const text = await r.text();
     let json = null;
-    try {
-      json = JSON.parse(text);
-    } catch {}
+    try { json = JSON.parse(text); } catch {}
 
     if (!r.ok) {
       const msg = json?.detail || json?.error || text;
-      throw new Error(`HTTP ${r.status}: ${String(msg).slice(0, 2000)}`);
+      throw new Error(`HTTP ${r.status} @ ${url}: ${String(msg).slice(0, 2000)}`);
     }
 
     return json ?? {};
+  } catch (e) {
+    const msg = String(e?.message || e);
+    throw new Error(`fetch failed @ ${url}: ${msg}`);
   } finally {
     clearTimeout(t);
   }
 }
 
-async function downloadToBuffer(url, timeoutMs = 180000) {
+async function downloadToBuffer(url, timeoutMs = 55000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -441,7 +442,7 @@ async function downloadToBuffer(url, timeoutMs = 180000) {
 
 /* -------------------- OpenAI helpers -------------------- */
 
-async function openaiFetchJson(url, bodyObj, timeoutMs = 180000) {
+async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
   if (!OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY não configurada. Crie .env.local com OPENAI_API_KEY=...");
   }
@@ -461,8 +462,33 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 180000) {
     });
 
     const text = await r.text();
-    if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}: ${text.slice(0, 2000)}`);
-    return JSON.parse(text);
+
+    // tenta interpretar JSON mesmo em erro (para extrair mensagem melhor)
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {}
+
+    if (!r.ok) {
+      const detail =
+        parsed?.error?.message ||
+        parsed?.error?.code ||
+        parsed?.message ||
+        parsed?.detail ||
+        text;
+
+      throw new Error(`openai fetch failed @ ${url} | HTTP ${r.status}: ${String(detail).slice(0, 2000)}`);
+    }
+
+    if (parsed === null) {
+      throw new Error(`openai fetch failed @ ${url}: resposta não-JSON: ${text.slice(0, 2000)}`);
+    }
+
+    return parsed;
+  } catch (e) {
+    // AbortError / falha de rede / DNS / etc.
+    const msg = String(e?.message || e);
+    throw new Error(`openai fetch failed @ ${url}: ${msg}`);
   } finally {
     clearTimeout(t);
   }
@@ -747,7 +773,7 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
       { role: "user", content: JSON.stringify(userObj) },
     ],
     jsonObject: true,
-    timeoutMs: 150000,
+    timeoutMs: 55000,
   });
 
   const content = data?.output?.[0]?.content?.[0]?.text ?? null;
