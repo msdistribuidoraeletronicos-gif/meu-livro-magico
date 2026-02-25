@@ -302,9 +302,25 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       addLog("⚠️ sem bookId no localStorage");
       return null;
     }
-    const p = await apiProgress(st.bookId);
-    applyProgressUI(p);
-    return p;
+   try {
+  const p = await apiProgress(st.bookId);
+  applyProgressUI(p);
+  return p;
+} catch (e) {
+  const msg = String(e?.message || e);
+  if (/book não existe/i.test(msg)) {
+    stopFlag = true;
+    running = false;
+    uiSetDot("bad");
+    setHint(
+      "❌ Este bookId não existe no banco (ou não está acessível por RLS).\n" +
+      "Clique em Reiniciar e crie o livro novamente."
+    );
+    addLog("🛑 PARANDO: " + msg);
+    return null;
+  }
+  throw e;
+}
   }
 
   function buildPayload(){
@@ -383,11 +399,24 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         const msg = String(e?.message || e);
         addLog("❌ ERRO: " + msg);
 
-        // tenta atualizar status pra mostrar passo atual
-        try { await refreshOnce(); } catch {}
+// ✅ se o backend diz "book não existe", PARA e manda refazer o livro
+if (/book não existe/i.test(msg)) {
+  stopFlag = true;
+  running = false;
+  uiSetDot("bad");
+  setHint(
+    "❌ Este bookId não existe no banco (ou não está acessível por RLS).\n" +
+    "Clique em Reiniciar e crie o livro novamente."
+  );
+  try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
+  return;
+}
 
-        // espera um pouco e continua (evita “travamento”)
-        await new Promise(r=>setTimeout(r, 1400));
+// tenta atualizar status pra mostrar passo atual
+try { await refreshOnce(); } catch {}
+
+// espera um pouco e continua
+await new Promise(r=>setTimeout(r, 1400));
       } finally {
         inflight = false;
       }

@@ -1207,27 +1207,36 @@ async function dbInsertProfileAdmin(userId, name) {
 async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {}) {
   await saveManifest(userId, bookId, manifest);
 
+  let dbOk = false;
+
   if (sbUser) {
     try {
       await dbUpsertBookUser(sbUser, userId, manifest);
-      return true;
+      dbOk = true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (user/RLS) falhou (continuando):", String(e?.message || e));
+      console.warn("⚠️  DB upsert (user/RLS) falhou:", String(e?.message || e));
     }
   }
 
-  if (supabaseAdmin) {
+  if (!dbOk && supabaseAdmin) {
     try {
       await dbUpsertBookAdmin(userId, manifest);
-      return true;
+      dbOk = true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (admin) falhou (continuando só com disco):", String(e?.message || e));
+      console.warn("⚠️  DB upsert (admin) falhou:", String(e?.message || e));
     }
   }
 
-  return false;
-}
+  // ✅ Na Vercel, sem DB = vai sumir entre chamadas => falha dura
+  if (!!process.env.VERCEL && !dbOk) {
+    throw new Error(
+      "Falha ao persistir no Supabase (books). Na Vercel, salvar apenas no disco não funciona. " +
+      "Corrija RLS (INSERT/UPDATE/SELECT) ou configure SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
 
+  return dbOk;
+}
 async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallback = true } = {}) {
   const disk = await loadManifest(userId, bookId);
   if (disk) return disk;
@@ -1888,7 +1897,39 @@ app.post("/api/create", async (req, res) => {
     const m = makeEmptyManifest(id, user.id);
     m.ownerId = String(user.id || "");
 
+    // 1) tenta salvar (disco + DB)
     await saveManifestAll(user.id, id, m, { sbUser: req.sb });
+
+    // 2) ✅ CONFIRMA no DB via RLS (o que importa na Vercel)
+    let row = null;
+    try {
+      row = await dbGetBookUser(req.sb, id);
+    } catch (e) {
+      console.warn("⚠️  dbGetBookUser pós-create falhou:", String(e?.message || e));
+    }
+
+    // 3) se não existir no DB, tenta salvar via admin (service role)
+    if (!row && supabaseAdmin) {
+      try {
+        await dbUpsertBookAdmin(user.id, m);
+        row = await supabaseAdmin.from("books").select("id").eq("id", id).maybeSingle().then(r => r.data || null);
+      } catch (e) {
+        console.warn("⚠️  admin upsert pós-create falhou:", String(e?.message || e));
+      }
+    }
+
+    // 4) se ainda não existe => ERRO CLARO (evita “travado”)
+    if (!row) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Não consegui salvar o livro no Supabase (DB). " +
+          "Na Vercel isso causa 'book não existe'. " +
+          "Verifique: (1) policies RLS de INSERT/UPDATE/SELECT na tabela books, " +
+          "(2) SUPABASE_SERVICE_ROLE_KEY na Vercel."
+      });
+    }
+
     return res.json({ ok: true, id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
