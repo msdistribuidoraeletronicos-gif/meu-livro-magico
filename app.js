@@ -646,11 +646,27 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
         form.append("mask", new Blob([maskBuf], { type: "image/png" }), path.basename(maskPngPath) || "mask.png");
       }
 
-      const r = await fetch("https://api.openai.com/v1/images/edits", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-        body: form,
-      });
+      const ctrl = new AbortController();
+const t = setTimeout(() => ctrl.abort(), 180000); // 3 min
+
+let r;
+try {
+  r = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    body: form,
+    signal: ctrl.signal,
+  });
+} catch (e) {
+  const msg = String(e?.message || e);
+  throw new Error(
+    "OpenAI Images: falha de rede ao chamar /v1/images/edits. " +
+    "Isso costuma ser ENV faltando, bloqueio de saída, DNS/TLS, ou timeout na Vercel. " +
+    "Detalhe: " + msg
+  );
+} finally {
+  clearTimeout(t);
+}
 
       const text = await r.text();
       if (!r.ok) throw new Error(`OpenAI Images HTTP ${r.status}: ${text.slice(0, 2000)}`);
@@ -2587,6 +2603,36 @@ app.get("/api/debug-openai", requireAuth, async (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
+});
+app.get("/api/debug-net", requireAuth, async (req, res) => {
+  const out = { ok: true, openai: null, replicate: null };
+
+  // Teste OpenAI (simples)
+  try {
+    const r = await openaiFetchJson(
+      "https://api.openai.com/v1/responses",
+      { model: TEXT_MODEL, input: "ping" },
+      20000
+    );
+    out.openai = { ok: true, sample: r?.output?.[0]?.content?.[0]?.text || "" };
+  } catch (e) {
+    out.openai = { ok: false, error: String(e?.message || e) };
+  }
+
+  // Teste Replicate (se tiver token)
+  try {
+    if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN ausente");
+    const r = await fetchJson("https://api.replicate.com/v1/predictions", {
+      method: "GET",
+      timeoutMs: 15000,
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+    });
+    out.replicate = { ok: true, info: "GET /predictions OK" };
+  } catch (e) {
+    out.replicate = { ok: false, error: String(e?.message || e) };
+  }
+
+  return res.json(out);
 });
 app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
   try {
