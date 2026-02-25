@@ -1199,7 +1199,17 @@ function sbPublicUrl(pathKey) {
   const { data } = supabaseAnon.storage.from("books").getPublicUrl(pathKey);
   return data?.publicUrl || "";
 }
-
+async function sbSignedUrl(pathKey, expiresSec = 60 * 10) {
+  const client = supabaseAdmin; // signed URL para bucket privado precisa do admin
+  if (!client) return "";
+  try {
+    const { data, error } = await client.storage.from("books").createSignedUrl(pathKey, expiresSec);
+    if (error) return "";
+    return data?.signedUrl || "";
+  } catch {
+    return "";
+  }
+}
 async function ensureFileFromStorageIfMissing(localPath, storageKey) {
   if (existsSyncSafe(localPath)) return true;
   if (!storageKey) return false;
@@ -2236,34 +2246,62 @@ m.images = imagesArr;
     }
 
     // 4) PDF
-    const haveAllPages = (m.images || []).filter((it) => it && it.url).length >= 8;
-    if (haveAllPages) {
-      m.step = "pdf";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    // 4) PDF
+const haveAllPages = (m.images || []).filter((it) => it && it.url).length >= 8;
+if (haveAllPages) {
+  m.step = "pdf";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const pageImagePaths = (m.images || [])
-        .slice()
-        .sort((a, b) => Number(a.page || 0) - Number(b.page || 0))
-        .map((it) => String(it?.path || ""))
-        .filter((p) => p && existsSyncSafe(p));
+  // ✅ garante capa no disco (ou baixa do storage)
+  const coverName = "cover_final.png";
+  const coverLocalPath = path.join(bookDir, coverName);
+  const coverKey = m.cover?.storageKey || `${m.ownerId || userId}/${id}/${coverName}`;
+  await ensureFileFromStorageIfMissing(coverLocalPath, coverKey);
 
-      await makePdfImagesOnly({
-        bookId: id,
-        coverPath: existsSyncSafe(coverFinalPath) ? coverFinalPath : "",
-        pageImagePaths,
-        outputDir: bookDir,
-      });
+  // ✅ garante as 8 páginas no disco (ou baixa do storage)
+  const sorted = (m.images || [])
+    .slice()
+    .sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
 
-      m.status = "done";
-      m.step = "done";
-      m.pdf = `/download/${encodeURIComponent(id)}`;
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  const pageImagePaths = [];
+  for (const it of sorted) {
+    const fileName = String(it?.file || "");
+    if (!fileName) continue;
 
-      return res.json(buildProgress(m, "PDF pronto 🎉"));
-    }
+    const localPath = path.join(bookDir, fileName);
+    const key = it?.storageKey || `${m.ownerId || userId}/${id}/${fileName}`;
 
+    await ensureFileFromStorageIfMissing(localPath, key);
+
+    if (existsSyncSafe(localPath)) pageImagePaths.push(localPath);
+  }
+
+  if (pageImagePaths.length < 8) {
+    throw new Error(`PDF: faltam páginas no disco (${pageImagePaths.length}/8). Verifique Storage keys/perm.`);
+  }
+
+  const pdfPath = await makePdfImagesOnly({
+    bookId: id,
+    coverPath: existsSyncSafe(coverLocalPath) ? coverLocalPath : "",
+    pageImagePaths,
+    outputDir: bookDir,
+  });
+
+  // ✅ upload do PDF pro Storage
+  const pdfStorageKey = `${m.ownerId || userId}/${id}/book-${id}.pdf`;
+  const pdfBuf = await fsp.readFile(pdfPath);
+  await sbUploadBuffer({ pathKey: pdfStorageKey, contentType: "application/pdf", buffer: pdfBuf });
+
+  m.status = "done";
+  m.step = "done";
+  m.pdf = `/download/${encodeURIComponent(id)}`;
+  m.pdfStorageKey = pdfStorageKey;
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  return res.json(buildProgress(m, "PDF pronto 🎉"));
+}
     m.step = "waiting";
     m.updatedAt = nowISO();
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2471,8 +2509,8 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
 
     const fp = path.join(bookDirOf(userId, id), file);
 
-    // ✅ se não tiver no disco e for base, tenta Storage
-    // ✅ Se não existe no disco, tenta baixar do Storage (capa/páginas/bases)
+// ✅ Se não existe no disco, tenta baixar do Storage.
+// Se falhar (Vercel / permissões), REDIRECIONA para signedUrl (não dá 404).
 if (!existsSyncSafe(fp)) {
   let key = "";
 
@@ -2485,19 +2523,33 @@ if (!existsSyncSafe(fp)) {
     key = img?.storageKey || "";
   }
 
-  // fallback padrão se você seguir o padrão owner/book/file
   if (!key) {
     const owner = m.ownerId || userId;
     key = `${owner}/${id}/${file}`;
   }
 
-  if (key) await ensureFileFromStorageIfMissing(fp, key);
+  // 1) tenta materializar no disco via download (bom quando funciona)
+  if (key) {
+    await ensureFileFromStorageIfMissing(fp, key);
+  }
+
+  // 2) se ainda não existe, faz redirect para SIGNED URL (à prova de Vercel)
+  if (!existsSyncSafe(fp)) {
+    const signed = key ? await sbSignedUrl(key, 60 * 10) : "";
+    if (signed) {
+      res.setHeader("Cache-Control", "no-store");
+      return res.redirect(302, signed);
+    }
+  }
 }
 
-    if (!existsSyncSafe(fp)) return res.status(404).send("not found");
+if (!existsSyncSafe(fp)) {
+  console.warn("❌ /api/image não encontrou:", { id, file });
+  return res.status(404).send("not found");
+}
 
-    res.setHeader("Cache-Control", "no-store");
-    res.type("png").send(fs.readFileSync(fp));
+res.setHeader("Cache-Control", "no-store");
+res.type("png").send(fs.readFileSync(fp));
   } catch (e) {
     res.status(500).send(String(e?.message || e || "Erro"));
   }
@@ -2516,12 +2568,23 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
     if (m.status !== "done") return res.status(409).send("PDF ainda não está pronto");
 
-    const pdfPath = path.join(bookDirOf(userId, id), `book-${id}.pdf`);
-    if (!existsSyncSafe(pdfPath)) return res.status(404).send("pdf não encontrado");
+   const pdfPath = path.join(bookDirOf(userId, id), `book-${id}.pdf`);
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="livro-${id}.pdf"`);
-    fs.createReadStream(pdfPath).pipe(res);
+// tenta baixar do storage se não existir local
+if (!existsSyncSafe(pdfPath)) {
+  const key = m.pdfStorageKey || `${m.ownerId || userId}/${id}/book-${id}.pdf`;
+  await ensureFileFromStorageIfMissing(pdfPath, key);
+
+  if (!existsSyncSafe(pdfPath)) {
+    const signed = await sbSignedUrl(key, 60 * 15);
+    if (signed) return res.redirect(302, signed);
+    return res.status(404).send("pdf não encontrado");
+  }
+}
+
+res.setHeader("Content-Type", "application/pdf");
+res.setHeader("Content-Disposition", `attachment; filename="livro-${id}.pdf"`);
+fs.createReadStream(pdfPath).pipe(res);
   } catch (e) {
     res.status(500).send(String(e?.message || e || "Erro"));
   }

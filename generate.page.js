@@ -171,6 +171,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     el.style.display = msg ? "block" : "none";
   }
 
+  function goLogin(){
+    const next = encodeURIComponent(location.pathname + location.search);
+    addLog("↪ goLogin -> /login?next=" + next);
+    window.location.href = "/login?next=" + next;
+  }
+
   function getState(){
     return {
       bookId: localStorage.getItem("bookId") || "",
@@ -221,43 +227,41 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     }
   }
 
-async function fetchJsonLogged(url, opts){
-  const o = opts || {};
-  o.credentials = "include";
-  o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
-  addLog("→ " + (o.method || "GET") + " " + url);
+  async function fetchJsonLogged(url, opts){
+    const o = opts || {};
+    o.credentials = "include";
+    o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
+    addLog("→ " + (o.method || "GET") + " " + url);
 
-  const r = await fetch(url, o);
+    const r = await fetch(url, o);
 
-  // ✅ Se o backend redirecionar (ex.: para /login), siga o redirect no navegador
-  if (r.redirected) {
-    addLog("↪ redirected to: " + r.url);
-    window.location.href = r.url;
-    return { status: r.status, ok: false, json: { ok:false, error:"redirected" }, raw: "" };
+    // ✅ Se o backend redirecionar (ex.: para /login)
+    if (r.redirected) {
+      addLog("↪ redirected to: " + r.url);
+      window.location.href = r.url;
+      return { status: r.status, ok: false, json: { ok:false, error:"redirected" }, raw: "" };
+    }
+
+    // ✅ Se não está logado
+    if (r.status === 401) {
+      addLog("↪ 401 not_logged_in");
+      goLogin();
+      return { status: 401, ok: false, json: { ok:false, error:"not_logged_in" }, raw: "" };
+    }
+
+    const ct = String(r.headers.get("content-type") || "");
+    const text = await r.text();
+
+    let j = {};
+    if (ct.includes("application/json")) {
+      try { j = JSON.parse(text || "{}"); } catch { j = {}; }
+    } else {
+      j = { ok:false, error: "non_json_response" };
+    }
+
+    addLog("← HTTP " + r.status + " " + url + " | ct: " + ct + " | body: " + (text ? text.slice(0, 700) : "(vazio)"));
+    return { status: r.status, ok: r.ok, json: j, raw: text };
   }
-
-  // ✅ Se não está logado, manda pro login preservando next
-  if (r.status === 401) {
-    const next = encodeURIComponent(location.pathname + location.search);
-    addLog("↪ 401 not_logged_in -> /login?next=" + next);
-    window.location.href = "/login?next=" + next;
-    return { status: 401, ok: false, json: { ok:false, error:"not_logged_in" }, raw: "" };
-  }
-
-  const ct = String(r.headers.get("content-type") || "");
-  const text = await r.text();
-
-  let j = {};
-  if (ct.includes("application/json")) {
-    try { j = JSON.parse(text || "{}"); } catch { j = {}; }
-  } else {
-    // veio HTML/texto (ex.: erro do proxy, página de login, etc)
-    j = { ok:false, error: "non_json_response" };
-  }
-
-  addLog("← HTTP " + r.status + " " + url + " | ct: " + ct + " | body: " + (text ? text.slice(0, 700) : "(vazio)"));
-  return { status: r.status, ok: r.ok, json: j, raw: text };
-}
 
   function isHighDemandError(msg){
     const s = String(msg || "");
@@ -284,9 +288,11 @@ async function fetchJsonLogged(url, opts){
       headers:{ "Content-Type":"application/json" },
       body: JSON.stringify(payload || {})
     });
-    if (r.status === 401) {
-  return { ok:false, error:"not_logged_in" };
-}
+
+    // ✅ se não logado/redirected, PARA de vez (não fica em loop infinito)
+    if (r.status === 401 || (r.json && r.json.error === "not_logged_in") || (r.json && r.json.error === "redirected")) {
+      throw new Error("not_logged_in");
+    }
 
     if (r.status === 409) {
       return { ok:false, _busy:true, error:(r.json && r.json.error) ? r.json.error : "busy" };
@@ -297,7 +303,10 @@ async function fetchJsonLogged(url, opts){
       throw new Error(err);
     }
 
-    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/generateNext");
+    if (!r.json || !r.json.ok) {
+      throw new Error((r.json && r.json.error) ? r.json.error : "Falha /api/generateNext");
+    }
+
     return r.json;
   }
 
@@ -345,6 +354,13 @@ async function fetchJsonLogged(url, opts){
       return p;
     } catch (e) {
       const msg = String(e?.message || e);
+
+      if (msg === "not_logged_in") {
+        setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
+        goLogin();
+        return null;
+      }
+
       if (/book não existe/i.test(msg)) {
         stopFlag = true;
         running = false;
@@ -356,6 +372,7 @@ async function fetchJsonLogged(url, opts){
         addLog("🛑 PARANDO: " + msg);
         return null;
       }
+
       throw e;
     }
   }
@@ -383,8 +400,7 @@ async function fetchJsonLogged(url, opts){
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
 
     const g = await apiGenerateNext(buildPayload());
-    if (g && g.ok) applyProgressUI(g);
-    else if (g && g._busy) setHint("⏳ Um passo ainda está processando…");
+    applyProgressUI(g);
   }
 
   async function startLoop(){
@@ -423,18 +439,19 @@ async function fetchJsonLogged(url, opts){
           continue;
         }
 
+        // ✅ (normal)
         busyBackoffMs = 900;
-        demandBackoffMs = 2500;
-
         applyProgressUI(g);
 
-        // ✅ se falhou por HIGH DEMAND, não para: espera e tenta novamente
+        // ✅ se falhou por HIGH DEMAND, não para
         if (g.status === "failed" && isHighDemandError(g.error || g.message || "")) {
           addLog("⏳ HIGH DEMAND (E003) — aguardando " + demandBackoffMs + "ms e tentando novamente");
           await new Promise(r=>setTimeout(r, demandBackoffMs));
           demandBackoffMs = Math.min(15000, Math.round(demandBackoffMs * 1.35));
           continue;
         }
+
+        demandBackoffMs = 2500;
 
         if (g.status === "done") break;
         if (g.status === "failed") break;
@@ -443,6 +460,15 @@ async function fetchJsonLogged(url, opts){
       } catch (e) {
         const msg = String(e?.message || e);
         addLog("❌ ERRO: " + msg);
+
+        if (msg === "not_logged_in") {
+          stopFlag = true;
+          running = false;
+          uiSetDot("");
+          setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
+          goLogin();
+          return;
+        }
 
         if (/book não existe/i.test(msg)) {
           stopFlag = true;
@@ -465,6 +491,7 @@ async function fetchJsonLogged(url, opts){
           continue;
         }
 
+        // fallback: tenta atualizar status e continua
         try { await refreshOnce(); } catch {}
         await new Promise(r=>setTimeout(r, 1400));
       } finally {
@@ -505,13 +532,19 @@ async function fetchJsonLogged(url, opts){
       const w = await apiWhoami();
       setHint("✅ Logado: " + (w.email || w.id));
     } catch (e) {
-      setHint("❌ whoami: " + String(e?.message || e));
+      const msg = String(e?.message || e);
+      if (msg === "not_logged_in") { setHint("⚠️ Sessão expirou. Redirecionando…"); goLogin(); return; }
+      setHint("❌ whoami: " + msg);
     }
   };
 
   $("btnTest").onclick = async ()=>{
     try { await testOneStep(); }
-    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
+    catch (e) {
+      const msg = String(e?.message || e);
+      if (msg === "not_logged_in") { setHint("⚠️ Sessão expirou. Redirecionando…"); goLogin(); return; }
+      setHint(msg); addLog("❌ " + msg);
+    }
   };
 
   $("btnReset").onclick = ()=>{
@@ -525,14 +558,10 @@ async function fetchJsonLogged(url, opts){
 
     await new Promise(r=>setTimeout(r, 300));
 
-    try { await refreshOnce(); } catch {}
-
-    try {
-      const p = await refreshOnce();
-      if (p && (p.status === "done")) return;
-      // se failed por high demand, vamos tentar também
-      if (p && p.status === "failed" && !isHighDemandError(p.error || "")) return;
-    } catch {}
+    let p = null;
+    try { p = await refreshOnce(); } catch {}
+    if (p && p.status === "done") return;
+    if (p && p.status === "failed" && !isHighDemandError(p.error || "")) return;
 
     if (!running) {
       addLog("AUTO-START: iniciando geração automaticamente");
