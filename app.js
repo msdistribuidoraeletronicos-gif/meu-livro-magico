@@ -2059,6 +2059,11 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+app.get("/api/whoami", async (req, res) => {
+  const u = await getCurrentUser(req, res).catch(() => null);
+  if (!u) return res.status(401).json({ ok: false, error: "not_logged_in" });
+  return res.json({ ok: true, id: u.id, email: u.email || "" });
+});
 function ensurePendingShape(m) {
   if (!m.pending || typeof m.pending !== "object") m.pending = {};
   return m.pending;
@@ -2177,11 +2182,6 @@ console.log("DEBUG generateNext HIT:", {
         error: mm.error || "",
       };
     }
-app.get("/api/whoami", async (req, res) => {
-  const u = await getCurrentUser(req, res).catch(() => null);
-  if (!u) return res.status(401).json({ ok: false, error: "not_logged_in" });
-  return res.json({ ok: true, id: u.id, email: u.email || "" });
-});
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
     // 1) STORY
