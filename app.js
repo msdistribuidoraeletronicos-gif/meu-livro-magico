@@ -265,23 +265,14 @@ function requireAuth(req, res, next) {
   getCurrentUser(req, res)
     .then((user) => {
       if (!user) {
-        // ✅ Se for /api/*, NÃO redireciona. Retorna JSON 401.
-        if (String(req.path || "").startsWith("/api/")) {
-          return res.status(401).json({ ok: false, error: "not_logged_in" });
-        }
-
         const nextUrl = encodeURIComponent(req.originalUrl || "/create");
         return res.redirect(`/login?next=${nextUrl}`);
       }
-
       req.user = { id: user.id, email: user.email };
       req.sb = user.sb; // client com RLS ativo
       next();
     })
     .catch(() => {
-      if (String(req.path || "").startsWith("/api/")) {
-        return res.status(401).json({ ok: false, error: "not_logged_in" });
-      }
       const nextUrl = encodeURIComponent(req.originalUrl || "/create");
       return res.redirect(`/login?next=${nextUrl}`);
     });
@@ -639,59 +630,14 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
-// -------------------- Replicate NON-BLOCKING helpers (Vercel-safe) --------------------
-
-function extractReplicateOutputUrl(pred) {
-  let url = "";
-  if (typeof pred?.output === "string") url = pred.output;
-  else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
-  return url;
-}
 
 /**
- * Start or poll a Replicate prediction WITHOUT waiting.
- * - If predictionId is empty: create and return { pending:true, id }
- * - If predictionId exists: fetch once and:
- *    - succeeded -> { pending:false, done:true, url }
- *    - processing/starting -> { pending:true, id }
- *    - failed/canceled -> throws
+ * IMAGEM SEQUENCIAL (principal)
+ * - Replicate se token configurado
+ * - Senão: fallback OpenAI /v1/images/edits
+ * - Retorna Buffer PNG
  */
-async function replicateStartOrPollOnce({ model, input, predictionId }) {
-  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
-
-  if (!predictionId) {
-    const created = await replicateCreatePrediction({ model, input, timeoutMs: 120000 });
-    const id = String(created?.id || "");
-    if (!id) throw new Error("Replicate não retornou prediction id.");
-    return { pending: true, id };
-  }
-
-  const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-    method: "GET",
-    timeoutMs: 60000,
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-  });
-
-  const st = String(pred?.status || "");
-  if (st === "succeeded") {
-    const url = extractReplicateOutputUrl(pred);
-    if (!url) throw new Error("Replicate succeeded mas não retornou URL em output.");
-    return { pending: false, done: true, url };
-  }
-  if (st === "failed" || st === "canceled") {
-    throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
-  }
-
-  return { pending: true, id: String(predictionId) };
-}
-
-async function openaiImageEditFromReference({
-  imagePngPath,
-  maskPngPath,
-  prompt,
-  size = "1024x1024",
-  replicatePredictionId = "",
-}) {
+async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
   if (REPLICATE_API_TOKEN) {
     const imgBuf = await fsp.readFile(imagePngPath);
 
@@ -704,26 +650,25 @@ async function openaiImageEditFromReference({
       safety_filter_level: REPLICATE_SAFETY || "block_only_high",
     };
 
-    // ✅ não espera: 1 chamada = start OU poll 1x
-    const r = await replicateStartOrPollOnce({
+    const created = await replicateCreatePrediction({
       model: REPLICATE_MODEL || "google/nano-banana-pro",
       input,
-      predictionId: replicatePredictionId || "",
+      timeoutMs: 120000,
     });
 
-    if (r.pending) {
-      return { pending: true, predictionId: r.id };
-    }
+    const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
 
-    // done
-    const buf = await downloadToBuffer(r.url, 240000);
-    const png = await sharp(buf).png().toBuffer();
-    return { pending: false, buffer: png };
+    let url = "";
+    if (typeof pred?.output === "string") url = pred.output;
+    else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
+
+    if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
+
+    const buf = await downloadToBuffer(url, 240000);
+    return await sharp(buf).png().toBuffer();
   }
 
-  // OpenAI fallback (blocking)
-  const buf = await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
-  return { pending: false, buffer: buf };
+  return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
 }
 
 /* -------------------- Story + prompts -------------------- */
@@ -1084,15 +1029,15 @@ async function saveManifest(userId, bookId, manifest) {
 }
 
 function makeEmptyManifest(id, ownerId) {
- return {
+  return {
     id,
     ownerId: String(ownerId || ""),
     createdAt: nowISO(),
-    status: "created",
+    status: "created", // created | generating | done | failed
     step: "created",
     error: "",
     theme: "",
-    style: "read",
+    style: "read", // read | color
     child: { name: "", age: 6, gender: "neutral" },
     photo: { ok: false, file: "", mime: "", editBase: "", storageKey: "" },
     mask: { ok: false, file: "", editBase: "", storageKey: "" },
@@ -1100,7 +1045,6 @@ function makeEmptyManifest(id, ownerId) {
     images: [],
     cover: { ok: false, file: "", url: "" },
     pdf: "",
-    pending: null, // ✅ ADD
     updatedAt: nowISO(),
   };
 }
@@ -1207,36 +1151,27 @@ async function dbInsertProfileAdmin(userId, name) {
 async function saveManifestAll(userId, bookId, manifest, { sbUser = null } = {}) {
   await saveManifest(userId, bookId, manifest);
 
-  let dbOk = false;
-
   if (sbUser) {
     try {
       await dbUpsertBookUser(sbUser, userId, manifest);
-      dbOk = true;
+      return true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (user/RLS) falhou:", String(e?.message || e));
+      console.warn("⚠️  DB upsert (user/RLS) falhou (continuando):", String(e?.message || e));
     }
   }
 
-  if (!dbOk && supabaseAdmin) {
+  if (supabaseAdmin) {
     try {
       await dbUpsertBookAdmin(userId, manifest);
-      dbOk = true;
+      return true;
     } catch (e) {
-      console.warn("⚠️  DB upsert (admin) falhou:", String(e?.message || e));
+      console.warn("⚠️  DB upsert (admin) falhou (continuando só com disco):", String(e?.message || e));
     }
   }
 
-  // ✅ Na Vercel, sem DB = vai sumir entre chamadas => falha dura
-  if (!!process.env.VERCEL && !dbOk) {
-    throw new Error(
-      "Falha ao persistir no Supabase (books). Na Vercel, salvar apenas no disco não funciona. " +
-      "Corrija RLS (INSERT/UPDATE/SELECT) ou configure SUPABASE_SERVICE_ROLE_KEY."
-    );
-  }
-
-  return dbOk;
+  return false;
 }
+
 async function loadManifestAll(userId, bookId, { sbUser = null, allowAdminFallback = true } = {}) {
   const disk = await loadManifest(userId, bookId);
   if (disk) return disk;
@@ -1359,19 +1294,7 @@ app.get("/api/debug-fs", (req, res) => {
     },
   });
 });
-app.get("/api/debug-supabase", (req, res) => {
-  const anon = (SUPABASE_ANON_KEY || "");
-  const svc = (SUPABASE_SERVICE_ROLE_KEY || "");
-  res.json({
-    ok: true,
-    hasUrl: !!SUPABASE_URL,
-    anon: { present: !!anon, prefix: anon.slice(0, 14), len: anon.length },
-    service: { present: !!svc, prefix: svc.slice(0, 14), len: svc.length },
-    hasAnonClient: !!supabaseAnon,
-    hasAdminClient: !!supabaseAdmin,
-    vercel: !!process.env.VERCEL,
-  });
-});
+
 /* -------------------- Mount extra pages/modules -------------------- */
 try {
   const mountBooks = require("./books"); // ./books/index.js
@@ -1909,39 +1832,7 @@ app.post("/api/create", async (req, res) => {
     const m = makeEmptyManifest(id, user.id);
     m.ownerId = String(user.id || "");
 
-    // 1) tenta salvar (disco + DB)
     await saveManifestAll(user.id, id, m, { sbUser: req.sb });
-
-    // 2) ✅ CONFIRMA no DB via RLS (o que importa na Vercel)
-    let row = null;
-    try {
-      row = await dbGetBookUser(req.sb, id);
-    } catch (e) {
-      console.warn("⚠️  dbGetBookUser pós-create falhou:", String(e?.message || e));
-    }
-
-    // 3) se não existir no DB, tenta salvar via admin (service role)
-    if (!row && supabaseAdmin) {
-      try {
-        await dbUpsertBookAdmin(user.id, m);
-        row = await supabaseAdmin.from("books").select("id").eq("id", id).maybeSingle().then(r => r.data || null);
-      } catch (e) {
-        console.warn("⚠️  admin upsert pós-create falhou:", String(e?.message || e));
-      }
-    }
-
-    // 4) se ainda não existe => ERRO CLARO (evita “travado”)
-    if (!row) {
-      return res.status(500).json({
-        ok: false,
-        error:
-          "Não consegui salvar o livro no Supabase (DB). " +
-          "Na Vercel isso causa 'book não existe'. " +
-          "Verifique: (1) policies RLS de INSERT/UPDATE/SELECT na tabela books, " +
-          "(2) SUPABASE_SERVICE_ROLE_KEY na Vercel."
-      });
-    }
-
     return res.json({ ok: true, id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -2112,15 +2003,7 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
-app.get("/api/whoami", async (req, res) => {
-  const u = await getCurrentUser(req, res).catch(() => null);
-  if (!u) return res.status(401).json({ ok: false, error: "not_logged_in" });
-  return res.json({ ok: true, id: u.id, email: u.email || "" });
-});
-function ensurePendingShape(m) {
-  if (!m.pending || typeof m.pending !== "object") m.pending = {};
-  return m.pending;
-}
+
 /**
  * ✅ /api/generateNext — 1 passo por request
  * CORREÇÃO: define imagePngPath (antes não existia) e faz fallback do Storage quando disco não tem.
@@ -2142,15 +2025,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     let m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
-console.log("DEBUG generateNext HIT:", {
-  id,
-  userId,
-  status: m?.status,
-  step: m?.step,
-  hasPhotoKey: !!m?.photo?.storageKey,
-  hasMaskKey: !!m?.mask?.storageKey,
-  time: new Date().toISOString(),
-});
+
     if (m.status === "done") {
       return res.json({
         ok: true,
@@ -2235,6 +2110,7 @@ console.log("DEBUG generateNext HIT:", {
         error: mm.error || "",
       };
     }
+
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
     // 1) STORY
@@ -2274,33 +2150,16 @@ console.log("DEBUG generateNext HIT:", {
         styleKey: m.style,
       });
 
-          const pend = ensurePendingShape(m);
-
-      const coverGen = await openaiImageEditFromReference({
+      const coverBuf = await openaiImageEditFromReference({
         imagePngPath,
         maskPngPath,
         prompt: coverPrompt,
         size: "1024x1024",
-        replicatePredictionId: pend.coverPredictionId || "",
       });
 
-      // ✅ Se estiver pendente (Replicate processando), salva o id e retorna
-      if (coverGen && coverGen.pending) {
-        pend.coverPredictionId = String(coverGen.predictionId || "");
-        m.pending = pend;
-        m.step = "cover_wait";
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-        return res.json(buildProgress(m, "Capa em processamento… ⏳"));
-      }
-
-      // ✅ Done: limpa pending e usa o buffer
-      pend.coverPredictionId = "";
-      m.pending = pend;
-
-      const coverBuf = coverGen.buffer; // Buffer
       const coverBase = path.join(bookDir, "cover.png");
       await fsp.writeFile(coverBase, coverBuf);
+
       await stampCoverTextOnImage({
         inputPath: coverBase,
         outputPath: coverFinalPath,
@@ -2348,32 +2207,13 @@ console.log("DEBUG generateNext HIT:", {
         styleKey: m.style,
       });
 
-            const pend = ensurePendingShape(m);
-      const pagePendKey = `pagePredictionId_${String(nextPage)}`;
-
-      const pageGen = await openaiImageEditFromReference({
+      const imgBuf = await openaiImageEditFromReference({
         imagePngPath,
         maskPngPath,
         prompt,
         size: "1024x1024",
-        replicatePredictionId: pend[pagePendKey] || "",
       });
 
-      // ✅ Se estiver pendente, salva id dessa página e retorna
-      if (pageGen && pageGen.pending) {
-        pend[pagePendKey] = String(pageGen.predictionId || "");
-        m.pending = pend;
-        m.step = `page_${nextPage}_wait`;
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-        return res.json(buildProgress(m, `Página ${nextPage}/8 em processamento… ⏳`));
-      }
-
-      // ✅ Done: limpa pending da página e usa buffer
-      pend[pagePendKey] = "";
-      m.pending = pend;
-
-      const imgBuf = pageGen.buffer; // Buffer
       const pageKey = String(nextPage).padStart(2, "0");
       const basePath = path.join(bookDir, `page_${pageKey}.png`);
       await fsp.writeFile(basePath, imgBuf);
@@ -2452,40 +2292,7 @@ console.log("DEBUG generateNext HIT:", {
     jobs.set(jobKey, { running: false });
   }
 });
-async function getImageBufferBlocking({ imagePngPath, maskPngPath, prompt, size, pendingKeyObj, pendingKeyName }) {
-  // Usa a mesma função não-bloqueante, mas aqui (runGeneration) nós PODEMOS esperar.
-  // Se estiver pendente, faz poll até concluir.
 
-  let predictionId = "";
-  if (pendingKeyObj && pendingKeyName) {
-    predictionId = String(pendingKeyObj[pendingKeyName] || "");
-  }
-
-  while (true) {
-    const r = await openaiImageEditFromReference({
-      imagePngPath,
-      maskPngPath,
-      prompt,
-      size,
-      replicatePredictionId: predictionId,
-    });
-
-    // OpenAI fallback: pode retornar {pending:false, buffer}
-    if (r && r.pending === false && r.buffer) return r.buffer;
-
-    // Replicate pendente
-    if (r && r.pending) {
-      predictionId = String(r.predictionId || "");
-      if (pendingKeyObj && pendingKeyName) pendingKeyObj[pendingKeyName] = predictionId;
-
-      // Espera um pouco antes de tentar de novo
-      await new Promise((res) => setTimeout(res, 1500));
-      continue;
-    }
-
-    throw new Error("Falha inesperada: geração de imagem não retornou buffer.");
-  }
-}
 /* -------------------- runGeneration (full sequential) -------------------- */
 
 async function runGeneration(userId, bookId) {
@@ -2548,16 +2355,12 @@ async function runGeneration(userId, bookId) {
       styleKey,
     });
 
-    const pend = ensurePendingShape(m);
-const coverBuf = await getImageBufferBlocking({
-  imagePngPath,
-  maskPngPath,
-  prompt: coverPrompt,
-  size: "1024x1024",
-  pendingKeyObj: pend,
-  pendingKeyName: "coverPredictionId",
-});
-m.pending = pend;
+    const coverBuf = await openaiImageEditFromReference({
+      imagePngPath,
+      maskPngPath,
+      prompt: coverPrompt,
+      size: "1024x1024",
+    });
 
     const coverBase = path.join(bookDir, "cover.png");
     await fsp.writeFile(coverBase, coverBuf);
@@ -2592,17 +2395,12 @@ m.pending = pend;
         styleKey,
       });
 
-      const pend = ensurePendingShape(m);
-const key = `pagePredictionId_${String(p.page)}`;
-const imgBuf = await getImageBufferBlocking({
-  imagePngPath,
-  maskPngPath,
-  prompt,
-  size: "1024x1024",
-  pendingKeyObj: pend,
-  pendingKeyName: key,
-});
-m.pending = pend;
+      const imgBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+      });
 
       const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
       await fsp.writeFile(basePath, imgBuf);
