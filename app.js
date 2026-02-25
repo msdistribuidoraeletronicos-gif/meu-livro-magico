@@ -2106,47 +2106,59 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     }
 
     // 2) COVER
-    const coverFinalPath = path.join(bookDir, "cover_final.png");
-    const needCover = !(m.cover?.ok && existsSyncSafe(coverFinalPath));
-    if (needCover) {
-      m.step = "cover";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  // 2) COVER
+const coverFinalPath = path.join(bookDir, "cover_final.png");
 
-      const coverPrompt = buildCoverPrompt({
-        themeKey: m.theme,
-        childName: m.child?.name,
-        styleKey: m.style,
-      });
+// ✅ NÃO dependa do arquivo existir no disco (Vercel troca instância)
+const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
 
-      const coverBuf = await openaiImageEditFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt: coverPrompt,
-        size: "1024x1024",
-      });
+if (needCover) {
+  m.step = "cover";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const coverBase = path.join(bookDir, "cover.png");
-      await fsp.writeFile(coverBase, coverBuf);
+  const coverPrompt = buildCoverPrompt({
+    themeKey: m.theme,
+    childName: m.child?.name,
+    styleKey: m.style,
+  });
 
-      await stampCoverTextOnImage({
-        inputPath: coverBase,
-        outputPath: coverFinalPath,
-        title: "Meu Livro Mágico",
-        subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
-      });
+  const coverBuf = await openaiImageEditFromReference({
+    imagePngPath,
+    maskPngPath,
+    prompt: coverPrompt,
+    size: "1024x1024",
+  });
 
-      m.cover = {
-        ok: true,
-        file: "cover_final.png",
-        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
-      };
-      m.step = "cover_done";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  const coverBase = path.join(bookDir, "cover.png");
+  await fsp.writeFile(coverBase, coverBuf);
 
-      return res.json(buildProgress(m, "Capa pronta ✅"));
-    }
+  // ✅ carimba texto na CAPA (sem placeholder "{ ... }")
+  await stampCoverTextOnImage({
+    inputPath: coverBase,
+    outputPath: coverFinalPath,
+    title: "Meu Livro Mágico",
+    subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+  });
+
+  // ✅ UPLOAD da capa final pro Storage (Vercel-safe)
+  const coverStorageKey = `${m.ownerId || userId}/${id}/cover_final.png`;
+  const coverFinalBuf = await fsp.readFile(coverFinalPath);
+  await sbUploadBuffer({ pathKey: coverStorageKey, contentType: "image/png", buffer: coverFinalBuf });
+
+  m.cover = {
+    ok: true,
+    file: "cover_final.png",
+    url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+    storageKey: coverStorageKey,
+  };
+
+  m.step = "cover_done";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  return res.json(buildProgress(m, "Capa pronta ✅"));
+}
 
     // 3) NEXT PAGE
     const imagesArr = Array.isArray(m.images) ? m.images.slice() : [];
@@ -2196,18 +2208,29 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         text,
       });
 
-      const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
+    // ✅ UPLOAD da página final pro Storage
+const pageStorageKey = `${m.ownerId || userId}/${id}/${finalName}`;
+const pageFinalBuf = await fsp.readFile(finalPath);
+await sbUploadBuffer({ pathKey: pageStorageKey, contentType: "image/png", buffer: pageFinalBuf });
 
-      const idx = imagesArr.findIndex((it) => Number(it?.page || 0) === nextPage);
-      const entry = { page: nextPage, path: finalPath, prompt, url, file: finalName };
-      if (idx >= 0) imagesArr[idx] = { ...imagesArr[idx], ...entry };
-      else imagesArr.push(entry);
+const url = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
 
-      imagesArr.sort((a, b) => Number(a.page || 0) - Number(b.page || 0));
-      m.images = imagesArr;
-      m.step = `page_${nextPage}_done`;
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  const entry = {
+    page: nextPage,
+    path: finalPath,
+    prompt,
+    url,
+    file: finalName,
+    storageKey: pageStorageKey,
+  };
+  // ✅ salva a página no manifest (sem isso o progresso não anda e o PDF nunca sai)
+const idx = imagesArr.findIndex((it) => Number(it?.page || 0) === nextPage);
+if (idx >= 0) imagesArr[idx] = entry;
+else imagesArr.push(entry);
+m.images = imagesArr;
+        m.step = `page_${nextPage}_done`;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
       return res.json(buildProgress(m, `Página ${nextPage}/8 pronta ✅`));
     }
@@ -2449,13 +2472,27 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     const fp = path.join(bookDirOf(userId, id), file);
 
     // ✅ se não tiver no disco e for base, tenta Storage
-    if (!existsSyncSafe(fp)) {
-      const maybeKey =
-        (file === "edit_base.png" ? m.photo?.storageKey : "") ||
-        (file === "mask_base.png" ? m.mask?.storageKey : "") ||
-        "";
-      if (maybeKey) await ensureFileFromStorageIfMissing(fp, maybeKey);
-    }
+    // ✅ Se não existe no disco, tenta baixar do Storage (capa/páginas/bases)
+if (!existsSyncSafe(fp)) {
+  let key = "";
+
+  if (file === "edit_base.png") key = m.photo?.storageKey || "";
+  else if (file === "mask_base.png") key = m.mask?.storageKey || "";
+  else if (file === "cover_final.png") key = m.cover?.storageKey || "";
+
+  if (!key) {
+    const img = (m.images || []).find((it) => String(it?.file || "") === file);
+    key = img?.storageKey || "";
+  }
+
+  // fallback padrão se você seguir o padrão owner/book/file
+  if (!key) {
+    const owner = m.ownerId || userId;
+    key = `${owner}/${id}/${file}`;
+  }
+
+  if (key) await ensureFileFromStorageIfMissing(fp, key);
+}
 
     if (!existsSyncSafe(fp)) return res.status(404).send("not found");
 
