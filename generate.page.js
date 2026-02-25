@@ -1,6 +1,7 @@
 /**
  * generate.page.js — Página /generate (Step 4)
- * ✅ Serverless-safe: usa /api/generateNext em LOOP (1 passo por chamada).
+ * ✅ Serverless-safe: usa /api/generateNext em LOOP (1 passo por chamada)
+ * ✅ Robustez: credentials, redirect/login HTML, retry/backoff, não "morre" no 1º erro
  *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
@@ -277,6 +278,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
         <div class="rowBtns">
           <button class="btn btnGhost" id="btnRefresh">🔄 Atualizar status</button>
+          <button class="btn btnGhost" id="btnStop" disabled>⏸️ Parar</button>
           <button class="btn btnPrimary" id="btnStart">🚀 Iniciar geração</button>
         </div>
 
@@ -309,6 +311,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   const $ = (id) => document.getElementById(id);
 
   function getLS(key, def=""){ try{ return localStorage.getItem(key) ?? def; }catch{ return def; } }
+
   function setErr(msg){
     const el = $("errBox");
     el.textContent = msg || "";
@@ -317,17 +320,26 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   function loadClientState(){
     return {
-      bookId: getLS("bookId","").trim(),
-      childName: getLS("childName","").trim(),
+      bookId: (getLS("bookId","") || "").trim(),
+      childName: (getLS("childName","") || "").trim(),
       childAge: Number(getLS("childAge","6") || "6"),
-      childGender: getLS("childGender","neutral") || "neutral",
-      theme: getLS("theme","space") || "space",
-      style: getLS("style","read") || "read",
+      childGender: (getLS("childGender","neutral") || "neutral"),
+      theme: (getLS("theme","space") || "space"),
+      style: (getLS("style","read") || "read"),
     };
   }
 
   let running = false;
   let loopTimer = null;
+  let backoffMs = 900;
+
+  function setRunningUI(on){
+    running = !!on;
+    $("btnStart").disabled = on;
+    $("btnStop").disabled = !on;
+    if (on) $("btnStart").textContent = "⏳ Gerando...";
+    else $("btnStart").textContent = "🚀 Iniciar geração";
+  }
 
   function setUIFromProgress(p){
     const status = String(p?.status || "created");
@@ -349,8 +361,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const dot = $("dot");
     dot.className = "dot " + (status === "done" ? "good" : status === "failed" ? "bad" : "run");
 
-    if (err && status === "failed") setErr(err);
-    else if (!running) setErr("");
+    if (status === "failed" && err) setErr(err);
 
     // Preview básico
     const coverUrl = String(p?.coverUrl || "");
@@ -374,54 +385,88 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       $("pdfCard").style.display = "none";
     }
 
-    // Botão start
-    $("btnStart").disabled = running || status === "done";
-    $("btnStart").textContent = status === "done" ? "✅ Finalizado" : (running ? "⏳ Gerando..." : "🚀 Iniciar geração");
+    // Ajuste do botão start (se finalizou)
+    if (status === "done") {
+      $("btnStart").disabled = true;
+      $("btnStop").disabled = true;
+      $("btnStart").textContent = "✅ Finalizado";
+    }
+  }
+
+  async function readJsonOrText(resp){
+    const ct = (resp.headers.get("content-type") || "").toLowerCase();
+    const txt = await resp.text();
+    if (ct.includes("application/json")) {
+      try { return { kind:"json", data: JSON.parse(txt || "{}") }; } catch { return { kind:"json", data: {} }; }
+    }
+    return { kind:"text", data: txt };
+  }
+
+  function looksLikeLoginHtml(text){
+    const t = String(text || "").toLowerCase();
+    return t.includes("<title>login") || t.includes("entrar / criar conta") || t.includes("sb_token") || t.includes("supabase");
   }
 
   async function getProgress(bookId){
     const r = await fetch("/api/progress/" + encodeURIComponent(bookId), {
       method: "GET",
+      credentials: "include",
       headers: { "Accept": "application/json" }
     });
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao obter progresso");
+
+    const parsed = await readJsonOrText(r);
+
+    if (r.status === 401) throw new Error("Você não está logado (401). Faça login novamente.");
+    if (parsed.kind === "text" && looksLikeLoginHtml(parsed.data)) {
+      throw new Error("Sessão expirada. Você foi redirecionado para login. Abra /login e tente de novo.");
+    }
+
+    const j = parsed.kind === "json" ? parsed.data : {};
+    if (!r.ok || !j.ok) throw new Error(j.error || ("Falha ao obter progresso (HTTP " + r.status + ")"));
     return j;
   }
 
   async function doNextStep(payload){
     const r = await fetch("/api/generateNext", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify(payload || {})
     });
 
     // 409 = step já rodando, só esperar
     if (r.status === 409) {
-      const j = await r.json().catch(()=> ({}));
+      const parsed = await readJsonOrText(r);
+      const j = parsed.kind === "json" ? parsed.data : {};
       return { ok:true, retry:true, note: j?.error || "busy" };
     }
 
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || "Falha no generateNext");
+    const parsed = await readJsonOrText(r);
+
+    if (r.status === 401) throw new Error("Você não está logado (401). Faça login novamente.");
+    if (parsed.kind === "text" && looksLikeLoginHtml(parsed.data)) {
+      throw new Error("Sessão expirada. Você foi redirecionado para login. Abra /login e tente de novo.");
+    }
+
+    const j = parsed.kind === "json" ? parsed.data : null;
+    if (!r.ok || !j || !j.ok) {
+      const msg = (j && j.error) ? j.error : ("Falha no generateNext (HTTP " + r.status + ")");
+      throw new Error(msg);
+    }
     return { ok:true, data:j };
   }
 
-  function stopLoop(){
-    running = false;
+  function stopLoop(userAction=false){
     if (loopTimer) clearTimeout(loopTimer);
     loopTimer = null;
-    $("btnStart").disabled = false;
-    $("btnStart").textContent = "🚀 Iniciar geração";
+    setRunningUI(false);
+    backoffMs = 900;
+    if (userAction) setErr("Pausado pelo usuário.");
   }
 
   async function loopGenerate(){
     const st = loadClientState();
     if (!st.bookId) { window.location.href = "/create"; return; }
-
-    running = true;
-    $("btnStart").disabled = true;
-    $("btnStart").textContent = "⏳ Gerando...";
 
     const payload = {
       id: st.bookId,
@@ -433,33 +478,54 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     };
 
     try{
-      // chama 1 passo
+      // 1 passo
       const r = await doNextStep(payload);
+
+      if (!running) return; // se o usuário clicou "parar" durante await
+
       if (r.retry){
-        // aguarda e tenta novamente
+        // busy: só aguarda e tenta de novo, sem aumentar backoff
         const p = await getProgress(st.bookId).catch(()=>null);
         if (p) setUIFromProgress(p);
-        loopTimer = setTimeout(loopGenerate, 1200);
+        loopTimer = setTimeout(loopGenerate, 1100);
         return;
       }
 
-      // atualiza UI com retorno do passo
       const data = r.data;
       setUIFromProgress(data);
+      setErr("");
 
       if (data.status === "done" || data.status === "failed"){
-        running = false;
-        $("btnStart").disabled = (data.status === "done");
-        $("btnStart").textContent = (data.status === "done") ? "✅ Finalizado" : "🚀 Iniciar geração";
+        stopLoop(false);
+        // se done, UI já fica "Finalizado"
         return;
       }
 
-      // próximo passo
+      // reset backoff quando tudo ok
+      backoffMs = 900;
       loopTimer = setTimeout(loopGenerate, 900);
     }catch(e){
-      // mostra erro e para
-      setErr(String(e?.message || e || "Erro"));
-      stopLoop();
+      // Não mata a geração pra sempre: mostra erro e tenta novamente com backoff
+      const msg = String(e?.message || e || "Erro");
+      setErr(msg);
+
+      if (!running) return;
+
+      // aumenta backoff até 6s
+      backoffMs = Math.min(6000, Math.round(backoffMs * 1.35));
+
+      // tenta atualizar status (se der, atualiza UI)
+      const st2 = loadClientState();
+      const p = await getProgress(st2.bookId).catch(()=>null);
+      if (p) setUIFromProgress(p);
+
+      // se status veio failed/done, para
+      if (p && (p.status === "done" || p.status === "failed")) {
+        stopLoop(false);
+        return;
+      }
+
+      loopTimer = setTimeout(loopGenerate, backoffMs);
     }
   }
 
@@ -469,6 +535,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     try{
       const p = await getProgress(st.bookId);
       setUIFromProgress(p);
+      // limpa erro se não falhou
+      if (p.status !== "failed") setErr("");
     }catch(e){
       setErr(String(e?.message || e || "Erro"));
     }
@@ -479,13 +547,23 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   $("btnStart").onclick = async () => {
     setErr("");
     await refreshUI();
+    const st = loadClientState();
+    if (!st.bookId) return;
+
+    // não dispara se já finalizou
+    const cur = await getProgress(st.bookId).catch(()=>null);
+    if (cur && (cur.status === "done")) {
+      setUIFromProgress(cur);
+      return;
+    }
+
+    setRunningUI(true);
     loopGenerate();
   };
 
-  $("btnBackTop").onclick = () => {
-    // volta pra etapa anterior (create)
-    window.location.href = "/create";
-  };
+  $("btnStop").onclick = () => stopLoop(true);
+
+  $("btnBackTop").onclick = () => { window.location.href = "/create"; };
 
   $("btnReset").onclick = () => {
     try{ localStorage.clear(); }catch{}
@@ -497,9 +575,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const st = loadClientState();
     if (!st.bookId) { window.location.href = "/create"; return; }
     await refreshUI();
-
-    // se já estava gerando antes e recarregou a página, você pode auto-retomar:
-    // (aqui eu NÃO retomo automaticamente pra não gerar sem querer)
+    // não auto-retoma por segurança
   })();
 </script>
 </body>
