@@ -362,6 +362,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     dot.className = "dot " + (status === "done" ? "good" : status === "failed" ? "bad" : "run");
 
     if (status === "failed" && err) setErr(err);
+    if (status !== "failed") setErr("");
 
     // Preview básico
     const coverUrl = String(p?.coverUrl || "");
@@ -501,9 +502,15 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         return;
       }
 
-      // reset backoff quando tudo ok
+           // reset backoff quando tudo ok
       backoffMs = 900;
-      loopTimer = setTimeout(loopGenerate, 900);
+
+      // ✅ Se está em modo "wait" (Replicate pendente), aguarda um pouco mais
+      const step = String(data?.step || "");
+      const msg  = String(data?.message || "");
+      const isWait = step.includes("_wait") || msg.includes("processando") || msg.includes("⏳");
+
+      loopTimer = setTimeout(loopGenerate, isWait ? 1500 : 900);
     }catch(e){
       // Não mata a geração pra sempre: mostra erro e tenta novamente com backoff
       const msg = String(e?.message || e || "Erro");

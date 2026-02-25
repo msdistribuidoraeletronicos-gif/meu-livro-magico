@@ -630,14 +630,59 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
+// -------------------- Replicate NON-BLOCKING helpers (Vercel-safe) --------------------
+
+function extractReplicateOutputUrl(pred) {
+  let url = "";
+  if (typeof pred?.output === "string") url = pred.output;
+  else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
+  return url;
+}
 
 /**
- * IMAGEM SEQUENCIAL (principal)
- * - Replicate se token configurado
- * - Senão: fallback OpenAI /v1/images/edits
- * - Retorna Buffer PNG
+ * Start or poll a Replicate prediction WITHOUT waiting.
+ * - If predictionId is empty: create and return { pending:true, id }
+ * - If predictionId exists: fetch once and:
+ *    - succeeded -> { pending:false, done:true, url }
+ *    - processing/starting -> { pending:true, id }
+ *    - failed/canceled -> throws
  */
-async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
+async function replicateStartOrPollOnce({ model, input, predictionId }) {
+  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
+
+  if (!predictionId) {
+    const created = await replicateCreatePrediction({ model, input, timeoutMs: 120000 });
+    const id = String(created?.id || "");
+    if (!id) throw new Error("Replicate não retornou prediction id.");
+    return { pending: true, id };
+  }
+
+  const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+    method: "GET",
+    timeoutMs: 60000,
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+  });
+
+  const st = String(pred?.status || "");
+  if (st === "succeeded") {
+    const url = extractReplicateOutputUrl(pred);
+    if (!url) throw new Error("Replicate succeeded mas não retornou URL em output.");
+    return { pending: false, done: true, url };
+  }
+  if (st === "failed" || st === "canceled") {
+    throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
+  }
+
+  return { pending: true, id: String(predictionId) };
+}
+
+async function openaiImageEditFromReference({
+  imagePngPath,
+  maskPngPath,
+  prompt,
+  size = "1024x1024",
+  replicatePredictionId = "",
+}) {
   if (REPLICATE_API_TOKEN) {
     const imgBuf = await fsp.readFile(imagePngPath);
 
@@ -650,25 +695,26 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
       safety_filter_level: REPLICATE_SAFETY || "block_only_high",
     };
 
-    const created = await replicateCreatePrediction({
+    // ✅ não espera: 1 chamada = start OU poll 1x
+    const r = await replicateStartOrPollOnce({
       model: REPLICATE_MODEL || "google/nano-banana-pro",
       input,
-      timeoutMs: 120000,
+      predictionId: replicatePredictionId || "",
     });
 
-    const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+    if (r.pending) {
+      return { pending: true, predictionId: r.id };
+    }
 
-    let url = "";
-    if (typeof pred?.output === "string") url = pred.output;
-    else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
-
-    if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
-
-    const buf = await downloadToBuffer(url, 240000);
-    return await sharp(buf).png().toBuffer();
+    // done
+    const buf = await downloadToBuffer(r.url, 240000);
+    const png = await sharp(buf).png().toBuffer();
+    return { pending: false, buffer: png };
   }
 
-  return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
+  // OpenAI fallback (blocking)
+  const buf = await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
+  return { pending: false, buffer: buf };
 }
 
 /* -------------------- Story + prompts -------------------- */
@@ -1029,15 +1075,15 @@ async function saveManifest(userId, bookId, manifest) {
 }
 
 function makeEmptyManifest(id, ownerId) {
-  return {
+ return {
     id,
     ownerId: String(ownerId || ""),
     createdAt: nowISO(),
-    status: "created", // created | generating | done | failed
+    status: "created",
     step: "created",
     error: "",
     theme: "",
-    style: "read", // read | color
+    style: "read",
     child: { name: "", age: 6, gender: "neutral" },
     photo: { ok: false, file: "", mime: "", editBase: "", storageKey: "" },
     mask: { ok: false, file: "", editBase: "", storageKey: "" },
@@ -1045,6 +1091,7 @@ function makeEmptyManifest(id, ownerId) {
     images: [],
     cover: { ok: false, file: "", url: "" },
     pdf: "",
+    pending: null, // ✅ ADD
     updatedAt: nowISO(),
   };
 }
@@ -2003,7 +2050,10 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
-
+function ensurePendingShape(m) {
+  if (!m.pending || typeof m.pending !== "object") m.pending = {};
+  return m.pending;
+}
 /**
  * ✅ /api/generateNext — 1 passo por request
  * CORREÇÃO: define imagePngPath (antes não existia) e faz fallback do Storage quando disco não tem.
@@ -2150,16 +2200,33 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         styleKey: m.style,
       });
 
-      const coverBuf = await openaiImageEditFromReference({
+          const pend = ensurePendingShape(m);
+
+      const coverGen = await openaiImageEditFromReference({
         imagePngPath,
         maskPngPath,
         prompt: coverPrompt,
         size: "1024x1024",
+        replicatePredictionId: pend.coverPredictionId || "",
       });
 
+      // ✅ Se estiver pendente (Replicate processando), salva o id e retorna
+      if (coverGen && coverGen.pending) {
+        pend.coverPredictionId = String(coverGen.predictionId || "");
+        m.pending = pend;
+        m.step = "cover_wait";
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        return res.json(buildProgress(m, "Capa em processamento… ⏳"));
+      }
+
+      // ✅ Done: limpa pending e usa o buffer
+      pend.coverPredictionId = "";
+      m.pending = pend;
+
+      const coverBuf = coverGen.buffer; // Buffer
       const coverBase = path.join(bookDir, "cover.png");
       await fsp.writeFile(coverBase, coverBuf);
-
       await stampCoverTextOnImage({
         inputPath: coverBase,
         outputPath: coverFinalPath,
@@ -2207,13 +2274,32 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         styleKey: m.style,
       });
 
-      const imgBuf = await openaiImageEditFromReference({
+            const pend = ensurePendingShape(m);
+      const pagePendKey = `pagePredictionId_${String(nextPage)}`;
+
+      const pageGen = await openaiImageEditFromReference({
         imagePngPath,
         maskPngPath,
         prompt,
         size: "1024x1024",
+        replicatePredictionId: pend[pagePendKey] || "",
       });
 
+      // ✅ Se estiver pendente, salva id dessa página e retorna
+      if (pageGen && pageGen.pending) {
+        pend[pagePendKey] = String(pageGen.predictionId || "");
+        m.pending = pend;
+        m.step = `page_${nextPage}_wait`;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        return res.json(buildProgress(m, `Página ${nextPage}/8 em processamento… ⏳`));
+      }
+
+      // ✅ Done: limpa pending da página e usa buffer
+      pend[pagePendKey] = "";
+      m.pending = pend;
+
+      const imgBuf = pageGen.buffer; // Buffer
       const pageKey = String(nextPage).padStart(2, "0");
       const basePath = path.join(bookDir, `page_${pageKey}.png`);
       await fsp.writeFile(basePath, imgBuf);
@@ -2292,7 +2378,40 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     jobs.set(jobKey, { running: false });
   }
 });
+async function getImageBufferBlocking({ imagePngPath, maskPngPath, prompt, size, pendingKeyObj, pendingKeyName }) {
+  // Usa a mesma função não-bloqueante, mas aqui (runGeneration) nós PODEMOS esperar.
+  // Se estiver pendente, faz poll até concluir.
 
+  let predictionId = "";
+  if (pendingKeyObj && pendingKeyName) {
+    predictionId = String(pendingKeyObj[pendingKeyName] || "");
+  }
+
+  while (true) {
+    const r = await openaiImageEditFromReference({
+      imagePngPath,
+      maskPngPath,
+      prompt,
+      size,
+      replicatePredictionId: predictionId,
+    });
+
+    // OpenAI fallback: pode retornar {pending:false, buffer}
+    if (r && r.pending === false && r.buffer) return r.buffer;
+
+    // Replicate pendente
+    if (r && r.pending) {
+      predictionId = String(r.predictionId || "");
+      if (pendingKeyObj && pendingKeyName) pendingKeyObj[pendingKeyName] = predictionId;
+
+      // Espera um pouco antes de tentar de novo
+      await new Promise((res) => setTimeout(res, 1500));
+      continue;
+    }
+
+    throw new Error("Falha inesperada: geração de imagem não retornou buffer.");
+  }
+}
 /* -------------------- runGeneration (full sequential) -------------------- */
 
 async function runGeneration(userId, bookId) {
@@ -2355,12 +2474,16 @@ async function runGeneration(userId, bookId) {
       styleKey,
     });
 
-    const coverBuf = await openaiImageEditFromReference({
-      imagePngPath,
-      maskPngPath,
-      prompt: coverPrompt,
-      size: "1024x1024",
-    });
+    const pend = ensurePendingShape(m);
+const coverBuf = await getImageBufferBlocking({
+  imagePngPath,
+  maskPngPath,
+  prompt: coverPrompt,
+  size: "1024x1024",
+  pendingKeyObj: pend,
+  pendingKeyName: "coverPredictionId",
+});
+m.pending = pend;
 
     const coverBase = path.join(bookDir, "cover.png");
     await fsp.writeFile(coverBase, coverBuf);
@@ -2395,12 +2518,17 @@ async function runGeneration(userId, bookId) {
         styleKey,
       });
 
-      const imgBuf = await openaiImageEditFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt,
-        size: "1024x1024",
-      });
+      const pend = ensurePendingShape(m);
+const key = `pagePredictionId_${String(p.page)}`;
+const imgBuf = await getImageBufferBlocking({
+  imagePngPath,
+  maskPngPath,
+  prompt,
+  size: "1024x1024",
+  pendingKeyObj: pend,
+  pendingKeyName: key,
+});
+m.pending = pend;
 
       const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
       await fsp.writeFile(basePath, imgBuf);
