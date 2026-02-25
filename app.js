@@ -43,15 +43,6 @@ try {
 process.on("uncaughtException", (e) => bootFail("uncaughtException", e));
 process.on("unhandledRejection", (e) => bootFail("unhandledRejection", e));
 
-const fs = require("fs");
-const fsp = require("fs/promises");
-const path = require("path");
-const crypto = require("crypto");
-const express = require("express");
-const PDFDocument = require("pdfkit");
-const sharp = require("sharp");
-const { createClient } = require("@supabase/supabase-js");
-const os = require("os");
 
 (function loadEnv() {
   let dotenv = null;
