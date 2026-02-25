@@ -704,23 +704,37 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
       }
 
       const ctrl = new AbortController();
-const t = setTimeout(() => ctrl.abort(), 180000); // 3 min
+      const t = setTimeout(() => ctrl.abort(), 180000); // 3 min
 
-let r;
-} catch (e) {
-  const msg = String(e?.message || e);
-  throw new Error(`openai image edit fetch failed: ${msg}`);
-} finally {
-  clearTimeout(t);
-}
+      try {
+        netMark("openai:images:edits", "https://api.openai.com/v1/images/edits", `model=${model}`);
 
-      const text = await r.text();
-      if (!r.ok) throw new Error(`OpenAI Images HTTP ${r.status}: ${text.slice(0, 2000)}`);
+        const r = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+          body: form,
+          signal: ctrl.signal,
+        });
 
-      const data = JSON.parse(text);
-      const outB64 = data?.data?.[0]?.b64_json;
-      if (!outB64) throw new Error("Não retornou b64_json.");
-      return Buffer.from(outB64, "base64");
+        const text = await r.text();
+        if (!r.ok) {
+          const err = new Error(`OpenAI Images HTTP ${r.status}: ${text.slice(0, 2000)}`);
+          netFail("openai:images:edits", "https://api.openai.com/v1/images/edits", err);
+          throw err;
+        }
+
+        const data = JSON.parse(text);
+        const outB64 = data?.data?.[0]?.b64_json;
+        if (!outB64) throw new Error("Não retornou b64_json.");
+        return Buffer.from(outB64, "base64");
+      } catch (e) {
+        const msg = String(e?.message || e);
+        const err = new Error(`openai image edit fetch failed: ${msg}`);
+        netFail("openai:images:edits", "https://api.openai.com/v1/images/edits", err);
+        throw err;
+      } finally {
+        clearTimeout(t);
+      }
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message || e || "");
@@ -729,6 +743,8 @@ let r;
     }
   }
 
+  throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
+}
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
 
