@@ -1359,7 +1359,19 @@ app.get("/api/debug-fs", (req, res) => {
     },
   });
 });
-
+app.get("/api/debug-supabase", (req, res) => {
+  const anon = (SUPABASE_ANON_KEY || "");
+  const svc = (SUPABASE_SERVICE_ROLE_KEY || "");
+  res.json({
+    ok: true,
+    hasUrl: !!SUPABASE_URL,
+    anon: { present: !!anon, prefix: anon.slice(0, 14), len: anon.length },
+    service: { present: !!svc, prefix: svc.slice(0, 14), len: svc.length },
+    hasAnonClient: !!supabaseAnon,
+    hasAdminClient: !!supabaseAdmin,
+    vercel: !!process.env.VERCEL,
+  });
+});
 /* -------------------- Mount extra pages/modules -------------------- */
 try {
   const mountBooks = require("./books"); // ./books/index.js
