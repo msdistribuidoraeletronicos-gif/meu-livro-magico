@@ -221,20 +221,43 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     }
   }
 
-  async function fetchJsonLogged(url, opts){
-    const o = opts || {};
-    o.credentials = "include";
-    o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
-    addLog("→ " + (o.method || "GET") + " " + url);
+async function fetchJsonLogged(url, opts){
+  const o = opts || {};
+  o.credentials = "include";
+  o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
+  addLog("→ " + (o.method || "GET") + " " + url);
 
-    const r = await fetch(url, o);
-    const text = await r.text();
-    let j = null;
-    try { j = JSON.parse(text); } catch {}
+  const r = await fetch(url, o);
 
-    addLog("← HTTP " + r.status + " " + url + " | body: " + (text ? text.slice(0, 700) : "(vazio)"));
-    return { status: r.status, ok: r.ok, json: (j || {}), raw: text };
+  // ✅ Se o backend redirecionar (ex.: para /login), siga o redirect no navegador
+  if (r.redirected) {
+    addLog("↪ redirected to: " + r.url);
+    window.location.href = r.url;
+    return { status: r.status, ok: false, json: { ok:false, error:"redirected" }, raw: "" };
   }
+
+  // ✅ Se não está logado, manda pro login preservando next
+  if (r.status === 401) {
+    const next = encodeURIComponent(location.pathname + location.search);
+    addLog("↪ 401 not_logged_in -> /login?next=" + next);
+    window.location.href = "/login?next=" + next;
+    return { status: 401, ok: false, json: { ok:false, error:"not_logged_in" }, raw: "" };
+  }
+
+  const ct = String(r.headers.get("content-type") || "");
+  const text = await r.text();
+
+  let j = {};
+  if (ct.includes("application/json")) {
+    try { j = JSON.parse(text || "{}"); } catch { j = {}; }
+  } else {
+    // veio HTML/texto (ex.: erro do proxy, página de login, etc)
+    j = { ok:false, error: "non_json_response" };
+  }
+
+  addLog("← HTTP " + r.status + " " + url + " | ct: " + ct + " | body: " + (text ? text.slice(0, 700) : "(vazio)"));
+  return { status: r.status, ok: r.ok, json: j, raw: text };
+}
 
   function isHighDemandError(msg){
     const s = String(msg || "");
@@ -261,6 +284,9 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       headers:{ "Content-Type":"application/json" },
       body: JSON.stringify(payload || {})
     });
+    if (r.status === 401) {
+  return { ok:false, error:"not_logged_in" };
+}
 
     if (r.status === 409) {
       return { ok:false, _busy:true, error:(r.json && r.json.error) ? r.json.error : "busy" };
