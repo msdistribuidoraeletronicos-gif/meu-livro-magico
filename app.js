@@ -13,6 +13,36 @@
  */
 "use strict";
 
+let BOOT_ERROR = "";
+
+function bootFail(where, e) {
+  const msg = `[BOOT] ${where}: ${String(e?.message || e)}\n${String(e?.stack || "")}`;
+  console.error(msg);
+  BOOT_ERROR = msg.slice(0, 4000);
+}
+
+let fs, fsp, path, crypto, express, PDFDocument, sharp, createClient, os;
+
+try { fs = require("fs"); } catch (e) { bootFail("require fs", e); }
+try { fsp = require("fs/promises"); } catch (e) { bootFail("require fs/promises", e); }
+try { path = require("path"); } catch (e) { bootFail("require path", e); }
+try { crypto = require("crypto"); } catch (e) { bootFail("require crypto", e); }
+try { os = require("os"); } catch (e) { bootFail("require os", e); }
+
+try { express = require("express"); } catch (e) { bootFail("require express", e); }
+try { PDFDocument = require("pdfkit"); } catch (e) { bootFail("require pdfkit", e); }
+try { sharp = require("sharp"); } catch (e) { bootFail("require sharp", e); }
+
+try {
+  ({ createClient } = require("@supabase/supabase-js"));
+} catch (e) {
+  bootFail("require @supabase/supabase-js", e);
+}
+
+// evita crash “mudo”:
+process.on("uncaughtException", (e) => bootFail("uncaughtException", e));
+process.on("unhandledRejection", (e) => bootFail("unhandledRejection", e));
+
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
@@ -745,9 +775,6 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
-  throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
-}
-
 /**
  * IMAGEM SEQUENCIAL (principal)
  * - Replicate se token configurado
@@ -1392,7 +1419,14 @@ async function ensureFileFromStorageIfMissing(localPath, storageKey) {
 
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
-
+app.get("/api/boot", (req, res) => {
+  res.status(BOOT_ERROR ? 500 : 200).json({
+    ok: !BOOT_ERROR,
+    boot_error: BOOT_ERROR || "",
+    node: process.version,
+    vercel: !!process.env.VERCEL,
+  });
+});
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
 // ✅ DEBUG: confirma se admin.page.js existe e se o Node consegue resolver/require no runtime (Vercel)
 app.get("/api/debug-fs", (req, res) => {
