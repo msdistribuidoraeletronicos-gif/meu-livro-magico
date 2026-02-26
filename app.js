@@ -2621,21 +2621,35 @@ if (!m.cover?.ok) {
     return res.json(await buildProgress(m));
   }
 
-  if (st === "failed" || st === "canceled") {
-    const err = String(pred?.error || "Prediction falhou no Replicate.");
-    if (isHighDemandError(err)) {
-      return res.json(await buildProgress(m, { error: err, nextTryAt: Date.now() + 6000, pending: m.pending }));
-    }
+if (st === "failed" || st === "canceled") {
+  const err = String(pred?.error || "Prediction falhou no Replicate.");
 
-    m.status = "failed";
-    m.step = "failed";
+  // ✅ HIGH DEMAND (E003): prediction morreu. ZERA pending para recriar outro pid depois.
+  if (isHighDemandError(err)) {
+    m.status = "generating";
+    m.step = `page_${nextPage}`;
     m.error = err;
-    m.pending = null;
+    m.pending = null;              // 🔥 ESSENCIAL
     m.updatedAt = nowISO();
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-    return res.json(await buildProgress(m));
+    return res.json(await buildProgress(m, {
+      error: err,
+      nextTryAt: Date.now() + 20000, // 20s
+      pending: null,
+      replicateStatus: st,
+    }));
   }
+
+  m.status = "failed";
+  m.step = "failed";
+  m.error = err;
+  m.pending = null;
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  return res.json(await buildProgress(m));
+}
 
   // ainda processando
   return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000, pending: m.pending, replicateStatus: st }));
