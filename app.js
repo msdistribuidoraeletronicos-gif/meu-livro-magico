@@ -725,8 +725,20 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 }
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
-async function replicateCreateImageJob({ prompt, imageDataUrl }) {
+// ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
+// Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
+async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "" }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
+
+  const ref = String(imageUrl || imageDataUrl || "").trim();
+  if (!ref) throw new Error("Replicate: referência de imagem ausente (imageUrl/imageDataUrl).");
+
+  // Aceita URL http/https OU dataURL
+  const isHttp = ref.startsWith("http://") || ref.startsWith("https://");
+  const isData = ref.startsWith("data:");
+  if (!isHttp && !isData) {
+    throw new Error("Replicate: referência inválida. Use http(s) URL ou dataURL.");
+  }
 
   const input = {
     prompt,
@@ -734,8 +746,10 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     output_format: REPLICATE_OUTPUT_FORMAT || "png",
   };
 
-  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imageDataUrl];
-  else input[REPLICATE_IMAGE_FIELD] = imageDataUrl;
+  // ✅ Campo de imagem configurável (image vs image_input etc.)
+  // ✅ Pode ser URL (preferível) ou dataURL (quando precisar)
+  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [ref];
+  else input[REPLICATE_IMAGE_FIELD] = ref;
 
   const created = await replicateCreatePrediction({
     model: REPLICATE_MODEL || "google/nano-banana-pro",
@@ -747,7 +761,6 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
   if (!pid) throw new Error("Replicate não retornou prediction id.");
   return pid;
 }
-
 async function replicatePollOnce(predictionId) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
   const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
@@ -1469,6 +1482,19 @@ async function sbSignedUrl(pathKey, expiresSec = 60 * 10) {
     return "";
   }
 }
+async function getReferenceImageUrlForReplicate(manifest, userId, bookId) {
+  const key =
+    manifest?.photo?.storageKey ||
+    `${manifest?.ownerId || userId}/${bookId}/edit_base.png`;
+
+  const signed = await sbSignedUrl(key, 60 * 30); // 30 min
+  if (signed) return signed;
+
+  const pub = sbPublicUrl(key);
+  if (pub) return pub;
+
+  throw new Error("Não consegui gerar URL da imagem de referência (Storage).");
+}
 async function ensureFileFromStorageIfMissing(localPath, storageKey) {
   if (existsSyncSafe(localPath)) return true;
   if (!storageKey) return false;
@@ -1993,9 +2019,8 @@ async function apiUploadPhotoAndMask(){
   }
   return true;
 }
-function canGenerateWhy(){if(!state.photo) return "Envie a foto primeiro.";if(!state.mask) return "Mask não gerou. Reenvie a foto.";if(!state.childName||state.childName.trim().length<2) return "Digite o nome (mínimo 2 letras).";
-if(!state.consent) return "Marque a autorização para continuar.";if(!state.theme) return "Selecione um tema.";if(!state.style) return "Selecione o estilo do livro.";return "";}
 async function goToGenerateStep4(){
+
   setHint($("hintGen"),"");const why=canGenerateWhy();if(why){setHint($("hintGen"),why);return;}
   await ensureBook(); await apiUploadPhotoAndMask();
   localStorage.setItem("childName",state.childName.trim());
@@ -2004,6 +2029,21 @@ async function goToGenerateStep4(){
   localStorage.setItem("theme",state.theme);
   localStorage.setItem("style",state.style);
   localStorage.setItem("consent",state.consent?"1":"0");
+    // ✅ grava no BACKEND também (manifest)
+  const rMeta = await fetch("/api/setMeta", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({
+      id: state.bookId,
+      childName: state.childName.trim(),
+      childAge: state.childAge,
+      childGender: state.childGender,
+      theme: state.theme,
+      style: state.style
+    })
+  });
+  const jMeta = await rMeta.json().catch(()=>({}));
+  if(!rMeta.ok || !jMeta.ok) throw new Error(jMeta.error || "Falha ao salvar dados (setMeta)");
   window.location.href="/generate";
 }
 const drop=$("drop");const file=$("file");
@@ -2180,7 +2220,45 @@ if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+app.post("/api/setMeta", async (req, res) => {
+  try {
+    const user = await requireAuthApi(req, res);
+    if (!user) return;
 
+    const id =
+      String(req.body?.id || "").trim() ||
+      String(req.query?.id || "").trim() ||
+      String(req.params?.id || "").trim();
+
+    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+
+    const childName = String(req.body?.childName || "").trim();
+    const childAge = Number(req.body?.childAge || 6);
+    const childGender = String(req.body?.childGender || "neutral").trim();
+    const theme = String(req.body?.theme || "").trim();
+    const style = String(req.body?.style || "read").trim();
+
+    if (!childName || childName.length < 2) return res.status(400).json({ ok: false, error: "Nome inválido." });
+    if (!theme) return res.status(400).json({ ok: false, error: "Tema ausente." });
+    if (!style) return res.status(400).json({ ok: false, error: "Estilo ausente." });
+
+    const m = await loadManifestAll(user.id, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+    if (!canAccessBook(user.id, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    // ✅ grava no manifest (isso era o que faltava)
+    m.child = { name: childName, age: clamp(childAge, 2, 12), gender: childGender || "neutral" };
+    m.theme = theme;
+    m.style = style;
+
+    m.updatedAt = nowISO();
+    await saveManifestAll(user.id, id, m, { sbUser: req.sb });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
 app.get("/api/status/:id", requireAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
@@ -2323,7 +2401,22 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
   }
 });
 
+function isStoryReady(manifest, pagesCount = 8) {
+  const pages = manifest?.pages;
+  if (!Array.isArray(pages) || pages.length < pagesCount) return false;
 
+  // garante que tem texto e título de verdade
+  for (let i = 0; i < pagesCount; i++) {
+    const p = pages[i];
+    const title = String(p?.title || "").trim();
+    const text = String(p?.text || "").trim();
+
+    // texto muito curto geralmente é placeholder/vazio
+    if (title.length < 2) return false;
+    if (text.length < 20) return false;
+  }
+  return true;
+}
 // ========================= FIX: /api/generateNext (1 passo por request) =========================
 async function handleGenerateNext(req, res) {
   const user = await requireAuthApi(req, res);
@@ -2364,28 +2457,30 @@ async function handleGenerateNext(req, res) {
     if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
     // ---------------- STORY ----------------
-    if (!Array.isArray(m.pages) || m.pages.length < 8) {
-      m.status = "generating";
-      m.step = "story";
-      m.error = "";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    // ---------------- STORY ----------------
+// ✅ NÃO basta ter 8 itens: precisa ter title/text válidos
+if (!isStoryReady(m, 8)) {
+  m.status = "generating";
+  m.step = "story";
+  m.error = "";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const pages = await generateStoryTextPages({
-        childName: m.child?.name,
-        childAge: m.child?.age,
-        childGender: m.child?.gender,
-        themeKey: m.theme,
-        pagesCount: 8,
-      });
+  const pages = await generateStoryTextPages({
+    childName: m.child?.name,
+    childAge: m.child?.age,
+    childGender: m.child?.gender,
+    themeKey: m.theme,
+    pagesCount: 8,
+  });
 
-      m.pages = pages;
-      m.step = "cover";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  m.pages = pages;
+  m.step = "cover";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      return res.json({ ok: true, step: "story_done" });
-    }
+  return res.json({ ok: true, step: "story_done" });
+}
 
     // ---------------- COVER ----------------
     if (!m.cover?.ok) {
@@ -2406,9 +2501,8 @@ async function handleGenerateNext(req, res) {
           styleKey: m.style || "read",
         });
 
-        const imgBuf = await fsp.readFile(imagePngPath);
-        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: bufferToDataUrlPng(imgBuf) });
-
+       const refUrl = await getReferenceImageUrlForReplicate(m, userId, id);
+const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
         m.pending = { kind: "cover", pid, createdAt: nowISO() };
         await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
@@ -2416,6 +2510,15 @@ async function handleGenerateNext(req, res) {
       }
 
       const pred = await replicatePollOnce(m.pending.pid);
+      if (pred?.status === "failed" || pred?.status === "canceled") {
+  m.status = "failed";
+  m.step = "failed";
+  m.error = String(pred?.error || "Replicate falhou ao gerar a capa.");
+  m.pending = null;
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  return res.status(500).json({ ok: false, error: m.error });
+}
       if (pred?.status === "succeeded") {
      const buf = await pngBufferFromReplicateOutput(pred.output);
 
@@ -2451,25 +2554,38 @@ async function handleGenerateNext(req, res) {
 
     if (nextPage <= 8) {
       const pageObj = m.pages.find(p => p.page === nextPage);
+if (!pageObj || !pageObj.text) {
+  throw new Error(`Página ${nextPage} não encontrada no manifest (pages). Refaça a história.`);
+}
+    if (!m.pending) {
+  const prompt = buildScenePromptFromParagraph({
+    paragraphText: pageObj.text,
+    themeKey: m.theme,
+    childName: m.child?.name,
+    styleKey: m.style || "read",
+  });
 
-      if (!m.pending) {
-        const prompt = buildScenePromptFromParagraph({
-          paragraphText: pageObj.text,
-          themeKey: m.theme,
-          childName: m.child?.name,
-          styleKey: m.style || "read",
-        });
+  // ✅ SEMPRE usar a imagem base do usuário via Storage (URL assinada)
+  // Isso garante que a geração NÃO venha aleatória.
+  const refUrl = await getReferenceImageUrlForReplicate(m, userId, id);
 
-        const imgBuf = await fsp.readFile(imagePngPath);
-        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: bufferToDataUrlPng(imgBuf) });
+  const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
 
-        m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-        return res.json({ ok: true, pending: m.pending });
-      }
-
+  return res.json({ ok: true, pending: m.pending });
+}
       const pred = await replicatePollOnce(m.pending.pid);
+      if (pred?.status === "failed" || pred?.status === "canceled") {
+  m.status = "failed";
+  m.step = "failed";
+  m.error = String(pred?.error || `Replicate falhou na página ${m.pending?.page || "?"}.`);
+  m.pending = null;
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  return res.status(500).json({ ok: false, error: m.error });
+}
       if (pred?.status === "succeeded") {
       const buf = await pngBufferFromReplicateOutput(pred.output);
 
