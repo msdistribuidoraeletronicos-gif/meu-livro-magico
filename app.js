@@ -698,7 +698,80 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
 
   throw lastErr || new Error("Replicate: falha ao criar prediction.");
 }
+async function replicateGetLatestVersion(model) {
+  const parsed = splitReplicateModel(model);
+  if (!parsed) throw new Error(`REPLICATE_MODEL inválido: "${model}" (use owner/name)`);
 
+  const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
+    method: "GET",
+    timeoutMs: 60000,
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+  });
+
+  const latest = info?.latest_version;
+  if (!latest) throw new Error(`Não achei latest_version no modelo "${model}"`);
+  return latest; // geralmente tem id + openapi_schema
+}
+
+function guessImageFieldFromSchema(openapiSchema) {
+  // tenta achar um campo de input que pareça “imagem”
+  const props =
+    openapiSchema?.components?.schemas?.Input?.properties ||
+    openapiSchema?.components?.schemas?.PredictionInput?.properties ||
+    openapiSchema?.components?.schemas?.ModelInput?.properties ||
+    null;
+
+  if (!props || typeof props !== "object") return "";
+
+  const keys = Object.keys(props);
+
+  // prioridade por nomes comuns
+  const preferred = [
+    "image",
+    "input_image",
+    "image_input",
+    "init_image",
+    "reference_image",
+    "ref_image",
+    "subject_image",
+    "face_image",
+  ];
+
+  for (const k of preferred) {
+    if (keys.includes(k)) return k;
+  }
+
+  // fallback: qualquer campo que tenha formato uri/base64 e nome contendo "image"
+  for (const k of keys) {
+    const def = props[k] || {};
+    const name = String(k).toLowerCase();
+    const format = String(def.format || "").toLowerCase();
+    const type = def.type;
+
+    const looksLikeImage =
+      name.includes("image") ||
+      name.includes("img") ||
+      format.includes("uri") ||
+      format.includes("base64");
+
+    if (looksLikeImage && (type === "string" || type === "array")) return k;
+  }
+
+  return "";
+}
+
+async function resolveReplicateImageField(model) {
+  // Se você configurou manualmente, respeita.
+  if (String(process.env.REPLICATE_IMAGE_FIELD || "").trim()) return String(process.env.REPLICATE_IMAGE_FIELD).trim();
+
+  // senão, tenta descobrir pelo schema
+  const latest = await replicateGetLatestVersion(model);
+  const schema = latest?.openapi_schema;
+  const auto = guessImageFieldFromSchema(schema);
+
+  // fallback final (mantém seu default antigo)
+  return auto || "image";
+}
 async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollMs = 1200 } = {}) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
 
@@ -740,19 +813,29 @@ async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "
     throw new Error("Replicate: referência inválida. Use http(s) URL ou dataURL.");
   }
 
+  const model = REPLICATE_MODEL || "google/nano-banana-pro";
+
+  // ✅ descobre o campo correto para imagem baseado no schema do modelo
+  const imageField = await resolveReplicateImageField(model);
+
   const input = {
     prompt,
     aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
     output_format: REPLICATE_OUTPUT_FORMAT || "png",
+    // (se o modelo suportar, ok; se não suportar, ele ignora)
+    resolution: REPLICATE_RESOLUTION || "2K",
+    safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
 
-  // ✅ Campo de imagem configurável (image vs image_input etc.)
-  // ✅ Pode ser URL (preferível) ou dataURL (quando precisar)
-  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [ref];
-  else input[REPLICATE_IMAGE_FIELD] = ref;
+  // ✅ usa o campo certo
+  const asArray = REPLICATE_IMAGE_IS_ARRAY;
+  input[imageField] = asArray ? [ref] : ref;
+
+  // (debug opcional — ajuda MUITO a confirmar que está indo o campo correto)
+  console.log("[REPLICATE] model=", model, " imageField=", imageField, " isArray=", asArray, " refIsHttp=", isHttp);
 
   const created = await replicateCreatePrediction({
-    model: REPLICATE_MODEL || "google/nano-banana-pro",
+    model,
     input,
     timeoutMs: 120000,
   });
