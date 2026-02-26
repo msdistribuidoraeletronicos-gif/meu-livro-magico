@@ -545,6 +545,8 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
+  netMark("openaiFetchJson:POST", url);
+
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -558,11 +560,8 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
 
     const text = await r.text();
 
-    // tenta interpretar JSON mesmo em erro (para extrair mensagem melhor)
     let parsed = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {}
+    try { parsed = JSON.parse(text); } catch {}
 
     if (!r.ok) {
       const detail =
@@ -572,23 +571,27 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
         parsed?.detail ||
         text;
 
-      throw new Error(`openai fetch failed @ ${url} | HTTP ${r.status}: ${String(detail).slice(0, 2000)}`);
+      const err = new Error(`openai HTTP ${r.status}: ${String(detail).slice(0, 2000)}`);
+      netFail("openaiFetchJson:POST", url, err);
+      throw err;
     }
 
     if (parsed === null) {
-      throw new Error(`openai fetch failed @ ${url}: resposta não-JSON: ${text.slice(0, 2000)}`);
+      const err = new Error(`openai resposta não-JSON: ${text.slice(0, 2000)}`);
+      netFail("openaiFetchJson:POST", url, err);
+      throw err;
     }
 
     return parsed;
   } catch (e) {
-    // AbortError / falha de rede / DNS / etc.
     const msg = String(e?.message || e);
-    throw new Error(`openai fetch failed @ ${url}: ${msg}`);
+    const err = new Error(`openai fetch failed @ ${url}: ${msg}`);
+    netFail("openaiFetchJson:POST", url, err);
+    throw err;
   } finally {
     clearTimeout(t);
   }
 }
-
 function isModelAccessError(msg) {
   const s = String(msg || "");
   return (
@@ -2399,7 +2402,91 @@ if (m?.nextTryAt && Number(m.nextTryAt) > now) {
 
    if (needCover) {
   m.step = "cover";
+// 2) COVER (job pendente, igual páginas)
+const coverFinalName = "cover_final.png";
+const coverFinalPath = path.join(bookDir, coverFinalName);
+const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
 
+if (needCover) {
+  const coverPrompt = buildCoverPrompt({
+    themeKey: m.theme,
+    childName: m.child?.name,
+    styleKey: m.style,
+  });
+
+  // (A) Já tem job pendente de capa: poll once
+  if (m.pending?.type === "cover" && m.pending?.predictionId) {
+    m.step = "cover_wait";
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    const pred = await replicatePollOnce(m.pending.predictionId);
+    const st = String(pred?.status || "");
+
+    if (st === "succeeded") {
+      let out = pred?.output;
+      let imgBuf = null;
+
+      if (typeof out === "string" && out.startsWith("http")) imgBuf = await downloadToBuffer(out, 240000);
+      else if (typeof out === "string" && out.startsWith("data:")) imgBuf = dataUrlToBuffer(out);
+      else if (Array.isArray(out) && typeof out[0] === "string" && out[0].startsWith("http")) imgBuf = await downloadToBuffer(out[0], 240000);
+      else if (Array.isArray(out) && typeof out[0] === "string" && out[0].startsWith("data:")) imgBuf = dataUrlToBuffer(out[0]);
+      else if (out && typeof out === "object" && typeof out.url === "string") imgBuf = await downloadToBuffer(out.url, 240000);
+      else if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") imgBuf = await downloadToBuffer(out[0].url, 240000);
+
+      if (!imgBuf) throw new Error("Replicate succeeded mas não retornou imagem reconhecível (capa).");
+
+      const coverBasePath = path.join(bookDir, "cover.png");
+      await fsp.writeFile(coverBasePath, await sharp(imgBuf).png().toBuffer());
+
+      await stampCoverTextOnImage({
+        inputPath: coverBasePath,
+        outputPath: coverFinalPath,
+        title: "Meu Livro Mágico",
+        subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+      });
+
+      const coverStorageKey = `${m.ownerId || userId}/${id}/${coverFinalName}`;
+      const coverFinalBuf = await fsp.readFile(coverFinalPath);
+      await sbUploadBuffer({ pathKey: coverStorageKey, contentType: "image/png", buffer: coverFinalBuf });
+
+      m.cover = {
+        ok: true,
+        file: coverFinalName,
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
+        storageKey: coverStorageKey,
+      };
+
+      m.pending = null;
+      m.step = "cover_done";
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(buildProgress(m, "Capa pronta ✅"));
+    }
+
+    if (st === "failed" || st === "canceled") {
+      throw new Error(String(pred?.error || "Prediction falhou no Replicate (capa)."));
+    }
+
+    return res.json(buildProgress(m, "Gerando capa… (Replicate)"));
+  }
+
+  // (B) Não tem job pendente: cria agora e retorna
+  m.step = "cover_start";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  const imgDataUrl = bufferToDataUrlPng(await fsp.readFile(imagePngPath));
+  const pid = await replicateCreateImageJob({ prompt: coverPrompt, imageDataUrl: imgDataUrl });
+
+  m.pending = { type: "cover", predictionId: pid, createdAt: nowISO() };
+  m.step = "cover_queued";
+  m.updatedAt = nowISO();
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  return res.json(buildProgress(m, "Capa enviada ✅ (aguardando)…"));
+}
     // 3) NEXT PAGE
     const imagesArr = Array.isArray(m.images) ? m.images.slice() : [];
     const hasPage = (n) => imagesArr.some((it) => Number(it?.page || 0) === n && it.url);
@@ -2791,9 +2878,9 @@ app.get("/api/debug-lastfetch", requireAuth, (req, res) => {
   return res.json({ ok: true, last: NET_LAST });
 });
 app.get("/api/debug-net", requireAuth, async (req, res) => {
-  const out = { ok: true, openai: null, replicate: null };
+  const out = { ok: true, openai: null, replicate: null, last: NET_LAST };
 
-  // Teste OpenAI (simples)
+  // Teste OpenAI (texto)
   try {
     const r = await openaiFetchJson(
       "https://api.openai.com/v1/responses",
@@ -2808,34 +2895,23 @@ app.get("/api/debug-net", requireAuth, async (req, res) => {
   // Teste Replicate (se tiver token)
   if (!REPLICATE_API_TOKEN) {
     out.replicate = { ok: false, error: "REPLICATE_API_TOKEN ausente" };
+    out.last = NET_LAST;
     return res.json(out);
   }
 
   try {
-    await fetchJson("https://api.replicate.com/v1/predictions", {
+    // Só um GET simples pra validar rede + token
+    const r = await fetchJson("https://api.replicate.com/v1/predictions", {
       method: "GET",
-      timeoutMs: 15000,
+      timeoutMs: 20000,
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
-    out.replicate = { ok: true, info: "GET /predictions OK" };
-    } catch (e) {
-  const name = String(e?.name || "");
-  const msg = String(e?.message || e);
-
-  const extra =
-    name === "AbortError"
-      ? `TIMEOUT(${timeoutMs}ms)`
-      : name
-      ? name
-      : "network_error";
-
-  const err = new Error(`fetch failed @ ${url} (${method}) :: ${extra} :: ${msg}`);
-  netFail(`fetchJson:${method}`, url, err);
-  throw err;
-} finally {
-    clearTimeout(t);
+    out.replicate = { ok: true, info: "GET /predictions OK", keys: Object.keys(r || {}) };
+  } catch (e) {
+    out.replicate = { ok: false, error: String(e?.message || e) };
   }
 
+  out.last = NET_LAST;
   return res.json(out);
 });
 
