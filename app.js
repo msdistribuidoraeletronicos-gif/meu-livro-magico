@@ -2528,32 +2528,63 @@ const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
         return res.json({ ok: true, pending: m.pending });
       }
 
+       // ✅ garante que pending é realmente da CAPA
+      if (m.pending && m.pending.kind !== "cover") {
+        console.warn("[PENDING] Limpando pending estranho na capa:", m.pending);
+        m.pending = null;
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      }
+
+      // ✅ timeout forte (já existia, mas reforça e salva)
+      if (m.pending && isPendingTooOld(m.pending)) {
+        console.warn("[PENDING] CAPA expirada, resetando:", m.pending);
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      }
+
       const pred = await replicatePollOnce(m.pending.pid);
- if (pred?.status === "failed" || pred?.status === "canceled") {
-  const errMsg = String(pred?.error || "Replicate falhou ao gerar a capa.");
 
-  // ✅ E003 / high demand = erro TEMPORÁRIO → não falha o livro
-  if (isHighDemandError(errMsg)) {
-    m.status = "generating";
-    m.step = "cover";       // continua na capa
-    m.error = "";
-    m.pending = null;       // limpa para recriar o job na próxima chamada
-    m.updatedAt = nowISO();
-    await saveManifestAll(userId, id, m, { sbUser: req.sb });
-    return res.status(202).json({ ok: true, temporary: true, error: errMsg });
-  }
+      // ✅ salva status (pra você ver no /api/progress)
+      m.lastFetch = {
+        at: nowISO(),
+        stage: "cover_poll",
+        pid: m.pending.pid,
+        status: String(pred?.status || ""),
+      };
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-  // erro real → falha
-  m.status = "failed";
-  m.step = "failed";
-  m.error = errMsg;
-  m.pending = null;
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
-  return res.status(500).json({ ok: false, error: m.error });
-}
-      if (pred?.status === "succeeded") {
-     const buf = await pngBufferFromReplicateOutput(pred.output);
+      const st = String(pred?.status || "");
+
+      // ✅ se ainda está rodando, devolve 202 (melhor semântica e ajuda seu backoff)
+      if (st === "starting" || st === "processing" || st === "queued") {
+        return res.status(202).json({ ok: true, pending: m.pending, status: st });
+      }
+
+      if (st === "failed" || st === "canceled") {
+        const errMsg = String(pred?.error || "Replicate falhou ao gerar a capa.");
+
+        if (isHighDemandError(errMsg)) {
+          m.status = "generating";
+          m.step = "cover";
+          m.error = "";
+          m.pending = null;
+          m.updatedAt = nowISO();
+          await saveManifestAll(userId, id, m, { sbUser: req.sb });
+          return res.status(202).json({ ok: true, temporary: true, error: errMsg });
+        }
+
+        m.status = "failed";
+        m.step = "failed";
+        m.error = errMsg;
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        return res.status(500).json({ ok: false, error: m.error });
+      }
+
+      if (st === "succeeded") {
+        const buf = await pngBufferFromReplicateOutput(pred.output);
 
         const base = path.join(bookDir, "cover.png");
         const final = path.join(bookDir, "cover_final.png");
@@ -2578,9 +2609,9 @@ const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
         return res.json({ ok: true, step: "cover_done" });
       }
 
-      return res.json({ ok: true, pending: m.pending });
+      // ✅ status inesperado → retorna como pending pra não travar “mudo”
+      return res.status(202).json({ ok: true, pending: m.pending, status: st || "unknown" });
     }
-
     // ---------------- PAGES ----------------
     const images = Array.isArray(m.images) ? m.images : [];
     const nextPage = images.length + 1;
@@ -2590,6 +2621,24 @@ const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
 if (!pageObj || !pageObj.text) {
   throw new Error(`Página ${nextPage} não encontrada no manifest (pages). Refaça a história.`);
 }
+      // ✅ se existe pending, ele precisa ser de PAGE e da MESMA página
+      if (m.pending) {
+        const pk = String(m.pending.kind || "");
+        const pp = Number(m.pending.page || 0);
+        if (pk !== "page" || pp !== nextPage) {
+          console.warn("[PENDING] Limpando pending estranho nas páginas:", m.pending, "nextPage=", nextPage);
+          m.pending = null;
+          await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        }
+      }
+
+      // ✅ timeout nas páginas (isso estava faltando!)
+      if (m.pending && isPendingTooOld(m.pending)) {
+        console.warn("[PENDING] PAGE expirada, resetando:", m.pending);
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      }
     if (!m.pending) {
   const prompt = buildScenePromptFromParagraph({
     paragraphText: pageObj.text,
@@ -2609,34 +2658,48 @@ if (!pageObj || !pageObj.text) {
 
   return res.json({ ok: true, pending: m.pending });
 }
-      const pred = await replicatePollOnce(m.pending.pid);
-   if (pred?.status === "failed" || pred?.status === "canceled") {
-  const errMsg = String(pred?.error || `Replicate falhou na página ${m.pending?.page || "?"}.`);
+        const pred = await replicatePollOnce(m.pending.pid);
 
-  // ✅ E003 / high demand = TEMPORÁRIO → não falha o livro
-  if (isHighDemandError(errMsg)) {
-    const stayPage = Number(m.pending?.page || nextPage || 1);
+      // ✅ salva status (pra você ver no /api/progress)
+      m.lastFetch = {
+        at: nowISO(),
+        stage: `page_${nextPage}_poll`,
+        pid: m.pending.pid,
+        status: String(pred?.status || ""),
+      };
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-    m.status = "generating";
-    m.step = `page_${stayPage}`; // continua na mesma página
-    m.error = "";
-    m.pending = null;            // limpa para recriar o job na próxima chamada
-    m.updatedAt = nowISO();
-    await saveManifestAll(userId, id, m, { sbUser: req.sb });
-    return res.status(202).json({ ok: true, temporary: true, error: errMsg, page: stayPage });
-  }
+      const st = String(pred?.status || "");
 
-  // erro real → falha
-  m.status = "failed";
-  m.step = "failed";
-  m.error = errMsg;
-  m.pending = null;
-  m.updatedAt = nowISO();
-  await saveManifestAll(userId, id, m, { sbUser: req.sb });
-  return res.status(500).json({ ok: false, error: m.error });
-}
-      if (pred?.status === "succeeded") {
-      const buf = await pngBufferFromReplicateOutput(pred.output);
+      if (st === "starting" || st === "processing" || st === "queued") {
+        return res.status(202).json({ ok: true, pending: m.pending, status: st, page: nextPage });
+      }
+
+      if (st === "failed" || st === "canceled") {
+        const errMsg = String(pred?.error || `Replicate falhou na página ${m.pending?.page || "?"}.`);
+
+        if (isHighDemandError(errMsg)) {
+          const stayPage = Number(m.pending?.page || nextPage || 1);
+          m.status = "generating";
+          m.step = `page_${stayPage}`;
+          m.error = "";
+          m.pending = null;
+          m.updatedAt = nowISO();
+          await saveManifestAll(userId, id, m, { sbUser: req.sb });
+          return res.status(202).json({ ok: true, temporary: true, error: errMsg, page: stayPage });
+        }
+
+        m.status = "failed";
+        m.step = "failed";
+        m.error = errMsg;
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        return res.status(500).json({ ok: false, error: m.error });
+      }
+
+      if (st === "succeeded") {
+        const buf = await pngBufferFromReplicateOutput(pred.output);
 
         const base = path.join(bookDir, `page_${String(nextPage).padStart(2, "0")}.png`);
         const final = path.join(bookDir, `page_${String(nextPage).padStart(2, "0")}_final.png`);
@@ -2658,9 +2721,8 @@ if (!pageObj || !pageObj.text) {
         return res.json({ ok: true, step: m.step });
       }
 
-      return res.json({ ok: true, pending: m.pending });
+      return res.status(202).json({ ok: true, pending: m.pending, status: st || "unknown", page: nextPage });
     }
-
     // ---------------- PDF ----------------
     if (m.status !== "done") {
       m.status = "generating";
