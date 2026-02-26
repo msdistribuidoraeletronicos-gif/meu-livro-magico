@@ -659,22 +659,31 @@ async function replicateGetLatestVersionId(model) {
   replicateVersionCache.set(key, String(versionId));
   return String(versionId);
 }
-
 async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
 
   const version = await replicateGetLatestVersionId(model);
 
-  // exige "version" e rejeita "model"
-  return await fetchJson("https://api.replicate.com/v1/predictions", {
-    method: "POST",
-    timeoutMs,
-    headers: {
-      Authorization: `Token ${REPLICATE_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ version, input }),
-  });
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await fetchJson("https://api.replicate.com/v1/predictions", {
+        method: "POST",
+        timeoutMs,
+        headers: {
+          Authorization: `Token ${REPLICATE_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ version, input }),
+      });
+    } catch (e) {
+      lastErr = e;
+      // backoff: 1.2s, 2.4s
+      if (attempt < 3) await sleep(1200 * attempt);
+    }
+  }
+
+  throw lastErr || new Error("Replicate: falha ao criar prediction.");
 }
 
 async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollMs = 1200 } = {}) {
@@ -833,7 +842,7 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
 
   // 1) string URL
   if (typeof out === "string" && out.startsWith("http")) {
-    const buf = await downloadToBuffer(out, 240000);
+    const buf = await downloadToBuffer(out, 300000);
     return await sharp(buf).png().toBuffer();
   }
 
@@ -2182,6 +2191,7 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
       step: m.step,
       error: m.error || "",
       theme: m.theme || "",
+      lastFetch: m.lastFetch || null,
       style: m.style || "read",
       doneSteps,
       totalSteps,
@@ -2551,12 +2561,15 @@ const errMsg = (baseMsg + net).slice(0, 1800);
     error: m2.error,
   });
 }
+m2.status = "failed";
+m2.step = "failed";
+m2.error = errMsg;
 
-        m2.status = "failed";
-        m2.step = "failed";
-        m2.error = errMsg;
-        m2.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m2, { sbUser: req.sb });
+// ✅ persiste o último fetch no DB (funciona mesmo em serverless)
+m2.lastFetch = { ...NET_LAST };
+
+m2.updatedAt = nowISO();
+await saveManifestAll(userId, id, m2, { sbUser: req.sb });
       }
     } catch {}
 
@@ -2775,15 +2788,20 @@ app.get("/api/debug-net", requireAuth, async (req, res) => {
     });
     out.replicate = { ok: true, info: "GET /predictions OK" };
     } catch (e) {
-    // Se já é um erro "HTTP xxx ..." gerado por nós, não re-embala como "fetch failed"
-    const msg = String(e?.message || e);
+  const name = String(e?.name || "");
+  const msg = String(e?.message || e);
 
-    // mantém mais detalhe no NET_LAST
-    netFail(`fetchJson:${method}`, url, e);
+  const extra =
+    name === "AbortError"
+      ? `TIMEOUT(${timeoutMs}ms)`
+      : name
+      ? name
+      : "network_error";
 
-    // deixa passar o erro original (com HTTP status e corpo)
-    throw e instanceof Error ? e : new Error(msg);
-  } finally {
+  const err = new Error(`fetch failed @ ${url} (${method}) :: ${extra} :: ${msg}`);
+  netFail(`fetchJson:${method}`, url, err);
+  throw err;
+} finally {
     clearTimeout(t);
   }
 
