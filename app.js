@@ -2749,24 +2749,21 @@ app.get("/api/debug-net", requireAuth, async (req, res) => {
   }
 
   // Teste Replicate (se tiver token)
+  if (!REPLICATE_API_TOKEN) {
+    out.replicate = { ok: false, error: "REPLICATE_API_TOKEN ausente" };
+    return res.json(out);
+  }
+
   try {
-    if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN ausente");
-    const r = await fetchJson("https://api.replicate.com/v1/predictions", {
+    await fetchJson("https://api.replicate.com/v1/predictions", {
       method: "GET",
       timeoutMs: 15000,
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
     out.replicate = { ok: true, info: "GET /predictions OK" };
-  } } catch (e) {
-  const msg =
-    String(e?.name || "") === "AbortError"
-      ? `timeout após ${timeoutMs}ms`
-      : String(e?.message || e);
-
-  const err = new Error(`fetch failed @ ${url} (${method}) :: ${msg}`);
-  netFail(`fetchJson:${method}`, url, err);
-  throw err;
-}
+  } catch (e) {
+    out.replicate = { ok: false, error: String(e?.message || e) };
+  }
 
   return res.json(out);
 });
