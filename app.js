@@ -678,7 +678,11 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   const version = await replicateGetLatestVersionId(model);
 
   let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+
+  // backoff forte: 2s, 4s, 8s, 12s, 16s (com teto)
+  const waits = [2000, 4000, 8000, 12000, 16000];
+
+  for (let attempt = 1; attempt <= waits.length; attempt++) {
     try {
       return await fetchJson("https://api.replicate.com/v1/predictions", {
         method: "POST",
@@ -691,8 +695,31 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
       });
     } catch (e) {
       lastErr = e;
-      // backoff: 1.2s, 2.4s
-      if (attempt < 3) await sleep(1200 * attempt);
+      const msg = String(e?.message || e || "");
+
+      // Sem crédito: falha definitiva (não adianta retry)
+      if (isReplicateInsufficientCredit(msg)) {
+        throw new Error("Replicate: sem crédito/limite de conta. Recarregue créditos para gerar imagens.");
+      }
+
+      // 429: erro temporário → devolve erro marcado pra UI/back-end esperar
+      if (isReplicateThrottledError(msg)) {
+        const waitMs = waits[Math.min(attempt - 1, waits.length - 1)];
+        if (attempt >= waits.length) {
+          // devolve como “temporary” pro /api/generateNext responder 202 e a UI esperar
+          throw makeTempError(`Replicate throttled (HTTP 429). Aguarde ${Math.ceil(waitMs / 1000)}s e tente novamente.`, waitMs);
+        }
+        await sleep(waitMs);
+        continue;
+      }
+
+      // Outros erros: retry curto só nas primeiras tentativas
+      if (attempt < 2) {
+        await sleep(1200);
+        continue;
+      }
+
+      throw e;
     }
   }
 
@@ -2630,8 +2657,36 @@ if (!isStoryReady(m, 8)) {
         });
 
        const refUrl = await getReferenceImageUrlForReplicate(m, userId, id);
-const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
-        m.pending = { kind: "cover", pid, createdAt: nowISO() };
+try {
+  const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
+  m.pending = { kind: "cover", pid, createdAt: nowISO() };
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  return res.json({ ok: true, pending: m.pending });
+} catch (e) {
+  const msg = String(e?.message || e || "");
+
+  // ✅ 429 / throttled: não falha o livro, só manda esperar
+  if (e?.temporary || isReplicateThrottledError(msg)) {
+    const waitMs = Number(e?.waitMs || 8000);
+    m.lastFetch = { at: nowISO(), stage: "cover_create_throttled", status: "throttled", note: msg.slice(0, 300) };
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(202).json({ ok: true, temporary: true, waitMs, error: msg });
+  }
+
+  // ✅ sem crédito: falha com mensagem clara
+  if (isReplicateInsufficientCredit(msg)) {
+    m.status = "failed";
+    m.step = "failed";
+    m.error = "Replicate sem crédito/limite de conta. Recarregue créditos para gerar as imagens.";
+    m.pending = null;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(500).json({ ok: false, error: m.error });
+  }
+
+  throw e;
+}
         await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
         return res.json({ ok: true, pending: m.pending });
@@ -2760,12 +2815,36 @@ if (!pageObj || !pageObj.text) {
   // Isso garante que a geração NÃO venha aleatória.
   const refUrl = await getReferenceImageUrlForReplicate(m, userId, id);
 
+ try {
   const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
 
   m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
   return res.json({ ok: true, pending: m.pending });
+} catch (e) {
+  const msg = String(e?.message || e || "");
+
+  if (e?.temporary || isReplicateThrottledError(msg)) {
+    const waitMs = Number(e?.waitMs || 8000);
+    m.lastFetch = { at: nowISO(), stage: `page_${nextPage}_create_throttled`, status: "throttled", note: msg.slice(0, 300) };
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(202).json({ ok: true, temporary: true, waitMs, error: msg, page: nextPage });
+  }
+
+  if (isReplicateInsufficientCredit(msg)) {
+    m.status = "failed";
+    m.step = "failed";
+    m.error = "Replicate sem crédito/limite de conta. Recarregue créditos para gerar as imagens.";
+    m.pending = null;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(500).json({ ok: false, error: m.error });
+  }
+
+  throw e;
+}
 }
         const pred = await replicatePollOnce(m.pending.pid);
 
