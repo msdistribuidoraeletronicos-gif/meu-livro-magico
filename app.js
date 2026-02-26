@@ -432,7 +432,16 @@ const NET_LAST = {
   note: "",
   error: "",
 };
-
+// --- Replicate pending watchdog (evita ficar preso no "processing" pra sempre) ---
+const PENDING_MAX_AGE_MS = Number(process.env.PENDING_MAX_AGE_MS || (8 * 60 * 1000)); // 8 min
+function pendingAgeMs(pending) {
+  const t = Date.parse(String(pending?.createdAt || ""));
+  if (!Number.isFinite(t)) return 0;
+  return Date.now() - t;
+}
+function isPendingTooOld(pending) {
+  return pendingAgeMs(pending) > PENDING_MAX_AGE_MS;
+}
 function netMark(stage, url, note = "") {
   NET_LAST.at = new Date().toISOString();
   NET_LAST.stage = String(stage || "");
@@ -1530,7 +1539,19 @@ app.get("/api/debug-fs", (req, res) => {
     },
   });
 });
+// ✅ Debug: consulta um predictionId diretamente no Replicate
+app.get("/api/debug-replicate/:pid", requireAuth, async (req, res) => {
+  try {
+    const pid = String(req.params?.pid || "").trim();
+    if (!pid) return res.status(400).json({ ok: false, error: "pid ausente" });
+    if (!REPLICATE_API_TOKEN) return res.status(400).json({ ok: false, error: "REPLICATE_API_TOKEN ausente" });
 
+    const pred = await replicatePollOnce(pid);
+    return res.json({ ok: true, pred });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 /* -------------------- Mount extra pages/modules -------------------- */
 try {
   const mountBooks = require("./books"); // ./books/index.js
@@ -2238,7 +2259,9 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
       images: (m.images || []).map((it) => ({ page: it.page, url: it.url || "" })),
       pdf: m.pdf || "",
       updatedAt: m.updatedAt || "",
+      pending: m.pending || null,
     });
+
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
@@ -2505,92 +2528,118 @@ async function handleGenerateNext(req, res) {
     m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) throw new Error("Manifest sumiu");
 
-    if (!m.cover?.ok) {
-      m.status = "generating";
-      m.step = "cover";
-      m.error = "";
+    // =========================================================
+// PASSO 2: COVER (Replicate job incremental: cria / poll)
+// =========================================================
+m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+if (!m) throw new Error("Manifest sumiu");
+
+if (!m.cover?.ok) {
+  m.status = "generating";
+  m.step = "cover";
+  m.error = "";
+  m.updatedAt = nowISO();
+
+  // ✅ watchdog: se pending ficou velho demais, reseta pra recriar
+  if (m.pending && m.pending.kind === "cover" && isPendingTooOld(m.pending)) {
+    console.warn("⚠️ pending cover muito antigo, resetando:", m.pending);
+    m.pending = null;
+  }
+
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+  // se não existe job, cria
+  if (!m.pending || m.pending.kind !== "cover" || !m.pending.pid) {
+    ensureAdminForStorage(); // vamos precisar salvar cover_final no Storage
+
+    const prompt = buildCoverPrompt({
+      themeKey: m.theme,
+      childName: m.child?.name,
+      styleKey: m.style || "read",
+    });
+
+    const imgBuf = await fsp.readFile(imagePngPath);
+    const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
+    const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+
+    m.pending = { kind: "cover", pid, createdAt: nowISO() };
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000, pending: m.pending }));
+  }
+
+  // tem job: poll once (com auto-retry se 404)
+  let pred;
+  try {
+    pred = await replicatePollOnce(m.pending.pid);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    // ✅ se prediction sumiu/404, reseta e recria
+    if (msg.includes("HTTP 404") || msg.toLowerCase().includes("not found")) {
+      console.warn("⚠️ replicate pid não encontrado, resetando pending:", m.pending?.pid);
+      m.pending = null;
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-      // se não existe job, cria
-      if (!m.pending || m.pending.kind !== "cover" || !m.pending.pid) {
-        ensureAdminForStorage(); // vamos precisar salvar cover_final no Storage
-
-        const prompt = buildCoverPrompt({
-          themeKey: m.theme,
-          childName: m.child?.name,
-          styleKey: m.style || "read",
-        });
-
-        const imgBuf = await fsp.readFile(imagePngPath);
-        const imgDataUrl = bufferToDataUrlPng(imgBuf);
-
-        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
-
-        m.pending = { kind: "cover", pid, createdAt: nowISO() };
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-        return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
-      }
-
-      // tem job: poll once
-      const pred = await replicatePollOnce(m.pending.pid);
-      const st = String(pred?.status || "");
-
-      if (st === "succeeded") {
-        const outUrl = extractReplicateOutputUrl(pred);
-        const coverBuf = await pngBufferFromReplicateOutput(outUrl);
-
-        const coverBase = path.join(bookDir, "cover.png");
-        await fsp.writeFile(coverBase, coverBuf);
-
-        const coverFinal = path.join(bookDir, "cover_final.png");
-        await stampCoverTextOnImage({
-          inputPath: coverBase,
-          outputPath: coverFinal,
-          title: "Meu Livro Mágico",
-          subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
-        });
-
-        // salva no Storage (Vercel-safe)
-        const key = `${m.ownerId || userId}/${id}/cover_final.png`;
-        await sbUploadBuffer({ pathKey: key, contentType: "image/png", buffer: await fsp.readFile(coverFinal) });
-
-        m.cover = {
-          ok: true,
-          file: "cover_final.png",
-          url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
-          storageKey: key,
-        };
-        m.pending = null;
-        m.step = "page_1";
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-        return res.json(await buildProgress(m));
-      }
-
-      if (st === "failed" || st === "canceled") {
-        const err = String(pred?.error || "Prediction falhou no Replicate.");
-        // se for alta demanda, não marca failed definitivo — só espera e tenta de novo
-        if (isHighDemandError(err)) {
-          return res.json(await buildProgress(m, { error: err, nextTryAt: Date.now() + 6000 }));
-        }
-
-        m.status = "failed";
-        m.step = "failed";
-        m.error = err;
-        m.pending = null;
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-        return res.json(await buildProgress(m));
-      }
-
-      // ainda processando
-      return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
+      return res.json(await buildProgress(m, { nextTryAt: Date.now() + 1500, pending: null }));
     }
+    throw e;
+  }
+
+  const st = String(pred?.status || "");
+
+  if (st === "succeeded") {
+    const outUrl = extractReplicateOutputUrl(pred);
+    const coverBuf = await pngBufferFromReplicateOutput(outUrl);
+
+    const coverBase = path.join(bookDir, "cover.png");
+    await fsp.writeFile(coverBase, coverBuf);
+
+    const coverFinal = path.join(bookDir, "cover_final.png");
+    await stampCoverTextOnImage({
+      inputPath: coverBase,
+      outputPath: coverFinal,
+      title: "Meu Livro Mágico",
+      subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+    });
+
+    const key = `${m.ownerId || userId}/${id}/cover_final.png`;
+    await sbUploadBuffer({ pathKey: key, contentType: "image/png", buffer: await fsp.readFile(coverFinal) });
+
+    m.cover = {
+      ok: true,
+      file: "cover_final.png",
+      url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+      storageKey: key,
+    };
+    m.pending = null;
+    m.step = "page_1";
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m));
+  }
+
+  if (st === "failed" || st === "canceled") {
+    const err = String(pred?.error || "Prediction falhou no Replicate.");
+    if (isHighDemandError(err)) {
+      return res.json(await buildProgress(m, { error: err, nextTryAt: Date.now() + 6000, pending: m.pending }));
+    }
+
+    m.status = "failed";
+    m.step = "failed";
+    m.error = err;
+    m.pending = null;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m));
+  }
+
+  // ainda processando
+  return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000, pending: m.pending, replicateStatus: st }));
+}
 
     // =========================================================
     // PASSO 3: PAGES (1 página por vez, com pending job)
@@ -2613,27 +2662,150 @@ async function handleGenerateNext(req, res) {
       if (!pageObj) throw new Error("Página da história não encontrada.");
 
       // cria job se não existir
-      if (!m.pending || m.pending.kind !== "page" || m.pending.page !== nextPage || !m.pending.pid) {
-        ensureAdminForStorage();
+      // =========================================================
+// PASSO 3: PAGES (1 página por vez, com pending job)
+// =========================================================
+m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+if (!m) throw new Error("Manifest sumiu");
 
-        const prompt = buildScenePromptFromParagraph({
-          paragraphText: pageObj.text,
-          themeKey: m.theme,
-          childName: m.child?.name,
-          styleKey: m.style || "read",
-        });
+const pages = Array.isArray(m.pages) ? m.pages : [];
+const images = Array.isArray(m.images) ? m.images : [];
+const nextPage = images.length + 1;
 
-        const imgBuf = await fsp.readFile(imagePngPath);
-        const imgDataUrl = bufferToDataUrlPng(imgBuf);
+if (nextPage <= 8) {
+  m.status = "generating";
+  m.step = `page_${nextPage}`;
+  m.error = "";
+  m.updatedAt = nowISO();
 
-        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+  // ✅ watchdog: se pending page ficou velho demais, reseta pra recriar
+  if (m.pending && m.pending.kind === "page" && m.pending.page === nextPage && isPendingTooOld(m.pending)) {
+    console.warn("⚠️ pending page muito antigo, resetando:", m.pending);
+    m.pending = null;
+  }
 
-        m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+  await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-        return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
-      }
+  const pageObj = pages.find((p) => Number(p.page) === nextPage) || pages[nextPage - 1];
+  if (!pageObj) throw new Error("Página da história não encontrada.");
+
+  // cria job se não existir
+  if (!m.pending || m.pending.kind !== "page" || m.pending.page !== nextPage || !m.pending.pid) {
+    ensureAdminForStorage();
+
+    const prompt = buildScenePromptFromParagraph({
+      paragraphText: pageObj.text,
+      themeKey: m.theme,
+      childName: m.child?.name,
+      styleKey: m.style || "read",
+    });
+
+    const imgBuf = await fsp.readFile(imagePngPath);
+    const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
+    const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+
+    m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m, {
+      nextTryAt: Date.now() + 3000,
+      pending: m.pending
+    }));
+  }
+
+  // poll job (com auto-retry se 404)
+  let pred;
+  try {
+    pred = await replicatePollOnce(m.pending.pid);
+  } catch (e) {
+    const msg = String(e?.message || e);
+
+    // ✅ se prediction sumiu/404, reseta e recria
+    if (msg.includes("HTTP 404") || msg.toLowerCase().includes("not found")) {
+      console.warn("⚠️ replicate pid não encontrado (page), resetando pending:", m.pending?.pid);
+      m.pending = null;
+      m.updatedAt = nowISO();
+      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+      return res.json(await buildProgress(m, {
+        nextTryAt: Date.now() + 1500,
+        pending: null
+      }));
+    }
+
+    throw e;
+  }
+
+  const st = String(pred?.status || "");
+
+  if (st === "succeeded") {
+    const outUrl = extractReplicateOutputUrl(pred);
+    const imgBuf2 = await pngBufferFromReplicateOutput(outUrl);
+
+    const baseName = `page_${String(nextPage).padStart(2, "0")}.png`;
+    const finalName = `page_${String(nextPage).padStart(2, "0")}_final.png`;
+
+    const basePath = path.join(bookDir, baseName);
+    await fsp.writeFile(basePath, imgBuf2);
+
+    const finalPath = path.join(bookDir, finalName);
+    await stampStoryTextOnImage({
+      inputPath: basePath,
+      outputPath: finalPath,
+      title: pageObj.title,
+      text: pageObj.text,
+    });
+
+    const key = `${m.ownerId || userId}/${id}/${finalName}`;
+    await sbUploadBuffer({ pathKey: key, contentType: "image/png", buffer: await fsp.readFile(finalPath) });
+
+    images.push({
+      page: nextPage,
+      file: finalName,
+      url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+      storageKey: key,
+      prompt: m.pending.prompt || "",
+    });
+
+    m.images = images;
+    m.pending = null;
+    m.step = nextPage < 8 ? `page_${nextPage + 1}` : "pdf";
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m));
+  }
+
+  if (st === "failed" || st === "canceled") {
+    const err = String(pred?.error || "Prediction falhou no Replicate.");
+    if (isHighDemandError(err)) {
+      return res.json(await buildProgress(m, {
+        error: err,
+        nextTryAt: Date.now() + 6000,
+        pending: m.pending,
+        replicateStatus: st
+      }));
+    }
+
+    m.status = "failed";
+    m.step = "failed";
+    m.error = err;
+    m.pending = null;
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+    return res.json(await buildProgress(m));
+  }
+
+  // ainda processando
+  return res.json(await buildProgress(m, {
+    nextTryAt: Date.now() + 3000,
+    pending: m.pending,
+    replicateStatus: st
+  }));
+}
 
       // poll job
       const pred = await replicatePollOnce(m.pending.pid);
