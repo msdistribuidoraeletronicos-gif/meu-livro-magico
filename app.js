@@ -2354,184 +2354,132 @@ async function handleGenerateNext(req, res) {
   };
 
   try {
+    // --- carrega manifest (disk/db) ---
     let m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
     if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
 
-    // Atualiza dados básicos vindos do frontend (1x)
-    const bChildName = String(req.body?.childName || "").trim();
-    const bChildAge = Number(req.body?.childAge || 0);
-    const bChildGender = String(req.body?.childGender || "").trim();
-    const bTheme = String(req.body?.theme || "").trim();
-    const bStyle = String(req.body?.style || "").trim();
+    // --- aplica payload do front (nome/idade/gênero/tema/estilo) ---
+    const body = req.body || {};
+    const childName = String(body.childName || "").trim();
+    const childAge = Number(body.childAge || m.child?.age || 6);
+    const childGender = String(body.childGender || m.child?.gender || "neutral");
+    const theme = String(body.theme || m.theme || "space").trim();
+    const style = String(body.style || m.style || "read").trim();
 
-    if (bChildName) m.child.name = bChildName;
-    if (Number.isFinite(bChildAge) && bChildAge >= 2 && bChildAge <= 12) m.child.age = bChildAge;
-    if (bChildGender) m.child.gender = bChildGender;
-    if (bTheme) m.theme = bTheme;
-    if (bStyle) m.style = bStyle;
+    if (childName) m.child = Object.assign({}, m.child, { name: childName });
+    if (Number.isFinite(childAge)) m.child = Object.assign({}, m.child, { age: clamp(childAge, 2, 12) });
+    if (childGender) m.child = Object.assign({}, m.child, { gender: childGender });
+    if (theme) m.theme = theme;
+    if (style) m.style = style;
 
-    // Se estava failed por HIGH DEMAND, permite retomar automaticamente
-    if (m.status === "failed" && isHighDemandError(m.error)) {
-      m.status = "generating";
-      m.error = "";
-    }
-
-    m.status = m.status === "done" ? "done" : (m.status || "generating");
-    if (m.status !== "done" && m.status !== "failed") m.status = "generating";
+    // status inicial
+    if (!m.status || m.status === "created") m.status = "generating";
+    if (!m.step || m.step === "created") m.step = "story";
     m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
     const bookDir = bookDirOf(userId, id);
     await ensureDir(bookDir);
 
-    // garante bases (disk ou storage)
+    // --- garante bases no disco (Vercel-safe) ---
     const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
-    const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+    const maskPngPath  = path.join(bookDir, m.mask?.editBase  || "mask_base.png");
 
     await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.storageKey || "");
-    await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.storageKey || "");
+    await ensureFileFromStorageIfMissing(maskPngPath,  m.mask?.storageKey  || "");
 
-    if (!existsSyncSafe(imagePngPath) || !existsSyncSafe(maskPngPath)) {
-      m.status = "failed";
-      m.step = "failed";
-      m.error = "edit_base.png/mask_base.png ausentes. Reenvie a foto.";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
-      return respond(m);
-    }
+    if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
+    if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
-    const styleKey = String(m.style || "read").trim() || "read";
-    const owner = m.ownerId || userId;
+    // --- helpers de resposta (mesmo formato do /api/progress) ---
+    const buildProgress = async (mm, extra = {}) => {
+      const totalSteps = 1 + 1 + 8 + 1; // story + cover + 8 pages + pdf
+      const pagesDone = Array.isArray(mm.images) ? mm.images.filter((x) => x && (x.url || x.storageKey)).length : 0;
 
-    // ----------------- 0) Se DONE, retorna -----------------
-    if (m.status === "done") {
-      return respond(m);
-    }
+      let doneSteps = 0;
+      if (Array.isArray(mm.pages) && mm.pages.length >= 8) doneSteps += 1;
+      if (mm.cover?.ok) doneSteps += 1;
+      doneSteps += Math.min(8, pagesDone);
+      if (mm.status === "done" && (mm.pdf || mm.pdfStorageKey)) doneSteps += 1;
 
-    // ----------------- 1) Se tem pending (Replicate job), poll 1x -----------------
-    if (m.pending && m.pending.kind === "replicate" && m.pending.predictionId) {
-      const pid = String(m.pending.predictionId || "").trim();
-      const target = String(m.pending.target || "").trim(); // "cover" | "page"
-      const pageN = Number(m.pending.page || 0);
+      const message =
+        mm.status === "failed" ? "Falhou" :
+        mm.status === "done" ? "Livro pronto 🎉" :
+        String(mm.step || "").startsWith("page_") ? "Gerando página…" :
+        mm.step === "cover" ? "Gerando capa…" :
+        mm.step === "story" ? "Criando história…" :
+        mm.step === "pdf" ? "Gerando PDF…" :
+        "Preparando…";
 
-      try {
-        m.step = target === "cover" ? "cover" : (pageN ? `page_${pageN}` : "image");
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      const coverUrl = mm.cover?.ok ? (mm.cover?.url || "") : "";
+      const images = (mm.images || []).map((it) => ({ page: it.page, url: it.url || "" }));
 
-        const pred = await replicatePollOnce(pid);
-        const st = String(pred?.status || "");
+      return Object.assign(
+        {
+          ok: true,
+          id: mm.id,
+          status: mm.status || "created",
+          step: mm.step || "created",
+          error: mm.error || "",
+          theme: mm.theme || "",
+          style: mm.style || "read",
+          doneSteps,
+          totalSteps,
+          message,
+          coverUrl,
+          images,
+          pdf: mm.pdf || "",
+          updatedAt: mm.updatedAt || "",
+          lastFetch: mm.lastFetch || null,
+        },
+        extra
+      );
+    };
 
-        if (st === "succeeded") {
-          const imgBuf = await replicateOutputToPngBuffer(pred);
+    const extractReplicateOutputUrl = (pred) => {
+      const out = pred?.output;
 
-          if (target === "cover") {
-            // salva cover base
-            const coverBase = path.join(bookDir, "cover.png");
-            await fsp.writeFile(coverBase, imgBuf);
+      if (typeof out === "string" && out.startsWith("http")) return out;
+      if (typeof out === "string" && out.startsWith("data:")) return out;
 
-            // aplica texto
-            const coverFinal = path.join(bookDir, "cover_final.png");
-            await stampCoverTextOnImage({
-              inputPath: coverBase,
-              outputPath: coverFinal,
-              title: "Meu Livro Mágico",
-              subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
-            });
+      if (Array.isArray(out) && typeof out[0] === "string") return out[0];
 
-            // upload cover_final
-            const coverKey = `${owner}/${id}/cover_final.png`;
-            const coverFinalBuf = await fsp.readFile(coverFinal);
-            await sbUploadBuffer({ pathKey: coverKey, contentType: "image/png", buffer: coverFinalBuf });
+      if (out && typeof out === "object" && typeof out.url === "string") return out.url;
 
-            m.cover = {
-              ok: true,
-              file: "cover_final.png",
-              storageKey: coverKey,
-              url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
-            };
+      if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") return out[0].url;
 
-            m.pending = null;
-            m.updatedAt = nowISO();
-            await saveManifestAll(userId, id, m, { sbUser: req.sb });
-            return respond(m);
-          }
+      return "";
+    };
 
-          if (target === "page" && pageN >= 1 && pageN <= 8) {
-            const p = (m.pages || []).find((x) => Number(x.page) === pageN) || { title: `Página ${pageN}`, text: "" };
-
-            const basePath = path.join(bookDir, `page_${String(pageN).padStart(2, "0")}.png`);
-            await fsp.writeFile(basePath, imgBuf);
-
-            const finalName = `page_${String(pageN).padStart(2, "0")}_final.png`;
-            const finalPath = path.join(bookDir, finalName);
-
-            await stampStoryTextOnImage({
-              inputPath: basePath,
-              outputPath: finalPath,
-              title: p.title || `Página ${pageN}`,
-              text: p.text || "",
-            });
-
-            const pageKey = `${owner}/${id}/${finalName}`;
-            const finalBuf = await fsp.readFile(finalPath);
-            await sbUploadBuffer({ pathKey: pageKey, contentType: "image/png", buffer: finalBuf });
-
-            if (!Array.isArray(m.images)) m.images = [];
-            const exists = m.images.find((it) => Number(it.page) === pageN);
-            const entry = {
-              page: pageN,
-              file: finalName,
-              storageKey: pageKey,
-              url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
-              prompt: String(m.pending.prompt || ""),
-            };
-            if (exists) Object.assign(exists, entry);
-            else m.images.push(entry);
-
-            m.images.sort((a, b) => Number(a.page) - Number(b.page));
-            m.pending = null;
-            m.updatedAt = nowISO();
-            await saveManifestAll(userId, id, m, { sbUser: req.sb });
-            return respond(m);
-          }
-
-          // target desconhecido
-          m.pending = null;
-          m.updatedAt = nowISO();
-          await saveManifestAll(userId, id, m, { sbUser: req.sb });
-          return respond(m);
-        }
-
-        if (st === "failed" || st === "canceled") {
-          const errMsg = String(pred?.error || "Prediction falhou no Replicate.");
-          // se for high demand, deixa failed mas o front vai tentar novamente (você trata no /generate)
-          m.status = "failed";
-          m.step = "failed";
-          m.error = errMsg;
-          m.pending = null;
-          m.updatedAt = nowISO();
-          await saveManifestAll(userId, id, m, { sbUser: req.sb });
-          return respond(m);
-        }
-
-        // ainda rodando -> manda cooldown curto
-        const nextTryAt = Date.now() + 1200;
-        return respond(m, { nextTryAt });
-      } catch (e) {
-        m.status = "failed";
-        m.step = "failed";
-        m.error = formatErrFull(e);
-        m.pending = null;
-        m.updatedAt = nowISO();
-        await saveManifestAll(userId, id, m, { sbUser: req.sb });
-        return respond(m);
+    const pngBufferFromReplicateOutput = async (urlOrData) => {
+      if (!urlOrData) throw new Error("Replicate: output vazio.");
+      if (String(urlOrData).startsWith("data:")) {
+        const b = dataUrlToBuffer(urlOrData);
+        if (!b) throw new Error("Replicate retornou dataURL inválida.");
+        return await sharp(b).png().toBuffer();
       }
-    }
+      if (String(urlOrData).startsWith("http")) {
+        const buf = await downloadToBuffer(urlOrData, 240000);
+        return await sharp(buf).png().toBuffer();
+      }
+      throw new Error("Replicate output não reconhecido.");
+    };
 
-    // ----------------- 2) STORY (se ainda não tem páginas) -----------------
+    const ensureAdminForStorage = () => {
+      if (!supabaseAdmin) throw new Error("SUPABASE_SERVICE_ROLE_KEY ausente (precisa para salvar imagens/pdf no Storage).");
+    };
+
+    // =========================================================
+    // PASSO 1: STORY (rápido, pode fazer no mesmo request)
+    // =========================================================
+    m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) throw new Error("Manifest sumiu");
+
     if (!Array.isArray(m.pages) || m.pages.length < 8) {
+      m.status = "generating";
       m.step = "story";
+      m.error = "";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
@@ -2544,133 +2492,290 @@ async function handleGenerateNext(req, res) {
       });
 
       m.pages = pages;
-      m.step = "story_done";
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
-      return respond(m);
-    }
-
-    // ----------------- 3) COVER (se ainda não tem) -----------------
-    if (!m.cover?.ok) {
       m.step = "cover";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const coverPrompt = buildCoverPrompt({
-        themeKey: m.theme,
-        childName: m.child?.name,
-        styleKey,
-      });
+      return res.json(await buildProgress(m));
+    }
 
-      // cria job no Replicate e retorna (sem esperar)
-      const pid = await replicateCreateImageJob({
-        prompt: coverPrompt,
-        imageDataUrl: bufferToDataUrlPng(await fsp.readFile(imagePngPath)),
-      });
+    // =========================================================
+    // PASSO 2: COVER (Replicate job incremental: cria / poll)
+    // =========================================================
+    m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) throw new Error("Manifest sumiu");
 
-      m.pending = { kind: "replicate", target: "cover", predictionId: pid, prompt: coverPrompt, startedAt: nowISO() };
+    if (!m.cover?.ok) {
+      m.status = "generating";
+      m.step = "cover";
+      m.error = "";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      return respond(m, { nextTryAt: Date.now() + 1200 });
+      // se não existe job, cria
+      if (!m.pending || m.pending.kind !== "cover" || !m.pending.pid) {
+        ensureAdminForStorage(); // vamos precisar salvar cover_final no Storage
+
+        const prompt = buildCoverPrompt({
+          themeKey: m.theme,
+          childName: m.child?.name,
+          styleKey: m.style || "read",
+        });
+
+        const imgBuf = await fsp.readFile(imagePngPath);
+        const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
+        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+
+        m.pending = { kind: "cover", pid, createdAt: nowISO() };
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
+      }
+
+      // tem job: poll once
+      const pred = await replicatePollOnce(m.pending.pid);
+      const st = String(pred?.status || "");
+
+      if (st === "succeeded") {
+        const outUrl = extractReplicateOutputUrl(pred);
+        const coverBuf = await pngBufferFromReplicateOutput(outUrl);
+
+        const coverBase = path.join(bookDir, "cover.png");
+        await fsp.writeFile(coverBase, coverBuf);
+
+        const coverFinal = path.join(bookDir, "cover_final.png");
+        await stampCoverTextOnImage({
+          inputPath: coverBase,
+          outputPath: coverFinal,
+          title: "Meu Livro Mágico",
+          subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+        });
+
+        // salva no Storage (Vercel-safe)
+        const key = `${m.ownerId || userId}/${id}/cover_final.png`;
+        await sbUploadBuffer({ pathKey: key, contentType: "image/png", buffer: await fsp.readFile(coverFinal) });
+
+        m.cover = {
+          ok: true,
+          file: "cover_final.png",
+          url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent("cover_final.png")}`,
+          storageKey: key,
+        };
+        m.pending = null;
+        m.step = "page_1";
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m));
+      }
+
+      if (st === "failed" || st === "canceled") {
+        const err = String(pred?.error || "Prediction falhou no Replicate.");
+        // se for alta demanda, não marca failed definitivo — só espera e tenta de novo
+        if (isHighDemandError(err)) {
+          return res.json(await buildProgress(m, { error: err, nextTryAt: Date.now() + 6000 }));
+        }
+
+        m.status = "failed";
+        m.step = "failed";
+        m.error = err;
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m));
+      }
+
+      // ainda processando
+      return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
     }
 
-    // ----------------- 4) NEXT PAGE (gera 1 por request) -----------------
-    const imagesArr = Array.isArray(m.images) ? m.images : [];
-    const have = new Set(imagesArr.map((it) => Number(it.page)));
-    let nextPage = 0;
-    for (let p = 1; p <= 8; p++) {
-      if (!have.has(p)) { nextPage = p; break; }
-    }
+    // =========================================================
+    // PASSO 3: PAGES (1 página por vez, com pending job)
+    // =========================================================
+    m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) throw new Error("Manifest sumiu");
 
-    if (nextPage >= 1 && nextPage <= 8) {
-      const pObj = (m.pages || []).find((x) => Number(x.page) === nextPage) || { title: `Página ${nextPage}`, text: "" };
+    const pages = Array.isArray(m.pages) ? m.pages : [];
+    const images = Array.isArray(m.images) ? m.images : [];
+    const nextPage = images.length + 1;
 
+    if (nextPage <= 8) {
+      m.status = "generating";
       m.step = `page_${nextPage}`;
+      m.error = "";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      const prompt = buildScenePromptFromParagraph({
-        paragraphText: pObj.text,
-        themeKey: m.theme,
-        childName: m.child?.name,
-        styleKey,
-      });
+      const pageObj = pages.find((p) => Number(p.page) === nextPage) || pages[nextPage - 1];
+      if (!pageObj) throw new Error("Página da história não encontrada.");
 
-      const pid = await replicateCreateImageJob({
-        prompt,
-        imageDataUrl: bufferToDataUrlPng(await fsp.readFile(imagePngPath)),
-      });
+      // cria job se não existir
+      if (!m.pending || m.pending.kind !== "page" || m.pending.page !== nextPage || !m.pending.pid) {
+        ensureAdminForStorage();
 
-      m.pending = { kind: "replicate", target: "page", page: nextPage, predictionId: pid, prompt, startedAt: nowISO() };
-      m.updatedAt = nowISO();
-      await saveManifestAll(userId, id, m, { sbUser: req.sb });
+        const prompt = buildScenePromptFromParagraph({
+          paragraphText: pageObj.text,
+          themeKey: m.theme,
+          childName: m.child?.name,
+          styleKey: m.style || "read",
+        });
 
-      return respond(m, { nextTryAt: Date.now() + 1200 });
+        const imgBuf = await fsp.readFile(imagePngPath);
+        const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
+        const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+
+        m.pending = { kind: "page", page: nextPage, pid, createdAt: nowISO(), prompt };
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
+      }
+
+      // poll job
+      const pred = await replicatePollOnce(m.pending.pid);
+      const st = String(pred?.status || "");
+
+      if (st === "succeeded") {
+        const outUrl = extractReplicateOutputUrl(pred);
+        const imgBuf = await pngBufferFromReplicateOutput(outUrl);
+
+        const baseName = `page_${String(nextPage).padStart(2, "0")}.png`;
+        const finalName = `page_${String(nextPage).padStart(2, "0")}_final.png`;
+
+        const basePath = path.join(bookDir, baseName);
+        await fsp.writeFile(basePath, imgBuf);
+
+        const finalPath = path.join(bookDir, finalName);
+        await stampStoryTextOnImage({
+          inputPath: basePath,
+          outputPath: finalPath,
+          title: pageObj.title,
+          text: pageObj.text,
+        });
+
+        const key = `${m.ownerId || userId}/${id}/${finalName}`;
+        await sbUploadBuffer({ pathKey: key, contentType: "image/png", buffer: await fsp.readFile(finalPath) });
+
+        images.push({
+          page: nextPage,
+          file: finalName,
+          url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+          storageKey: key,
+          prompt: m.pending.prompt || "",
+        });
+
+        m.images = images;
+        m.pending = null;
+        m.step = nextPage < 8 ? `page_${nextPage + 1}` : "pdf";
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m));
+      }
+
+      if (st === "failed" || st === "canceled") {
+        const err = String(pred?.error || "Prediction falhou no Replicate.");
+        if (isHighDemandError(err)) {
+          return res.json(await buildProgress(m, { error: err, nextTryAt: Date.now() + 6000 }));
+        }
+
+        m.status = "failed";
+        m.step = "failed";
+        m.error = err;
+        m.pending = null;
+        m.updatedAt = nowISO();
+        await saveManifestAll(userId, id, m, { sbUser: req.sb });
+
+        return res.json(await buildProgress(m));
+      }
+
+      return res.json(await buildProgress(m, { nextTryAt: Date.now() + 3000 }));
     }
 
-    // ----------------- 5) PDF (quando cover + 8 pages prontos) -----------------
+    // =========================================================
+    // PASSO 4: PDF (gera e sobe no Storage)
+    // =========================================================
+    m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+    if (!m) throw new Error("Manifest sumiu");
+
     if (m.status !== "done") {
+      ensureAdminForStorage();
+
+      m.status = "generating";
       m.step = "pdf";
+      m.error = "";
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-      // garante arquivos locais (baixa do storage se necessário)
-      const coverFinalName = "cover_final.png";
-      const coverLocal = path.join(bookDir, coverFinalName);
-      await ensureFileFromStorageIfMissing(coverLocal, m.cover?.storageKey || `${owner}/${id}/${coverFinalName}`);
+      const coverPath = path.join(bookDir, "cover_final.png");
+      await ensureFileFromStorageIfMissing(coverPath, m.cover?.storageKey || `${m.ownerId || userId}/${id}/cover_final.png`);
 
-      const pageLocals = [];
-      for (let p = 1; p <= 8; p++) {
-        const finalName = `page_${String(p).padStart(2, "0")}_final.png`;
-        const local = path.join(bookDir, finalName);
-        const entry = (m.images || []).find((it) => Number(it.page) === p);
-        const key = entry?.storageKey || `${owner}/${id}/${finalName}`;
-        await ensureFileFromStorageIfMissing(local, key);
-        pageLocals.push(local);
+      const pagePaths = (m.images || [])
+        .slice(0, 8)
+        .map((it) => path.join(bookDir, it.file || ""));
+
+      // tenta materializar páginas do storage se faltar
+      for (const it of (m.images || []).slice(0, 8)) {
+        const fp = path.join(bookDir, it.file || "");
+        if (!existsSyncSafe(fp)) {
+          const key = it.storageKey || `${m.ownerId || userId}/${id}/${it.file}`;
+          await ensureFileFromStorageIfMissing(fp, key);
+        }
       }
 
       const pdfPath = await makePdfImagesOnly({
         bookId: id,
-        coverPath: coverLocal,
-        pageImagePaths: pageLocals,
+        coverPath,
+        pageImagePaths: pagePaths,
         outputDir: bookDir,
       });
 
-      // upload pdf
-      const pdfKey = `${owner}/${id}/book-${id}.pdf`;
-      const pdfBuf = await fsp.readFile(pdfPath);
-      await sbUploadBuffer({ pathKey: pdfKey, contentType: "application/pdf", buffer: pdfBuf });
+      const pdfKey = `${m.ownerId || userId}/${id}/book-${id}.pdf`;
+      await sbUploadBuffer({ pathKey: pdfKey, contentType: "application/pdf", buffer: await fsp.readFile(pdfPath) });
 
-      m.pdfStorageKey = pdfKey;
-      m.pdf = `/download/${encodeURIComponent(id)}`;
       m.status = "done";
       m.step = "done";
       m.error = "";
+      m.pdf = `/download/${encodeURIComponent(id)}`;
+      m.pdfStorageKey = pdfKey;
       m.updatedAt = nowISO();
       await saveManifestAll(userId, id, m, { sbUser: req.sb });
-      return respond(m);
+
+      return res.json(await buildProgress(m));
     }
 
-    return respond(m);
+    // já pronto
+    return res.json(await buildProgress(m));
   } catch (e) {
+    // marca erro no manifest (sem perder lock)
     try {
-      // tenta marcar failed no manifest para o front mostrar erro
-      const userId = String(req.user?.id || "");
-      const id =
-        String(req.body?.id || "").trim() ||
-        String(req.query?.id || "").trim() ||
-        String(req.params?.id || "").trim();
-
-      if (userId && id) {
-        const m = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
-        if (m) {
-          m.status = "failed";
-          m.step = "failed";
-          m.error = formatErrFull(e);
-          m.updatedAt = nowISO();
-          await saveManifestAll(userId, id, m, { sbUser: req.sb });
+      let mm = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
+      if (mm) {
+        const errMsg = String(e?.message || e || "Erro");
+        // se for high demand, não mata o livro
+        if (isHighDemandError(errMsg)) {
+          mm.status = "generating";
+          mm.error = errMsg;
+          mm.updatedAt = nowISO();
+          await saveManifestAll(userId, id, mm, { sbUser: req.sb });
+          return res.json(await (async () => {
+            const p = await (async () => {
+              const totalSteps = 11;
+              return { ok: true, id: mm.id, status: mm.status, step: mm.step, error: mm.error, theme: mm.theme, style: mm.style, doneSteps: 0, totalSteps, message: "Serviço ocupado…", coverUrl: mm.cover?.url || "", images: (mm.images||[]).map(x=>({page:x.page,url:x.url||""})), pdf: mm.pdf||"", updatedAt: mm.updatedAt };
+            })();
+            return Object.assign(p, { nextTryAt: Date.now() + 7000 });
+          })());
         }
+
+        mm.status = "failed";
+        mm.step = "failed";
+        mm.error = errMsg;
+        mm.updatedAt = nowISO();
+        await saveManifestAll(userId, id, mm, { sbUser: req.sb });
       }
     } catch {}
 
