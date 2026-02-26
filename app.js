@@ -2212,7 +2212,63 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+// ✅ Converte o "output" do Replicate (vários formatos) em Buffer PNG
+async function pngBufferFromReplicateOutput(output) {
+  let out = output;
 
+  if (!out) {
+    throw new Error("Replicate retornou output vazio.");
+  }
+
+  // Se passou um objeto prediction inteiro sem querer
+  if (out && typeof out === "object" && !Array.isArray(out) && out.output) {
+    out = out.output;
+  }
+
+  // Se vier array (ex: ["https://...png"])
+  if (Array.isArray(out)) {
+    out = out.find((x) => !!x) || out[0];
+  }
+
+  // Buffer direto
+  if (Buffer.isBuffer(out)) {
+    return await sharp(out).png().toBuffer();
+  }
+
+  // String: URL ou dataURL
+  if (typeof out === "string") {
+    if (out.startsWith("http")) {
+      const buf = await downloadToBuffer(out, 240000);
+      return await sharp(buf).png().toBuffer();
+    }
+    if (out.startsWith("data:")) {
+      const b = dataUrlToBuffer(out);
+      if (!b) throw new Error("Replicate retornou dataURL inválida.");
+      return await sharp(b).png().toBuffer();
+    }
+  }
+
+  // Objeto { url }
+  if (out && typeof out === "object") {
+    if (typeof out.url === "string" && out.url.startsWith("http")) {
+      const buf = await downloadToBuffer(out.url, 240000);
+      return await sharp(buf).png().toBuffer();
+    }
+
+    // Alguns modelos retornam { urls: [...] }
+    if (Array.isArray(out.urls) && typeof out.urls[0] === "string") {
+      const u = out.urls.find((x) => typeof x === "string" && x.startsWith("http")) || out.urls[0];
+      const buf = await downloadToBuffer(u, 240000);
+      return await sharp(buf).png().toBuffer();
+    }
+  }
+
+  // Nada reconhecido
+  throw new Error(
+    "Replicate não retornou imagem em formato reconhecido. output=" +
+      JSON.stringify(output).slice(0, 900)
+  );
+}
 app.get("/api/progress/:id", requireAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
@@ -2361,8 +2417,7 @@ async function handleGenerateNext(req, res) {
 
       const pred = await replicatePollOnce(m.pending.pid);
       if (pred?.status === "succeeded") {
-        const outUrl = pred.output?.[0] || pred.output?.url || pred.output;
-        const buf = await pngBufferFromReplicateOutput(outUrl);
+     const buf = await pngBufferFromReplicateOutput(pred.output);
 
         const base = path.join(bookDir, "cover.png");
         const final = path.join(bookDir, "cover_final.png");
@@ -2416,8 +2471,7 @@ async function handleGenerateNext(req, res) {
 
       const pred = await replicatePollOnce(m.pending.pid);
       if (pred?.status === "succeeded") {
-        const outUrl = pred.output?.[0] || pred.output?.url || pred.output;
-        const buf = await pngBufferFromReplicateOutput(outUrl);
+      const buf = await pngBufferFromReplicateOutput(pred.output);
 
         const base = path.join(bookDir, `page_${String(nextPage).padStart(2, "0")}.png`);
         const final = path.join(bookDir, `page_${String(nextPage).padStart(2, "0")}_final.png`);
