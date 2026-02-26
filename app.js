@@ -487,7 +487,7 @@ async function fetchJson(url, { method = "GET", headers = {}, body = null, timeo
 async function downloadToBuffer(url, timeoutMs = 240000) {
   netMark("downloadToBuffer", url);
 
-  const tries = 3;
+  const tries = 5; // era 3
   let lastErr = null;
 
   for (let attempt = 1; attempt <= tries; attempt++) {
@@ -500,7 +500,9 @@ async function downloadToBuffer(url, timeoutMs = 240000) {
         redirect: "follow",
         headers: {
           "User-Agent": "MeuLivroMagico/1.0",
-          Accept: "image/*,*/*",
+          "Accept": "image/*,*/*",
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache",
         },
       });
 
@@ -515,15 +517,17 @@ async function downloadToBuffer(url, timeoutMs = 240000) {
       return Buffer.from(ab);
     } catch (e) {
       lastErr = e;
-      const msg = String(e?.name || "") === "AbortError"
-        ? `timeout após ${timeoutMs}ms`
-        : String(e?.message || e);
+
+      const msg =
+        String(e?.name || "") === "AbortError"
+          ? `timeout após ${timeoutMs}ms`
+          : String(e?.message || e);
 
       const err = new Error(`download fetch failed (try ${attempt}/${tries}) @ ${url} :: ${msg}`);
       netFail("downloadToBuffer", url, err);
 
-      // pequeno backoff
-      if (attempt < tries) await new Promise((r) => setTimeout(r, 800 * attempt));
+      // backoff mais forte (1.2s, 2.4s, 3.6s, 4.8s...)
+      if (attempt < tries) await new Promise((r) => setTimeout(r, 1200 * attempt));
     } finally {
       clearTimeout(t);
     }
@@ -684,7 +688,7 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
     const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       method: "GET",
-      timeoutMs: 60000,
+        timeoutMs: 120000,
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
 
@@ -2503,7 +2507,11 @@ if (m?.nextTryAt && Number(m.nextTryAt) > now) {
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
     return res.json(buildProgress(m, "Aguardando…"));
   } catch (e) {
-  const errMsg = String(e?.message || e || "Erro");
+const baseMsg = String(e?.message || e || "Erro");
+const net = NET_LAST && (NET_LAST.url || NET_LAST.error)
+  ? ` | lastFetch: stage=${NET_LAST.stage} url=${NET_LAST.url} err=${NET_LAST.error}`
+  : "";
+const errMsg = (baseMsg + net).slice(0, 1800);
 
     try {
       const m2 = await loadManifestAll(userId, id, { sbUser: req.sb, allowAdminFallback: true });
