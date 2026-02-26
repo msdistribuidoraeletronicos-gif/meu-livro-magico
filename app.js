@@ -2019,6 +2019,15 @@ async function apiUploadPhotoAndMask(){
   }
   return true;
 }
+  function canGenerateWhy(){
+  if(!state.photo) return "Envie uma foto da criança.";
+  if(!state.childName || state.childName.trim().length < 2) return "Digite o nome (mínimo 2 letras).";
+  if(!state.childAge) return "Selecione a idade.";
+  if(!state.theme) return "Escolha um tema.";
+  if(!state.style) return "Escolha um estilo.";
+  if(!state.consent) return "Marque a autorização para usar a foto.";
+  return "";
+}
 async function goToGenerateStep4(){
 
   setHint($("hintGen"),"");const why=canGenerateWhy();if(why){setHint($("hintGen"),why);return;}
