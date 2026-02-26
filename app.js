@@ -803,9 +803,10 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
   // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
   const imgBuf = await fsp.readFile(imagePngPath);
 
+    const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
   const input = {
     prompt,
-    image_input: [bufferToDataUrlPng(imgBuf)],
 
     // mantém seus ENV (se o modelo suportar)
     aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
@@ -813,6 +814,10 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     output_format: REPLICATE_OUTPUT_FORMAT || "png",
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
+
+  // ✅ campo de imagem configurável (image vs image_input etc.)
+  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imgDataUrl];
+  else input[REPLICATE_IMAGE_FIELD] = imgDataUrl;
 
   // cria + aguarda prediction
   const created = await replicateCreatePrediction({
@@ -2769,8 +2774,17 @@ app.get("/api/debug-net", requireAuth, async (req, res) => {
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
     out.replicate = { ok: true, info: "GET /predictions OK" };
-  } catch (e) {
-    out.replicate = { ok: false, error: String(e?.message || e) };
+    } catch (e) {
+    // Se já é um erro "HTTP xxx ..." gerado por nós, não re-embala como "fetch failed"
+    const msg = String(e?.message || e);
+
+    // mantém mais detalhe no NET_LAST
+    netFail(`fetchJson:${method}`, url, e);
+
+    // deixa passar o erro original (com HTTP status e corpo)
+    throw e instanceof Error ? e : new Error(msg);
+  } finally {
+    clearTimeout(t);
   }
 
   return res.json(out);
