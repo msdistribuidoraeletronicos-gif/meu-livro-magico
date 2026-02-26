@@ -1658,6 +1658,16 @@ a.link:hover{text-decoration:underline}
 <script>
 const nextUrl=${JSON.stringify(nextUrl || "/create")};
 const $=(id)=>document.getElementById(id);
+function canGenerateWhy(){
+  if(!state.photo) return "Envie a foto da criança.";
+  if(!state.mask) return "Máscara ausente (reenvie a foto).";
+  if(!state.childName || state.childName.trim().length < 2) return "Digite o nome (mín. 2 letras).";
+  if(!state.childAge) return "Idade inválida.";
+  if(!state.theme) return "Escolha um tema.";
+  if(!state.style) return "Escolha um estilo.";
+  if(!state.consent) return "Marque a autorização para usar a foto.";
+  return "";
+}
 function setHint(msg){const el=$("hint");el.textContent=msg||"";el.style.display=msg?"block":"none";}
 function setTab(which){const isLogin=which==="login";$("tabLogin").classList.toggle("active",isLogin);$("tabSignup").classList.toggle("active",!isLogin);
 $("panelLogin").style.display=isLogin?"block":"none";$("panelSignup").style.display=isLogin?"none":"block";setHint("");}
@@ -2519,10 +2529,24 @@ const pid = await replicateCreateImageJob({ prompt, imageUrl: refUrl });
       }
 
       const pred = await replicatePollOnce(m.pending.pid);
-      if (pred?.status === "failed" || pred?.status === "canceled") {
+ if (pred?.status === "failed" || pred?.status === "canceled") {
+  const errMsg = String(pred?.error || "Replicate falhou ao gerar a capa.");
+
+  // ✅ E003 / high demand = erro TEMPORÁRIO → não falha o livro
+  if (isHighDemandError(errMsg)) {
+    m.status = "generating";
+    m.step = "cover";       // continua na capa
+    m.error = "";
+    m.pending = null;       // limpa para recriar o job na próxima chamada
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(202).json({ ok: true, temporary: true, error: errMsg });
+  }
+
+  // erro real → falha
   m.status = "failed";
   m.step = "failed";
-  m.error = String(pred?.error || "Replicate falhou ao gerar a capa.");
+  m.error = errMsg;
   m.pending = null;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2586,10 +2610,26 @@ if (!pageObj || !pageObj.text) {
   return res.json({ ok: true, pending: m.pending });
 }
       const pred = await replicatePollOnce(m.pending.pid);
-      if (pred?.status === "failed" || pred?.status === "canceled") {
+   if (pred?.status === "failed" || pred?.status === "canceled") {
+  const errMsg = String(pred?.error || `Replicate falhou na página ${m.pending?.page || "?"}.`);
+
+  // ✅ E003 / high demand = TEMPORÁRIO → não falha o livro
+  if (isHighDemandError(errMsg)) {
+    const stayPage = Number(m.pending?.page || nextPage || 1);
+
+    m.status = "generating";
+    m.step = `page_${stayPage}`; // continua na mesma página
+    m.error = "";
+    m.pending = null;            // limpa para recriar o job na próxima chamada
+    m.updatedAt = nowISO();
+    await saveManifestAll(userId, id, m, { sbUser: req.sb });
+    return res.status(202).json({ ok: true, temporary: true, error: errMsg, page: stayPage });
+  }
+
+  // erro real → falha
   m.status = "failed";
   m.step = "failed";
-  m.error = String(pred?.error || `Replicate falhou na página ${m.pending?.page || "?"}.`);
+  m.error = errMsg;
   m.pending = null;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
