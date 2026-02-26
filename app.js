@@ -2397,14 +2397,8 @@ if (m?.nextTryAt && Number(m.nextTryAt) > now) {
     }
 
     // 2) COVER
-    const coverFinalPath = path.join(bookDir, "cover_final.png");
-    const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
-
-   if (needCover) {
-  m.step = "cover";
-// 2) COVER (job pendente, igual páginas)
-const coverFinalName = "cover_final.png";
-const coverFinalPath = path.join(bookDir, coverFinalName);
+    // 2) COVER (ASSÍNCRONO via Replicate job + poll once)
+const coverFinalPath = path.join(bookDir, "cover_final.png");
 const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
 
 if (needCover) {
@@ -2414,7 +2408,7 @@ if (needCover) {
     styleKey: m.style,
   });
 
-  // (A) Já tem job pendente de capa: poll once
+  // (A) Se já existe job pendente de CAPA: poll once
   if (m.pending?.type === "cover" && m.pending?.predictionId) {
     m.step = "cover_wait";
     m.updatedAt = nowISO();
@@ -2434,8 +2428,9 @@ if (needCover) {
       else if (out && typeof out === "object" && typeof out.url === "string") imgBuf = await downloadToBuffer(out.url, 240000);
       else if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") imgBuf = await downloadToBuffer(out[0].url, 240000);
 
-      if (!imgBuf) throw new Error("Replicate succeeded mas não retornou imagem reconhecível (capa).");
+      if (!imgBuf) throw new Error("Replicate succeeded (capa) mas não retornou imagem reconhecível.");
 
+      // salva base + carimba texto da capa
       const coverBasePath = path.join(bookDir, "cover.png");
       await fsp.writeFile(coverBasePath, await sharp(imgBuf).png().toBuffer());
 
@@ -2446,14 +2441,16 @@ if (needCover) {
         subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
       });
 
-      const coverStorageKey = `${m.ownerId || userId}/${id}/${coverFinalName}`;
+      // upload no Storage
+      const coverName = "cover_final.png";
+      const coverStorageKey = `${m.ownerId || userId}/${id}/${coverName}`;
       const coverFinalBuf = await fsp.readFile(coverFinalPath);
       await sbUploadBuffer({ pathKey: coverStorageKey, contentType: "image/png", buffer: coverFinalBuf });
 
       m.cover = {
         ok: true,
-        file: coverFinalName,
-        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
+        file: coverName,
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverName)}`,
         storageKey: coverStorageKey,
       };
 
@@ -2466,13 +2463,14 @@ if (needCover) {
     }
 
     if (st === "failed" || st === "canceled") {
-      throw new Error(String(pred?.error || "Prediction falhou no Replicate (capa)."));
+      const err = String(pred?.error || "Prediction falhou no Replicate (capa).");
+      throw new Error(err);
     }
 
     return res.json(buildProgress(m, "Gerando capa… (Replicate)"));
   }
 
-  // (B) Não tem job pendente: cria agora e retorna
+  // (B) Não existe job pendente: cria agora e retorna
   m.step = "cover_start";
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2638,7 +2636,7 @@ if (needCover) {
     m.updatedAt = nowISO();
     await saveManifestAll(userId, id, m, { sbUser: req.sb });
     return res.json(buildProgress(m, "Aguardando…"));
-  }
+  
   } catch (e) {
 const baseMsg = String(e?.message || e || "Erro");
 const net = NET_LAST && (NET_LAST.url || NET_LAST.error)
