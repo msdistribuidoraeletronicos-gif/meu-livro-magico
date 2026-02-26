@@ -484,40 +484,52 @@ async function fetchJson(url, { method = "GET", headers = {}, body = null, timeo
     clearTimeout(t);
   }
 }
-async function downloadToBuffer(url, timeoutMs = 120000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-
+async function downloadToBuffer(url, timeoutMs = 240000) {
   netMark("downloadToBuffer", url);
 
-  try {
-    let r;
+  const tries = 3;
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
     try {
-      r = await fetch(url, {
+      const r = await fetch(url, {
         signal: ctrl.signal,
+        redirect: "follow",
         headers: {
           "User-Agent": "MeuLivroMagico/1.0",
           Accept: "image/*,*/*",
         },
       });
+
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        const err = new Error(`download HTTP ${r.status} @ ${url} :: ${text.slice(0, 300)}`);
+        netFail("downloadToBuffer", url, err);
+        throw err;
+      }
+
+      const ab = await r.arrayBuffer();
+      return Buffer.from(ab);
     } catch (e) {
-      const err = new Error(`download fetch failed @ ${url} :: ${String(e?.message || e)}`);
-      netFail("downloadToBuffer", url, err);
-      throw err;
-    }
+      lastErr = e;
+      const msg = String(e?.name || "") === "AbortError"
+        ? `timeout após ${timeoutMs}ms`
+        : String(e?.message || e);
 
-    if (!r.ok) {
-      const text = await r.text().catch(() => "");
-      const err = new Error(`download HTTP ${r.status} @ ${url} :: ${text.slice(0, 300)}`);
+      const err = new Error(`download fetch failed (try ${attempt}/${tries}) @ ${url} :: ${msg}`);
       netFail("downloadToBuffer", url, err);
-      throw err;
-    }
 
-    const ab = await r.arrayBuffer();
-    return Buffer.from(ab);
-  } finally {
-    clearTimeout(t);
+      // pequeno backoff
+      if (attempt < tries) await new Promise((r) => setTimeout(r, 800 * attempt));
+    } finally {
+      clearTimeout(t);
+    }
   }
+
+  throw lastErr || new Error("download falhou (sem detalhes)");
 }
 
 async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
@@ -2717,6 +2729,10 @@ app.get("/api/debug-openai", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
+// ✅ Mostra a última chamada de rede capturada (pra descobrir o "fetch failed")
+app.get("/api/debug-lastfetch", requireAuth, (req, res) => {
+  return res.json({ ok: true, last: NET_LAST });
+});
 app.get("/api/debug-net", requireAuth, async (req, res) => {
   const out = { ok: true, openai: null, replicate: null };
 
@@ -2741,12 +2757,20 @@ app.get("/api/debug-net", requireAuth, async (req, res) => {
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
     out.replicate = { ok: true, info: "GET /predictions OK" };
-  } catch (e) {
-    out.replicate = { ok: false, error: String(e?.message || e) };
-  }
+  } } catch (e) {
+  const msg =
+    String(e?.name || "") === "AbortError"
+      ? `timeout após ${timeoutMs}ms`
+      : String(e?.message || e);
+
+  const err = new Error(`fetch failed @ ${url} (${method}) :: ${msg}`);
+  netFail(`fetchJson:${method}`, url, err);
+  throw err;
+}
 
   return res.json(out);
 });
+
 app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
