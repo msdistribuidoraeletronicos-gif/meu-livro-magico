@@ -2291,6 +2291,24 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
 
     const images = (m.images || []).map((it) => ({ page: it.page, url: it.url || "" }));
     const coverUrl = m.cover?.ok ? (m.cover?.url || "") : "";
+    // ✅ progresso (igual /api/progress)
+    const totalSteps = 1 + 1 + 8 + 1; // story + cover + 8 pages + pdf
+    const pagesDone = Array.isArray(m.images) ? m.images.filter((x) => x && x.url).length : 0;
+
+    let doneSteps = 0;
+    if (Array.isArray(m.pages) && m.pages.length >= 8) doneSteps += 1; // story pronta
+    if (m.cover?.ok) doneSteps += 1; // capa pronta
+    doneSteps += Math.min(8, pagesDone); // páginas prontas
+    if (m.status === "done" && m.pdf) doneSteps += 1; // pdf pronto
+
+    const message =
+      m.status === "failed" ? "Falhou" :
+      m.status === "done" ? "Livro pronto 🎉" :
+      m.step?.startsWith("page_") ? "Gerando página…" :
+      m.step === "cover" ? "Gerando capa…" :
+      m.step === "story" ? "Criando história…" :
+      m.step === "pdf" ? "Gerando PDF…" :
+      "Preparando…";
 
     return res.json({
       ok: true,
@@ -2300,6 +2318,14 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
       error: m.error,
       theme: m.theme || "",
       style: m.style || "read",
+
+      // ✅ adicionados (pra UI não travar em 0/11)
+      doneSteps,
+      totalSteps,
+      message,
+      pending: m.pending || null,
+      lastFetch: m.lastFetch || null,
+
       coverUrl,
       images,
       pdf: m.pdf || "",
