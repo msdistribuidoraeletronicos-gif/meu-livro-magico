@@ -3,17 +3,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
-      "includeFiles": [
-        "app.js",
-        "admin.page.js",
-        "generate.page.js",
-        "profile.page.js",
-        "books/**",
-        "public/**",
-        "landing.html",
-        "how-it-works.html",
-        "exemplos.html"
-      ]
+      "includeFiles": "app.js admin.page.js generate.page.js profile.page.js books/** public/** landing.html how-it-works.html exemplos.html"
     }
   },
   "routes": [
