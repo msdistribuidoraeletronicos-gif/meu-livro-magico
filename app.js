@@ -1097,20 +1097,21 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, sty
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  // ✅ INSTRUÇÃO CRÍTICA PARA NANO BANANA PRO - IDENTITY LOCK NO INÍCIO
   const base = [
-    "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
-    "Keep the person's facial features exactly the same as Image 1.",
-    "Use the child from Image 1 as the main protagonist.",
-    "The child MUST be the central character in this scene.",
-    "Maintain the same face, hair color, hair style, skin tone, and facial expression from the reference image.",
+    "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
+    "Use the child from Image 1 as the protagonist in every scene.",
+    "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
+    "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
+    "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
+    "If the scene requires different pose/clothes, keep the face identical.",
+    "No additional characters that look similar to the protagonist (avoid duplicates).",
     "",
     "Scene description:",
     `"${txt}"`,
     "",
     `Theme: ${th}.`,
-    "The child must be naturally integrated into the scene with appropriate expression and pose.",
-    "NO text, captions, or words in the generated image.",
+    "The child must be clearly visible (not tiny / not hidden / not from behind).",
+    "NO text, captions, logos, watermarks, or letters in the image.",
     name ? `Context: child's name is ${name}.` : "",
   ].filter(Boolean);
 
@@ -1139,13 +1140,13 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
   const style = String(styleKey || "read").trim();
 
   const parts = [
-    "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
-    "Keep the person's facial features exactly the same as Image 1.",
-    "Use the child from Image 1 as the main central character.",
-    "The child MUST be prominently featured as the hero of the story.",
-    "Maintain the same face, hair color, hair style, skin tone from the reference image.",
-    "",
-    "Create a children's book cover.",
+  "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
+  "Use the child from Image 1 as the main central character on the cover.",
+  "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
+  "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
+  "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
+  "",
+  "Create a children's book cover.",
     `Theme: ${th}.`,
     "Scene: cheerful, magical, positive, with child prominently centered.",
     "Expression: happy, excited, inviting adventure.",
@@ -3179,9 +3180,8 @@ app.get("/api/whoami", requireAuth, async (req, res) => {
       console.log("ℹ️  IMAGE_PROVIDER: Replicate");
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
-      console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
-      console.log("ℹ️  PROMPT_STRENGTH:", REPLICATE_PROMPT_STRENGTH, "| GUIDANCE_SCALE:", REPLICATE_GUIDANCE_SCALE);
-      console.log("✅ CORREÇÃO: Imagem de referência sempre enviada como protagonista");
+     console.log("ℹ️  SIZE:", REPLICATE_SIZE, "| ASPECT:", REPLICATE_ASPECT_RATIO);
+console.log("ℹ️  SEQUENTIAL:", REPLICATE_SEQUENTIAL, "| MAX_IMAGES:", REPLICATE_MAX_IMAGES, "| ENHANCE_PROMPT:", REPLICATE_ENHANCE_PROMPT);      console.log("✅ CORREÇÃO: Imagem de referência sempre enviada como protagonista");
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
