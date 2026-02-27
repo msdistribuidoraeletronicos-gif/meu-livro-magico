@@ -743,10 +743,10 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
 // Na função replicateCreateImageJob, adicione logs:
-async function replicateCreateImageJob({ prompt, imageDataUrl }) {
+async function replicateCreateImageJob({ prompt, referenceUrl }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
 
-  const imgRef = String(imageDataUrl || "").trim();
+  const imgRef = String(referenceUrl || "").trim();
   const isData = imgRef.startsWith("data:image");
   const isHttp = /^https?:\/\//i.test(imgRef);
 
@@ -754,7 +754,6 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     throw new Error("Imagem de referência inválida. Deve ser URL http(s) ou data:image/...base64.");
   }
 
-  // ✅ Seedream-4 input conforme docs
   const input = {
     prompt,
     size: REPLICATE_SIZE || "2K",
@@ -764,7 +763,6 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
   };
 
-  // ✅ campo correto: image_input (array de 1..10)
   const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
   input[imageField] = [imgRef];
 
@@ -772,7 +770,7 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     model: REPLICATE_MODEL,
     imageField,
     refType: isHttp ? "httpURL" : "dataURL",
-    refLen: isHttp ? "URL" : imgRef.length,
+    refLen: isHttp ? imgRef.slice(0, 60) + "..." : imgRef.length,
     inputKeys: Object.keys(input),
   });
 
