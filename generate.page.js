@@ -494,7 +494,17 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       } catch (e) {
         const msg = String(e?.message || e);
         addLog("❌ ERRO: " + msg);
-
+if (/isReplicateThrottledError is not defined/i.test(msg)) {
+  stopFlag = true;
+  running = false;
+  uiSetDot("bad");
+  setHint(
+    "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\n" +
+    "Corrija o app.js e faça redeploy."
+  );
+  try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
+  return;
+}
         if (msg === "not_logged_in") {
           stopFlag = true;
           running = false;

@@ -156,7 +156,19 @@ function supabaseUserClient(accessToken) {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
 }
+function isReplicateThrottledError(err) {
+  const msg = String(err?.message || err || "");
+  const status =
+    err?.status ||
+    err?.response?.status ||
+    err?.cause?.status ||
+    err?.data?.status;
 
+  if (status === 429) return true;
+
+  // mensagens comuns de rate limit/alta demanda
+  return /429|too many requests|rate limit|throttl|high demand|E003|overloaded|temporarily unavailable/i.test(msg);
+}
 function assertSupabaseAnon() {
   if (!supabaseAnon) throw new Error("Supabase ANON não configurado. Configure SUPABASE_URL e SUPABASE_ANON_KEY.");
 }
