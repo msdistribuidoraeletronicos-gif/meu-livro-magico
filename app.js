@@ -716,8 +716,26 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 }
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
+// Na função replicateCreateImageJob, adicione logs:
 async function replicateCreateImageJob({ prompt, imageDataUrl }) {
-  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
+  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
+
+  // Validação
+  const imgRef = String(imageDataUrl || "").trim();
+  const isData = imgRef.startsWith("data:image");
+  const isHttp = /^https?:\/\//i.test(imgRef);
+
+  if (!imgRef || (!isData && !isHttp)) {
+    throw new Error("Imagem de referência inválida. Deve ser data:image/...base64 ou URL http(s).");
+  }
+
+  console.log("📸 Replicate Job:", {
+    imageType: isData ? "dataURL" : "httpURL",
+    imageLength: imgRef.length,
+    imagePrefix: imgRef.slice(0, 60) + "...",
+    promptLength: prompt.length,
+    promptFirstLines: prompt.split('\n').slice(0, 3).join(' | '),
+  });
 
   const input = {
     prompt,
@@ -727,8 +745,20 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
 
-  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imageDataUrl];
-  else input[REPLICATE_IMAGE_FIELD] = imageDataUrl;
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
+  
+  if (REPLICATE_IMAGE_IS_ARRAY) {
+    input[imageField] = [imageDataUrl];
+  } else {
+    input[imageField] = imageDataUrl;
+  }
+
+  console.log("📤 Enviando para Replicate:", {
+    model: REPLICATE_MODEL,
+    imageField: imageField,
+    isArray: REPLICATE_IMAGE_IS_ARRAY,
+    inputKeys: Object.keys(input),
+  });
 
   const created = await replicateCreatePrediction({
     model: REPLICATE_MODEL || "google/nano-banana-pro",
@@ -736,9 +766,8 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     timeoutMs: 120000,
   });
 
-  const pid = String(created?.id || "").trim();
-  if (!pid) throw new Error("Replicate não retornou prediction id.");
-  return pid;
+  console.log("✅ Prediction criada:", created?.id);
+  return String(created?.id || "").trim();
 }
 
 async function replicatePollOnce(predictionId) {
@@ -992,42 +1021,45 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
   return norm;
 }
 
+// SUBSTITUA a função buildScenePromptFromParagraph existente por esta:
 function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
+  // INSTRUÇÃO CRÍTICA PARA NANO BANANA PRO - IDENTITY LOCK NO INÍCIO
   const base = [
-    "Estou escrevendo um livro infantil e quero que você crie UMA CENA para este texto:",
+    "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
+    "Keep the person's facial features exactly the same as Image 1.",
+    "Use the child from Image 1 as the main protagonist.",
+    "",
+    "Scene description:",
     `"${txt}"`,
-    "Regras IMPORTANTES:",
-    "- Use a criança da imagem enviada como personagem principal.",
-    "- Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
-    "- Mantenha a identidade consistente em todas as páginas (same face, same hairstyle, same skin tone).",
-    `- Tema da história: ${th}.`,
-    "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
-    "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
-    name ? `Nome da criança (apenas contexto): ${name}.` : "",
+    "",
+    `Theme: ${th}.`,
+    "The child must be naturally integrated into the scene with appropriate expression and pose.",
+    "NO text, captions, or words in the generated image.",
+    name ? `Context: child's name is ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
-    base.splice(
-      5,
-      0,
-      [
-        "- Estilo: página de livro de colorir (coloring book).",
-        "- Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
-        "- SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM texturas realistas.",
-        "- Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
-        "- Visual infantil, fofo e amigável; formas simples; alta legibilidade dos contornos.",
-      ].join(" ")
+    base.push(
+      "",
+      "Style: Coloring book page.",
+      "Black and white art, clean outlines, thick lines.",
+      "NO colors, NO gradients, NO shadows.",
+      "White or light background, few background details for easy coloring."
     );
   } else {
-    base.splice(5, 0, "- Estilo: ilustração semi-realista de livro infantil, bonita, alegre, cores agradáveis, luz suave.");
+    base.push(
+      "",
+      "Style: Semi-realistic children's book illustration.",
+      "Cheerful, vibrant colors, soft light, magical atmosphere."
+    );
   }
 
-  return base.join(" ");
+  return base.join("\n");
 }
 
 function buildCoverPrompt({ themeKey, childName, styleKey }) {
@@ -1036,33 +1068,35 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
   const style = String(styleKey || "read").trim();
 
   const parts = [
-    "Crie uma CAPA de livro infantil.",
-    "Use a criança da imagem como personagem principal e mantenha suas características originais (identidade consistente).",
-    "Mantenha a identidade consistente com a foto (same face, same hairstyle, same skin tone).",
-    `Tema: ${th}.`,
-    "Cena de capa: alegre, mágica, positiva, com a criança em destaque no centro.",
-    "NÃO escreva texto/legendas na imagem (eu vou aplicar depois).",
-    name ? `Nome da criança (apenas contexto): ${name}.` : "",
+    "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
+    "Keep the person's facial features exactly the same as Image 1.",
+    "Use the child from Image 1 as the main central character.",
+    "",
+    "Create a children's book cover.",
+    `Theme: ${th}.`,
+    "Scene: cheerful, magical, positive, with child prominently centered.",
+    "Expression: happy, excited, inviting adventure.",
+    "NO text, titles, or captions in the image.",
+    name ? `Context: child's name is ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
-    parts.splice(
-      1,
-      0,
-      [
-        "Estilo: CAPA em formato de livro para colorir (coloring book).",
-        "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
-        "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
-        "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
-      ].join(" ")
+    parts.push(
+      "",
+      "Style: Coloring book cover.",
+      "Black and white art, strong clean outlines.",
+      "NO colors, NO gradients, NO shadows.",
+      "White or light background, designed for coloring."
     );
   } else {
-    parts.splice(1, 0, "Estilo: ilustração semi-realista, alegre, colorida, luz suave.");
+    parts.push(
+      "",
+      "Style: Semi-realistic colorful illustration, vibrant and cheerful, soft light."
+    );
   }
 
-  return parts.join(" ");
+  return parts.join("\n");
 }
-
 /* -------------------- Text stamping helpers -------------------- */
 
 function escapeXml(s) {
@@ -2475,8 +2509,9 @@ if (needCover) {
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-  const imgDataUrl = bufferToDataUrlPng(await fsp.readFile(imagePngPath));
-  const pid = await replicateCreateImageJob({ prompt: coverPrompt, imageDataUrl: imgDataUrl });
+const imgBuf = await fsp.readFile(imagePngPath);
+const imgDataUrl = bufferToDataUrlPng(imgBuf);
+const pid = await replicateCreateImageJob({ prompt: coverPrompt, imageDataUrl: imgDataUrl });
 
   m.pending = { type: "cover", predictionId: pid, createdAt: nowISO() };
   m.step = "cover_queued";
@@ -2570,9 +2605,9 @@ if (needCover) {
   m.step = `page_${nextPage}_start`;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
-
-  const imgDataUrl = bufferToDataUrlPng(await fsp.readFile(imagePngPath));
-  const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
+const imgBuf = await fsp.readFile(imagePngPath);
+const imgDataUrl = bufferToDataUrlPng(imgBuf);
+const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
 
   m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO() };
   m.step = `page_${nextPage}_queued`;
