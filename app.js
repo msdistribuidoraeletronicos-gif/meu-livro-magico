@@ -935,7 +935,15 @@ async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "
     " refIsHttp=",
     isHttp
   );
-
+console.log("[REPLICATE] input keys:", Object.keys(input));
+console.log("[REPLICATE] input image preview:", {
+  imageField,
+  isArray,
+  valueType: typeof input[imageField],
+  valueStart: Array.isArray(input[imageField])
+    ? String(input[imageField][0] || "").slice(0, 120)
+    : String(input[imageField] || "").slice(0, 120),
+});
   const created = await replicateCreatePrediction({
     model,
     input,
