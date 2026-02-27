@@ -20,7 +20,34 @@ function bootFail(where, e) {
   console.error(msg);
   BOOT_ERROR = msg.slice(0, 4000);
 }
+function isReplicateInsufficientCredit(err) {
+  const s = String(err?.message || err || "").toLowerCase();
+  return (
+    s.includes("insufficient credit") ||
+    s.includes("insufficient credits") ||
+    s.includes("not enough credits") ||
+    s.includes("payment required") ||
+    s.includes("402") ||
+    s.includes("insufficient funds") ||
+    s.includes("billing") ||
+    s.includes("no credit")
+  );
+}
 
+function isReplicateThrottledError(err) {
+  const s = String(err?.message || err || "").toLowerCase();
+  return (
+    s.includes("rate limit") ||
+    s.includes("too many requests") ||
+    s.includes("429") ||
+    s.includes("overloaded") ||
+    s.includes("high demand") ||
+    s.includes("temporarily unavailable") ||
+    s.includes("service unavailable") ||
+    s.includes("(e003)") ||
+    s.includes("e003")
+  );
+}
 let fs, fsp, path, crypto, express, PDFDocument, sharp, createClient, os;
 
 try { fs = require("fs"); } catch (e) { bootFail("require fs", e); }
@@ -155,6 +182,32 @@ function supabaseUserClient(accessToken) {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
+}
+function isReplicateInsufficientCredit(err) {
+  const s = String(err?.message || err || "").toLowerCase();
+  // padrões comuns (varia conforme lib/response)
+  return (
+    s.includes("insufficient credit") ||
+    s.includes("insufficient credits") ||
+    s.includes("not enough credits") ||
+    s.includes("payment required") ||
+    s.includes("402") ||
+    s.includes("insufficient funds")
+  );
+}
+
+function isReplicateThrottledError(err) {
+  const s = String(err?.message || err || "").toLowerCase();
+  // padrões comuns de rate limit / overload
+  return (
+    s.includes("rate limit") ||
+    s.includes("too many requests") ||
+    s.includes("429") ||
+    s.includes("overloaded") ||
+    s.includes("high demand") ||
+    s.includes("temporarily unavailable") ||
+    s.includes("service unavailable")
+  );
 }
 function isReplicateThrottledError(err) {
   const msg = String(err?.message || err || "");
@@ -644,7 +697,38 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
 }
 
 /* -------------------- Replicate helpers -------------------- */
+// === Replicate error helpers (precisa existir antes de usar) ===
+function isReplicateInsufficientCredit(err) {
+  try {
+    const msg = String(err?.message || "").toLowerCase();
+    const name = String(err?.name || "").toLowerCase();
+    const code = String(err?.code || "").toLowerCase();
 
+    // Alguns SDKs colocam status em lugares diferentes:
+    const status =
+      err?.status ||
+      err?.response?.status ||
+      err?.cause?.status ||
+      err?.cause?.response?.status;
+
+    // Às vezes vem no JSON interno
+    const raw = JSON.stringify(err || {}).toLowerCase();
+
+    // Casos comuns:
+    if (status === 402) return true; // Payment Required
+    if (msg.includes("payment required")) return true;
+    if (msg.includes("insufficient") && (msg.includes("credit") || msg.includes("credits"))) return true;
+
+    // Palavras-chave que já vi em provedores/SDKs:
+    if (raw.includes("insufficient_credit") || raw.includes("insufficient credits")) return true;
+    if (code.includes("insufficient") && code.includes("credit")) return true;
+    if (name.includes("payment") && msg.includes("required")) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
 const replicateVersionCache = new Map(); // key: "owner/name" -> versionId
 
 function splitReplicateModel(model) {
