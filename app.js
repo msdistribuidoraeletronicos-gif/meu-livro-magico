@@ -693,6 +693,28 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
 
   const version = await replicateGetLatestVersionId(model);
 
+  // ✅ DEBUG: registra o payload real
+  try {
+    const keys = Object.keys(input || {});
+    const imageFieldGuess = keys.find(k => /image/i.test(k)) || "";
+    const refVal = imageFieldGuess ? input?.[imageFieldGuess] : null;
+    const ref0 = Array.isArray(refVal) ? refVal[0] : refVal;
+
+    REPLICATE_LAST.at = new Date().toISOString();
+    REPLICATE_LAST.model = String(model || "");
+    REPLICATE_LAST.version = String(version || "");
+    REPLICATE_LAST.inputKeys = keys;
+    REPLICATE_LAST.imageField = imageFieldGuess;
+    REPLICATE_LAST.refType = typeof ref0 === "string" && /^https?:\/\//i.test(ref0) ? "http" : (typeof ref0 === "string" && ref0.startsWith("data:") ? "data" : typeof ref0);
+    REPLICATE_LAST.refSample = typeof ref0 === "string" ? ref0.slice(0, 120) + "..." : "";
+    // não salva o input inteiro se tiver dataURL gigante
+    REPLICATE_LAST.inputPreview = JSON.parse(JSON.stringify(input, (k, v) => {
+      if (typeof v === "string" && v.startsWith("data:image")) return "data:image/... (omitted)";
+      if (typeof v === "string" && v.length > 400) return v.slice(0, 400) + "...";
+      return v;
+    }));
+  } catch {}
+
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -707,7 +729,6 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
       });
     } catch (e) {
       lastErr = e;
-      // backoff: 1.2s, 2.4s
       if (attempt < 3) await sleep(1200 * attempt);
     }
   }
@@ -771,8 +792,30 @@ if (/^https?:\/\//i.test(imgRef)) {
     enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
   };
 
-  const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-  input[imageField] = [imgRef];
+  // ✅ REFERÊNCIA: envia de forma compatível (string e/ou array)
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
+
+  // alguns modelos esperam string; outros aceitam array. Vamos suportar ambos.
+  const refAsArray = [imgRef];
+  const refAsString = imgRef;
+
+  // 1) campo configurável
+  input[imageField] = REPLICATE_IMAGE_IS_ARRAY ? refAsArray : refAsString;
+
+  // 2) fallback seguro: muitos modelos do Replicate usam "image" (string)
+  if (!("image" in input)) input.image = refAsString;
+
+  // 3) fallback seguro: alguns modelos usam "image_input" (array)
+  if (!("image_input" in input)) input.image_input = refAsArray;
+
+  // ✅ LOG: confirma se a referência está indo MESMO no payload
+  console.log("📤 Seedream payload check:", {
+    model: REPLICATE_MODEL,
+    imageFieldUsed: imageField,
+    has_image: typeof input.image === "string" && input.image.startsWith("http"),
+    has_image_input: Array.isArray(input.image_input) && String(input.image_input[0] || "").startsWith("http"),
+    keys: Object.keys(input),
+  });
 
   console.log("📤 Enviando para Replicate (Seedream-4):", {
     model: REPLICATE_MODEL,
@@ -946,6 +989,58 @@ async function replicateOutputToPngBuffer(pred) {
  * - referência vem do Storage via signedUrl/publicUrl
  * - retorna Buffer PNG
  */
+// ✅ Extrai a imagem do output do Replicate (Seedream e outros)
+// Retorna Buffer PNG
+async function replicateOutputToPngBuffer(pred) {
+  let out = pred?.output;
+
+  // 1) string URL
+  if (typeof out === "string" && out.startsWith("http")) {
+    const buf = await downloadToBuffer(out, 300000);
+    return sharp(buf).png().toBuffer();
+  }
+
+  // 2) dataURL base64
+  if (typeof out === "string" && out.startsWith("data:")) {
+    const b = dataUrlToBuffer(out);
+    if (!b) throw new Error("Replicate retornou dataURL inválida.");
+    return sharp(b).png().toBuffer();
+  }
+
+  // 3) array de strings
+  if (Array.isArray(out) && typeof out[0] === "string") {
+    const first = out[0];
+    if (first.startsWith("http")) {
+      const buf = await downloadToBuffer(first, 300000);
+      return sharp(buf).png().toBuffer();
+    }
+    if (first.startsWith("data:")) {
+      const b = dataUrlToBuffer(first);
+      if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
+      return sharp(b).png().toBuffer();
+    }
+  }
+
+  // 4) objeto { url }
+  if (out && typeof out === "object" && typeof out.url === "string") {
+    const buf = await downloadToBuffer(out.url, 300000);
+    return sharp(buf).png().toBuffer();
+  }
+
+  // 5) array de objetos [{ url }]
+  if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
+    const buf = await downloadToBuffer(out[0].url, 300000);
+    return sharp(buf).png().toBuffer();
+  }
+
+  throw new Error("Replicate não retornou imagem válida. Output=" + JSON.stringify(out).slice(0, 900));
+}
+
+/**
+ * ✅ GERA IMAGEM COM REPlicate USANDO REFERÊNCIA (Seedream-4)
+ * - referência vem do Storage via signedUrl/publicUrl
+ * - retorna Buffer PNG
+ */
 async function openaiImageEditFromReference({
   prompt,
   userId,
@@ -981,9 +1076,22 @@ async function openaiImageEditFromReference({
     max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
     enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
   };
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
 
-  const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-  input[imageField] = [referenceUrl];
+  const refAsArray = [referenceUrl];
+  const refAsString = referenceUrl;
+
+  input[imageField] = REPLICATE_IMAGE_IS_ARRAY ? refAsArray : refAsString;
+  if (!("image" in input)) input.image = refAsString;
+  if (!("image_input" in input)) input.image_input = refAsArray;
+
+  console.log("📤 Seedream payload check (sync):", {
+    model: REPLICATE_MODEL,
+    imageFieldUsed: imageField,
+    has_image: typeof input.image === "string" && input.image.startsWith("http"),
+    has_image_input: Array.isArray(input.image_input) && String(input.image_input[0] || "").startsWith("http"),
+    keys: Object.keys(input),
+  });
 
   console.log("📤 Replicate (Seedream-4) createPrediction:", {
     model: REPLICATE_MODEL,
