@@ -894,124 +894,118 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
  * - Replicate: SEMPRE IMAGEM
  * - Retorna Buffer PNG
  */
-async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
-  // 🔒 TRAVA para Replicate (não deixa cair em OpenAI Images)
-  if (!REPLICATE_API_TOKEN) {
-    throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
-  }
-
-  // ✅ CORREÇÃO: Valida se a imagem de referência existe e é válida
-  if (!existsSyncSafe(imagePngPath)) {
-    throw new Error(`Imagem de referência não encontrada: ${imagePngPath}`);
-  }
-
-  const imgBuf = await fsp.readFile(imagePngPath);
-  
-  if (!imgBuf || imgBuf.length < 100) {
-    throw new Error("Imagem de referência está vazia ou corrompida.");
-  }
-
-  // Verifica se é uma imagem válida
-  try {
-    const meta = await sharp(imgBuf).metadata();
-    console.log("📸 Imagem de referência:", {
-      width: meta.width,
-      height: meta.height,
-      format: meta.format,
-      size: imgBuf.length
-    });
-  } catch (e) {
-    throw new Error("Imagem de referência não é uma imagem válida: " + String(e?.message || e));
-  }
-  // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
-  const input = {
-  prompt,
-
-  // ✅ Seedream-4
-  size: REPLICATE_SIZE || "2K",
-  aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
-  sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
-  max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
-  enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
-};
-
-const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-input[imageField] = [referenceUrl];
-  console.log("🎨 Gerando imagem com Replicate:", {
-    model: REPLICATE_MODEL,
-    imageField: REPLICATE_IMAGE_FIELD,
-    promptLength: prompt.length,
-    hasReferenceImage: true,
-    imageSize: imgBuf.length
-  });
-
-  // cria + aguarda prediction
-  const created = await replicateCreatePrediction({
-    model: REPLICATE_MODEL || "google/nano-banana-pro",
-    input,
-    timeoutMs: 120000,
-  });
-
-  console.log("⏳ Aguardando prediction:", created?.id);
-
-  const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
-
-  console.log("✅ Prediction completada:", pred?.id, "status:", pred?.status);
-
-  // ✅ Extrai saída em vários formatos possíveis
+// ✅ Extrai a imagem do output do Replicate (Seedream e outros)
+// Retorna Buffer PNG
+async function replicateOutputToPngBuffer(pred) {
   let out = pred?.output;
 
   // 1) string URL
   if (typeof out === "string" && out.startsWith("http")) {
-    console.log("📥 Baixando imagem da URL (string)...");
     const buf = await downloadToBuffer(out, 300000);
-    return await sharp(buf).png().toBuffer();
+    return sharp(buf).png().toBuffer();
   }
 
   // 2) dataURL base64
   if (typeof out === "string" && out.startsWith("data:")) {
-    console.log("📥 Decodificando dataURL...");
     const b = dataUrlToBuffer(out);
     if (!b) throw new Error("Replicate retornou dataURL inválida.");
-    return await sharp(b).png().toBuffer();
+    return sharp(b).png().toBuffer();
   }
 
   // 3) array de strings
   if (Array.isArray(out) && typeof out[0] === "string") {
     const first = out[0];
-
     if (first.startsWith("http")) {
-      console.log("📥 Baixando imagem da URL (array)...");
-      const buf = await downloadToBuffer(first, 240000);
-      return await sharp(buf).png().toBuffer();
+      const buf = await downloadToBuffer(first, 300000);
+      return sharp(buf).png().toBuffer();
     }
-
     if (first.startsWith("data:")) {
-      console.log("📥 Decodificando dataURL (array)...");
       const b = dataUrlToBuffer(first);
       if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
-      return await sharp(b).png().toBuffer();
+      return sharp(b).png().toBuffer();
     }
   }
 
   // 4) objeto { url }
   if (out && typeof out === "object" && typeof out.url === "string") {
-    console.log("📥 Baixando imagem do objeto URL...");
-    const buf = await downloadToBuffer(out.url, 240000);
-    return await sharp(buf).png().toBuffer();
+    const buf = await downloadToBuffer(out.url, 300000);
+    return sharp(buf).png().toBuffer();
   }
 
   // 5) array de objetos [{ url }]
   if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
-    console.log("📥 Baixando imagem do array de objetos...");
-    const buf = await downloadToBuffer(out[0].url, 240000);
-    return await sharp(buf).png().toBuffer();
+    const buf = await downloadToBuffer(out[0].url, 300000);
+    return sharp(buf).png().toBuffer();
   }
 
-  // nada reconhecido
-  throw new Error("Replicate não retornou uma imagem válida em output. Output=" + JSON.stringify(out).slice(0, 800));
+  throw new Error("Replicate não retornou imagem válida. Output=" + JSON.stringify(out).slice(0, 900));
 }
 
+/**
+ * ✅ GERA IMAGEM COM REPlicate USANDO REFERÊNCIA (Seedream-4)
+ * - referência vem do Storage via signedUrl/publicUrl
+ * - retorna Buffer PNG
+ */
+async function openaiImageEditFromReference({
+  prompt,
+  userId,
+  bookId,
+  manifest,
+}) {
+  if (!REPLICATE_API_TOKEN) {
+    throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
+  }
+
+  const uid = String(userId || manifest?.ownerId || "").trim();
+  const bid = String(bookId || manifest?.id || "").trim();
+  if (!uid || !bid) throw new Error("openaiImageEditFromReference: userId/bookId ausentes.");
+
+  // ✅ URL http(s) estável para o Seedream (preferível a dataURL)
+  const referenceUrl = await getSeedreamReferenceUrl({ userId: uid, bookId: bid, manifest });
+
+  // ✅ opcional (recomendado): preflight pra garantir que a URL baixa (evita 403/expirada)
+  if (/^https?:\/\//i.test(referenceUrl)) {
+    try {
+      const testBuf = await downloadToBuffer(referenceUrl, 20000);
+      console.log("✅ PREFLIGHT referenceUrl OK:", { bytes: testBuf.length });
+    } catch (e) {
+      throw new Error("REFERENCE_URL_NOT_FETCHABLE: " + String(e?.message || e));
+    }
+  }
+
+  const input = {
+    prompt,
+    size: REPLICATE_SIZE || "2K",
+    aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
+    sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
+    max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
+    enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
+  };
+
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
+  input[imageField] = [referenceUrl];
+
+  console.log("📤 Replicate (Seedream-4) createPrediction:", {
+    model: REPLICATE_MODEL,
+    imageField,
+    ref: referenceUrl.slice(0, 90) + "...",
+    inputKeys: Object.keys(input),
+    promptLen: String(prompt || "").length,
+  });
+
+  const created = await replicateCreatePrediction({
+    model: REPLICATE_MODEL,
+    input,
+    timeoutMs: 120000,
+  });
+
+  const pid = String(created?.id || "").trim();
+  if (!pid) throw new Error("Replicate não retornou prediction id.");
+
+  // ✅ aqui é modo “sequencial local” (espera terminar)
+  const pred = await replicateWaitPrediction(pid, { timeoutMs: 300000, pollMs: 1200 });
+  return replicateOutputToPngBuffer(pred);
+}
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
   const theme_key = String(themeKey || "space");
   const age = clamp(childAge, 2, 12);
@@ -2884,12 +2878,12 @@ async function runGeneration(userId, bookId) {
       styleKey,
     });
 
-    const coverBuf = await openaiImageEditFromReference({
-      imagePngPath,
-      maskPngPath,
-      prompt: coverPrompt,
-      size: "1024x1024",
-    });
+const coverBuf = await openaiImageEditFromReference({
+  prompt: coverPrompt,
+  userId,
+  bookId,
+  manifest: m,
+});
 
     const coverBase = path.join(bookDir, "cover.png");
     await fsp.writeFile(coverBase, coverBuf);
@@ -2924,12 +2918,12 @@ async function runGeneration(userId, bookId) {
         styleKey,
       });
 
-      const imgBuf = await openaiImageEditFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt,
-        size: "1024x1024",
-      });
+    const imgBuf = await openaiImageEditFromReference({
+  prompt,
+  userId,
+  bookId,
+  manifest: m,
+});
 
       const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
       await fsp.writeFile(basePath, imgBuf);
