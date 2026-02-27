@@ -743,53 +743,39 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
 // Na função replicateCreateImageJob, adicione logs:
-async function replicateCreateImageJob({ prompt, imageDataUrl }) {
+async function replicateCreateImageJob({ prompt, referenceUrl }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
 
-  // Validação
-  const imgRef = String(imageDataUrl || "").trim();
-  const isData = imgRef.startsWith("data:image");
-  const isHttp = /^https?:\/\//i.test(imgRef);
-
-  if (!imgRef || (!isData && !isHttp)) {
-    throw new Error("Imagem de referência inválida. Deve ser data:image/...base64 ou URL http(s).");
+  const ref = String(referenceUrl || "").trim();
+  const isHttp = /^https?:\/\//i.test(ref);
+  if (!ref || !isHttp) {
+    throw new Error("Referência inválida. Seedream-4 precisa de URL http(s) em image_input.");
   }
 
-  console.log("📸 Replicate Job:", {
-    imageType: isData ? "dataURL" : "httpURL",
-    imageLength: imgRef.length,
-    imagePrefix: imgRef.slice(0, 60) + "...",
-    promptLength: prompt.length,
-    promptFirstLines: prompt.split('\n').slice(0, 3).join(' | '),
-  });
-
-  // ✅ CORREÇÃO: Garante que o input tenha a imagem de referência no campo correto
   const input = {
-  prompt,
+    prompt,
+    size: REPLICATE_SIZE || "2K",
+    aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
+    sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
+    max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
+    enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
+  };
 
-  // ✅ Seedream-4
-  size: REPLICATE_SIZE || "2K",
-  aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
-  sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
-  max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
-  enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
-};
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
+  input[imageField] = [ref]; // ✅ URL real (não dataURL)
 
-// ✅ Campo correto para imagem de referência no Seedream-4
-const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-input[imageField] = [imageDataUrl]; // sempre array (1..10)
-
-  console.log("📤 Enviando para Replicate:", {
+  console.log("📤 Seedream input:", {
     model: REPLICATE_MODEL,
-    imageField: imageField,
-    isArray: REPLICATE_IMAGE_IS_ARRAY,
-    inputKeys: Object.keys(input),
-    hasImage: !!input[imageField],
-    imageLength: isData ? imgRef.length : "URL",
+    imageField,
+    ref: ref.slice(0, 80) + "...",
+    size: input.size,
+    aspect_ratio: input.aspect_ratio,
+    sequential: input.sequential_image_generation,
+    max_images: input.max_images,
   });
 
   const created = await replicateCreatePrediction({
-    model: REPLICATE_MODEL || "google/nano-banana-pro",
+    model: REPLICATE_MODEL || "bytedance/seedream-4",
     input,
     timeoutMs: 120000,
   });
@@ -930,8 +916,7 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
   } catch (e) {
     throw new Error("Imagem de referência não é uma imagem válida: " + String(e?.message || e));
   }
-
-  const imgDataUrl = bufferToDataUrlPng(imgBuf);
+const referenceUrl = await getSeedreamReferenceUrl({ userId: (m.ownerId || ""), bookId: (m.id || ""), manifest: m });
 
   // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
   const input = {
@@ -946,7 +931,7 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
 };
 
 const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-input[imageField] = [imgDataUrl]; // sempre array
+input[imageField] = [referenceUrl];
   console.log("🎨 Gerando imagem com Replicate:", {
     model: REPLICATE_MODEL,
     imageField: REPLICATE_IMAGE_FIELD,
@@ -1570,6 +1555,23 @@ async function sbSignedUrl(pathKey, expiresSec = 60 * 10) {
   } catch {
     return "";
   }
+}
+
+// ✅ Seedream: referência deve ser URL http(s) (idealmente Signed URL do Storage)
+async function getSeedreamReferenceUrl({ userId, bookId, manifest }) {
+  const key =
+    manifest?.photo?.storageKey ||
+    `${manifest?.ownerId || userId}/${bookId}/edit_base.png`;
+
+  // tenta signed (funciona mesmo com bucket privado)
+  const signed = await sbSignedUrl(key, 60 * 15);
+  if (signed && /^https?:\/\//i.test(signed)) return signed;
+
+  // fallback: publicUrl (se bucket for público)
+  const pub = sbPublicUrl(key);
+  if (pub && /^https?:\/\//i.test(pub)) return pub;
+
+  throw new Error("Não consegui obter URL (signed/public) da imagem de referência no Storage.");
 }
 async function ensureFileFromStorageIfMissing(localPath, storageKey) {
   if (existsSyncSafe(localPath)) return true;
@@ -2584,10 +2586,8 @@ if (needCover) {
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
 
-const imgBuf = await fsp.readFile(imagePngPath);
-const imgDataUrl = bufferToDataUrlPng(imgBuf);
-const pid = await replicateCreateImageJob({ prompt: coverPrompt, imageDataUrl: imgDataUrl });
-
+const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
+const pid = await replicateCreateImageJob({ prompt: coverPrompt, referenceUrl });
   m.pending = { type: "cover", predictionId: pid, createdAt: nowISO() };
   m.step = "cover_queued";
   m.updatedAt = nowISO();
@@ -2680,10 +2680,8 @@ const pid = await replicateCreateImageJob({ prompt: coverPrompt, imageDataUrl: i
   m.step = `page_${nextPage}_start`;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
-const imgBuf = await fsp.readFile(imagePngPath);
-const imgDataUrl = bufferToDataUrlPng(imgBuf);
-const pid = await replicateCreateImageJob({ prompt, imageDataUrl: imgDataUrl });
-
+const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
+const pid = await replicateCreateImageJob({ prompt, referenceUrl });
   m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO() };
   m.step = `page_${nextPage}_queued`;
   m.updatedAt = nowISO();
