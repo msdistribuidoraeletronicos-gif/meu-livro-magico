@@ -86,7 +86,9 @@ const IMAGE_MODEL = String(process.env.IMAGE_MODEL || "dall-e-2").trim() || "dal
 const REPLICATE_API_TOKEN = String(process.env.REPLICATE_API_TOKEN || "").trim();
 // ✅ Seedream-4 (bytedance/seedream-4)
 const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "bytedance/seedream-4").trim();
-
+const REPLICATE_VERSION = process.env.REPLICATE_VERSION
+  ? String(process.env.REPLICATE_VERSION).trim()
+  : "";
 // No Seedream-4 o campo é "size" (1K/2K/4K/custom)
 const REPLICATE_SIZE = String(process.env.REPLICATE_SIZE || "2K").trim();
 
