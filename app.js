@@ -753,7 +753,15 @@ async function replicateCreateImageJob({ prompt, referenceUrl }) {
   if (!imgRef || (!isData && !isHttp)) {
     throw new Error("Imagem de referência inválida. Deve ser URL http(s) ou data:image/...base64.");
   }
-
+// ✅ PREFLIGHT: garante que a URL realmente baixa (e não expira / 403 / 404)
+if (/^https?:\/\//i.test(imgRef)) {
+  try {
+    const testBuf = await downloadToBuffer(imgRef, 20000);
+    console.log("✅ PREFLIGHT referenceUrl OK:", { bytes: testBuf.length });
+  } catch (e) {
+    throw new Error("REFERENCE_URL_NOT_FETCHABLE: " + String(e?.message || e));
+  }
+}
   const input = {
     prompt,
     size: REPLICATE_SIZE || "2K",
@@ -915,8 +923,6 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
   } catch (e) {
     throw new Error("Imagem de referência não é uma imagem válida: " + String(e?.message || e));
   }
-const referenceUrl = await getSeedreamReferenceUrl({ userId: (m.ownerId || ""), bookId: (m.id || ""), manifest: m });
-
   // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
   const input = {
   prompt,
