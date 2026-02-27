@@ -743,15 +743,18 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
 // Na função replicateCreateImageJob, adicione logs:
-async function replicateCreateImageJob({ prompt, referenceUrl }) {
+async function replicateCreateImageJob({ prompt, imageDataUrl }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
 
-  const ref = String(referenceUrl || "").trim();
-  const isHttp = /^https?:\/\//i.test(ref);
-  if (!ref || !isHttp) {
-    throw new Error("Referência inválida. Seedream-4 precisa de URL http(s) em image_input.");
+  const imgRef = String(imageDataUrl || "").trim();
+  const isData = imgRef.startsWith("data:image");
+  const isHttp = /^https?:\/\//i.test(imgRef);
+
+  if (!imgRef || (!isData && !isHttp)) {
+    throw new Error("Imagem de referência inválida. Deve ser URL http(s) ou data:image/...base64.");
   }
 
+  // ✅ Seedream-4 input conforme docs
   const input = {
     prompt,
     size: REPLICATE_SIZE || "2K",
@@ -761,21 +764,20 @@ async function replicateCreateImageJob({ prompt, referenceUrl }) {
     enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
   };
 
+  // ✅ campo correto: image_input (array de 1..10)
   const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
-  input[imageField] = [ref]; // ✅ URL real (não dataURL)
+  input[imageField] = [imgRef];
 
-  console.log("📤 Seedream input:", {
+  console.log("📤 Enviando para Replicate (Seedream-4):", {
     model: REPLICATE_MODEL,
     imageField,
-    ref: ref.slice(0, 80) + "...",
-    size: input.size,
-    aspect_ratio: input.aspect_ratio,
-    sequential: input.sequential_image_generation,
-    max_images: input.max_images,
+    refType: isHttp ? "httpURL" : "dataURL",
+    refLen: isHttp ? "URL" : imgRef.length,
+    inputKeys: Object.keys(input),
   });
 
   const created = await replicateCreatePrediction({
-    model: REPLICATE_MODEL || "bytedance/seedream-4",
+    model: REPLICATE_MODEL,
     input,
     timeoutMs: 120000,
   });
@@ -783,7 +785,6 @@ async function replicateCreateImageJob({ prompt, referenceUrl }) {
   console.log("✅ Prediction criada:", created?.id);
   return String(created?.id || "").trim();
 }
-
 async function replicatePollOnce(predictionId) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
   const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
@@ -1586,7 +1587,22 @@ async function ensureFileFromStorageIfMissing(localPath, storageKey) {
     return false;
   }
 }
+// ✅ Seedream funciona melhor com URL http(s) (signed URL) do que dataURL base64.
+// Gera uma URL temporária para a imagem de referência já salva no Storage.
+async function getReferenceImageUrlForReplicate(manifest, userId, bookId) {
+  // tenta usar a storageKey já salva no manifest (ideal)
+  const key = manifest?.photo?.storageKey || `${manifest?.ownerId || userId}/${bookId}/edit_base.png`;
 
+  // signed URL (bucket privado) — se bucket for público, você pode usar sbPublicUrl também
+  const signed = await sbSignedUrl(key, 60 * 60); // 1 hora
+  if (signed) return signed;
+
+  // fallback: se por algum motivo não conseguiu signed url, tenta public url
+  const pub = sbPublicUrl(key);
+  if (pub) return pub;
+
+  throw new Error("Não consegui obter URL de referência (signed/public) do Storage para o Replicate.");
+}
 /* -------------------- Express app -------------------- */
 
 const app = express();
