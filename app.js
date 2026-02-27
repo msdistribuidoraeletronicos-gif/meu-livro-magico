@@ -20,34 +20,55 @@ function bootFail(where, e) {
   console.error(msg);
   BOOT_ERROR = msg.slice(0, 4000);
 }
+// ================= Replicate: helpers de erro (MANTER APENAS 1x) =================
 function isReplicateInsufficientCredit(err) {
-  const s = String(err?.message || err || "").toLowerCase();
-  return (
-    s.includes("insufficient credit") ||
-    s.includes("insufficient credits") ||
-    s.includes("not enough credits") ||
-    s.includes("payment required") ||
-    s.includes("402") ||
-    s.includes("insufficient funds") ||
-    s.includes("billing") ||
-    s.includes("no credit")
-  );
+  try {
+    const msg = String(err?.message || err || "").toLowerCase();
+    const name = String(err?.name || "").toLowerCase();
+    const code = String(err?.code || "").toLowerCase();
+
+    const status =
+      err?.status ||
+      err?.response?.status ||
+      err?.cause?.status ||
+      err?.cause?.response?.status ||
+      err?.data?.status;
+
+    const raw = (() => {
+      try { return JSON.stringify(err || {}).toLowerCase(); }
+      catch { return ""; }
+    })();
+
+    if (status === 402) return true;
+    if (msg.includes("payment required")) return true;
+    if (msg.includes("insufficient") && (msg.includes("credit") || msg.includes("credits"))) return true;
+    if (msg.includes("not enough credits")) return true;
+    if (msg.includes("insufficient funds")) return true;
+
+    if (raw.includes("insufficient_credit") || raw.includes("insufficient credits")) return true;
+    if (code.includes("insufficient") && code.includes("credit")) return true;
+    if (name.includes("payment") && msg.includes("required")) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function isReplicateThrottledError(err) {
-  const s = String(err?.message || err || "").toLowerCase();
-  return (
-    s.includes("rate limit") ||
-    s.includes("too many requests") ||
-    s.includes("429") ||
-    s.includes("overloaded") ||
-    s.includes("high demand") ||
-    s.includes("temporarily unavailable") ||
-    s.includes("service unavailable") ||
-    s.includes("(e003)") ||
-    s.includes("e003")
-  );
+  const msg = String(err?.message || err || "");
+  const status =
+    err?.status ||
+    err?.response?.status ||
+    err?.cause?.status ||
+    err?.data?.status;
+
+  if (status === 429) return true;
+
+  return /429|too many requests|rate limit|throttl|high demand|E003|overloaded|temporarily unavailable|service unavailable/i.test(msg);
 }
+// ================================================================================
+
 let fs, fsp, path, crypto, express, PDFDocument, sharp, createClient, os;
 
 try { fs = require("fs"); } catch (e) { bootFail("require fs", e); }
@@ -183,45 +204,7 @@ function supabaseUserClient(accessToken) {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
 }
-function isReplicateInsufficientCredit(err) {
-  const s = String(err?.message || err || "").toLowerCase();
-  // padrões comuns (varia conforme lib/response)
-  return (
-    s.includes("insufficient credit") ||
-    s.includes("insufficient credits") ||
-    s.includes("not enough credits") ||
-    s.includes("payment required") ||
-    s.includes("402") ||
-    s.includes("insufficient funds")
-  );
-}
-
-function isReplicateThrottledError(err) {
-  const s = String(err?.message || err || "").toLowerCase();
-  // padrões comuns de rate limit / overload
-  return (
-    s.includes("rate limit") ||
-    s.includes("too many requests") ||
-    s.includes("429") ||
-    s.includes("overloaded") ||
-    s.includes("high demand") ||
-    s.includes("temporarily unavailable") ||
-    s.includes("service unavailable")
-  );
-}
-function isReplicateThrottledError(err) {
-  const msg = String(err?.message || err || "");
-  const status =
-    err?.status ||
-    err?.response?.status ||
-    err?.cause?.status ||
-    err?.data?.status;
-
-  if (status === 429) return true;
-
-  // mensagens comuns de rate limit/alta demanda
-  return /429|too many requests|rate limit|throttl|high demand|E003|overloaded|temporarily unavailable/i.test(msg);
-}
+// ================================================================================
 function assertSupabaseAnon() {
   if (!supabaseAnon) throw new Error("Supabase ANON não configurado. Configure SUPABASE_URL e SUPABASE_ANON_KEY.");
 }
@@ -698,37 +681,6 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
 
 /* -------------------- Replicate helpers -------------------- */
 // === Replicate error helpers (precisa existir antes de usar) ===
-function isReplicateInsufficientCredit(err) {
-  try {
-    const msg = String(err?.message || "").toLowerCase();
-    const name = String(err?.name || "").toLowerCase();
-    const code = String(err?.code || "").toLowerCase();
-
-    // Alguns SDKs colocam status em lugares diferentes:
-    const status =
-      err?.status ||
-      err?.response?.status ||
-      err?.cause?.status ||
-      err?.cause?.response?.status;
-
-    // Às vezes vem no JSON interno
-    const raw = JSON.stringify(err || {}).toLowerCase();
-
-    // Casos comuns:
-    if (status === 402) return true; // Payment Required
-    if (msg.includes("payment required")) return true;
-    if (msg.includes("insufficient") && (msg.includes("credit") || msg.includes("credits"))) return true;
-
-    // Palavras-chave que já vi em provedores/SDKs:
-    if (raw.includes("insufficient_credit") || raw.includes("insufficient credits")) return true;
-    if (code.includes("insufficient") && code.includes("credit")) return true;
-    if (name.includes("payment") && msg.includes("required")) return true;
-
-    return false;
-  } catch {
-    return false;
-  }
-}
 const replicateVersionCache = new Map(); // key: "owner/name" -> versionId
 
 function splitReplicateModel(model) {
@@ -794,7 +746,7 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
       const msg = String(e?.message || e || "");
 
       // Sem crédito: falha definitiva (não adianta retry)
-      if (isReplicateInsufficientCredit(msg)) {
+      if (isReplicateInsufficientCredit(e)) {
         throw new Error("Replicate: sem crédito/limite de conta. Recarregue créditos para gerar imagens.");
       }
 
@@ -883,17 +835,38 @@ function guessImageFieldFromSchema(openapiSchema) {
   return "";
 }
 
-async function resolveReplicateImageField(model) {
+async function resolveReplicateImageFieldAndArray(model) {
   // Se você configurou manualmente, respeita.
-  if (String(process.env.REPLICATE_IMAGE_FIELD || "").trim()) return String(process.env.REPLICATE_IMAGE_FIELD).trim();
+  const manualField = String(process.env.REPLICATE_IMAGE_FIELD || "").trim();
+  const manualIsArray = String(process.env.REPLICATE_IMAGE_IS_ARRAY || "").trim();
+  if (manualField) {
+    return {
+      field: manualField,
+      isArray: manualIsArray === "1", // se não setar, assume false
+    };
+  }
 
   // senão, tenta descobrir pelo schema
   const latest = await replicateGetLatestVersion(model);
   const schema = latest?.openapi_schema;
-  const auto = guessImageFieldFromSchema(schema);
 
-  // fallback final (mantém seu default antigo)
-  return auto || "image";
+  const props =
+    schema?.components?.schemas?.Input?.properties ||
+    schema?.components?.schemas?.PredictionInput?.properties ||
+    schema?.components?.schemas?.ModelInput?.properties ||
+    null;
+
+  const field = guessImageFieldFromSchema(schema) || "image";
+
+  // tenta inferir se o campo é array pelo schema
+  let isArray = false;
+  try {
+    const def = props && props[field] ? props[field] : null;
+    const t = String(def?.type || "").toLowerCase();
+    if (t === "array") isArray = true;
+  } catch {}
+
+  return { field, isArray };
 }
 async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollMs = 1200 } = {}) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
@@ -929,7 +902,6 @@ async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "
   const ref = String(imageUrl || imageDataUrl || "").trim();
   if (!ref) throw new Error("Replicate: referência de imagem ausente (imageUrl/imageDataUrl).");
 
-  // Aceita URL http/https OU dataURL
   const isHttp = ref.startsWith("http://") || ref.startsWith("https://");
   const isData = ref.startsWith("data:");
   if (!isHttp && !isData) {
@@ -938,24 +910,31 @@ async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "
 
   const model = REPLICATE_MODEL || "google/nano-banana-pro";
 
-  // ✅ descobre o campo correto para imagem baseado no schema do modelo
-  const imageField = await resolveReplicateImageField(model);
-
+  // 🔥 CRIA O INPUT CORRETAMENTE
   const input = {
     prompt,
     aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-    output_format: REPLICATE_OUTPUT_FORMAT || "png",
-    // (se o modelo suportar, ok; se não suportar, ele ignora)
     resolution: REPLICATE_RESOLUTION || "2K",
+    output_format: REPLICATE_OUTPUT_FORMAT || "png",
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
 
-  // ✅ usa o campo certo
-  const asArray = REPLICATE_IMAGE_IS_ARRAY;
-  input[imageField] = asArray ? [ref] : ref;
+  // 🔥 DESCOBRE O CAMPO CORRETO
+  const { field: imageField, isArray } =
+    await resolveReplicateImageFieldAndArray(model);
 
-  // (debug opcional — ajuda MUITO a confirmar que está indo o campo correto)
-  console.log("[REPLICATE] model=", model, " imageField=", imageField, " isArray=", asArray, " refIsHttp=", isHttp);
+  input[imageField] = isArray ? [ref] : ref;
+
+  console.log(
+    "[REPLICATE] model=",
+    model,
+    " imageField=",
+    imageField,
+    " isArray=",
+    isArray,
+    " refIsHttp=",
+    isHttp
+  );
 
   const created = await replicateCreatePrediction({
     model,
@@ -965,6 +944,7 @@ async function replicateCreateImageJob({ prompt, imageUrl = "", imageDataUrl = "
 
   const pid = String(created?.id || "").trim();
   if (!pid) throw new Error("Replicate não retornou prediction id.");
+
   return pid;
 }
 async function replicatePollOnce(predictionId) {
@@ -1089,9 +1069,13 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
 
-  // ✅ campo de imagem configurável (image vs image_input etc.)
-  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imgDataUrl];
-  else input[REPLICATE_IMAGE_FIELD] = imgDataUrl;
+const model = REPLICATE_MODEL || "google/nano-banana-pro";
+const { field: imageField, isArray } = await resolveReplicateImageFieldAndArray(model);
+
+// ✅ usa o campo CERTO e no formato CERTO (string vs array)
+input[imageField] = isArray ? [imgDataUrl] : imgDataUrl;
+
+console.log("[REPLICATE] openaiImageEditFromReference model=", model, " imageField=", imageField, " isArray=", isArray);
 
   // cria + aguarda prediction
   const created = await replicateCreatePrediction({
@@ -2771,7 +2755,7 @@ try {
   }
 
   // ✅ sem crédito: falha com mensagem clara
-  if (isReplicateInsufficientCredit(msg)) {
+  if (isReplicateInsufficientCredit(e)) {
     m.status = "failed";
     m.step = "failed";
     m.error = "Replicate sem crédito/limite de conta. Recarregue créditos para gerar as imagens.";
@@ -2929,7 +2913,7 @@ if (!pageObj || !pageObj.text) {
     return res.status(202).json({ ok: true, temporary: true, waitMs, error: msg, page: nextPage });
   }
 
-  if (isReplicateInsufficientCredit(msg)) {
+if (isReplicateInsufficientCredit(e)) {
     m.status = "failed";
     m.step = "failed";
     m.error = "Replicate sem crédito/limite de conta. Recarregue créditos para gerar as imagens.";
