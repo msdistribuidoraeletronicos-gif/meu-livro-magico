@@ -3,6 +3,7 @@
  * ✅ SUPABASE AUTH + RLS + VERCEL-SAFE (usa /tmp + Storage)
  * ✅ Geração SEQUENCIAL (1 passo por vez via /api/generateNext)
  * ✅ Texto carimbado dentro do PNG + PDF final
+ * ✅ CORREÇÃO: Garante que Replicate use imagem de referência corretamente
  *
  * CORREÇÕES APLICADAS:
  * 1) ✅ BUG CRÍTICO: /api/generateNext usava imagePngPath sem definir -> agora define corretamente.
@@ -10,6 +11,8 @@
  * 3) ✅ Remove duplicação acidental de sbUploadBuffer/sbPublicUrl no final do arquivo.
  * 4) ✅ /api/image: se arquivo não existir no disco, tenta buscar no Storage (quando possível).
  * 5) ✅ Pequenas correções de robustez e organização (sem mudar seu fluxo).
+ * 6) ✅ CORREÇÃO REPLICATE: Garante que imagem de referência seja enviada e usada corretamente
+ * 7) ✅ CORREÇÃO PROMPT: Instruções mais fortes para manter identidade da criança como protagonista
  */
 "use strict";
 
@@ -39,7 +42,7 @@ try {
   bootFail("require @supabase/supabase-js", e);
 }
 
-// evita crash “mudo”:
+// evita crash "mudo":
 process.on("uncaughtException", (e) => bootFail("uncaughtException", e));
 process.on("unhandledRejection", (e) => bootFail("unhandledRejection", e));
 
@@ -89,6 +92,11 @@ const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "p
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 const REPLICATE_IMAGE_FIELD = String(process.env.REPLICATE_IMAGE_FIELD || "image").trim();
 const REPLICATE_IMAGE_IS_ARRAY = String(process.env.REPLICATE_IMAGE_IS_ARRAY || "0").trim() === "1";
+
+// ✅ NOVO: Configurações adicionais para garantir consistência do personagem
+const REPLICATE_PROMPT_STRENGTH = String(process.env.REPLICATE_PROMPT_STRENGTH || "0.85").trim();
+const REPLICATE_GUIDANCE_SCALE = String(process.env.REPLICATE_GUIDANCE_SCALE || "7.5").trim();
+
 function pickWritableRoot() {
   const tmpRoot = path.join(os.tmpdir(), "meu-livro-magico");
   const serverless =
@@ -145,10 +153,12 @@ const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
     : null;
+
 console.log("DEBUG SUPABASE_URL ok:", !!SUPABASE_URL);
 console.log("DEBUG ANON startsWith eyJ:", (SUPABASE_ANON_KEY || "").trim().startsWith("eyJ"));
 console.log("DEBUG SERVICE startsWith eyJ:", (SUPABASE_SERVICE_ROLE_KEY || "").trim().startsWith("eyJ"));
 console.log("DEBUG SERVICE len:", (SUPABASE_SERVICE_ROLE_KEY || "").trim().length);
+
 function supabaseUserClient(accessToken) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -340,6 +350,7 @@ function safeId() {
 function nowISO() {
   return new Date().toISOString();
 }
+
 function isHighDemandError(msg) {
   const s = String(msg || "");
   return (
@@ -351,9 +362,11 @@ function isHighDemandError(msg) {
     /\bunavailable\b/i.test(s)
   );
 }
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
 function isDataUrl(s) {
   return typeof s === "string" && s.startsWith("data:") && s.includes("base64,");
 }
@@ -424,6 +437,7 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
 // ✅ Guarda a última chamada de rede (para diagnosticar "fetch failed" na Vercel)
 const NET_LAST = {
   at: "",
@@ -455,6 +469,7 @@ function formatErrFull(e) {
   const base = msg || stack || "Erro";
   return base.slice(0, 1800);
 }
+
 async function fetchJson(url, { method = "GET", headers = {}, body = null, timeoutMs = 55000 } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -485,6 +500,7 @@ async function fetchJson(url, { method = "GET", headers = {}, body = null, timeo
     clearTimeout(t);
   }
 }
+
 async function downloadToBuffer(url, timeoutMs = 240000) {
   netMark("downloadToBuffer", url);
 
@@ -592,6 +608,7 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 55000) {
     clearTimeout(t);
   }
 }
+
 function isModelAccessError(msg) {
   const s = String(msg || "");
   return (
@@ -663,6 +680,7 @@ async function replicateGetLatestVersionId(model) {
   replicateVersionCache.set(key, String(versionId));
   return String(versionId);
 }
+
 async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
 
@@ -701,7 +719,7 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
     const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       method: "GET",
-        timeoutMs: 120000,
+      timeoutMs: 120000,
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
 
@@ -714,6 +732,7 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
     await new Promise((r) => setTimeout(r, pollMs));
   }
 }
+
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
 // Na função replicateCreateImageJob, adicione logs:
@@ -737,6 +756,7 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     promptFirstLines: prompt.split('\n').slice(0, 3).join(' | '),
   });
 
+  // ✅ CORREÇÃO: Garante que o input tenha a imagem de referência no campo correto
   const input = {
     prompt,
     aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
@@ -744,6 +764,14 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     output_format: REPLICATE_OUTPUT_FORMAT || "png",
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
+
+  // ✅ Adiciona parâmetros extras para melhor consistência do personagem (se suportado pelo modelo)
+  if (REPLICATE_PROMPT_STRENGTH) {
+    input.prompt_strength = parseFloat(REPLICATE_PROMPT_STRENGTH);
+  }
+  if (REPLICATE_GUIDANCE_SCALE) {
+    input.guidance_scale = parseFloat(REPLICATE_GUIDANCE_SCALE);
+  }
 
   const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
   
@@ -758,6 +786,8 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
     imageField: imageField,
     isArray: REPLICATE_IMAGE_IS_ARRAY,
     inputKeys: Object.keys(input),
+    hasImage: !!input[imageField],
+    imageLength: isData ? imgRef.length : "URL",
   });
 
   const created = await replicateCreatePrediction({
@@ -779,6 +809,7 @@ async function replicatePollOnce(predictionId) {
   });
   return pred;
 }
+
 async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada. Use .env.local.");
   if (typeof FormData === "undefined" || typeof Blob === "undefined") {
@@ -859,6 +890,7 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
+
 /**
  * IMAGEM SEQUENCIAL (principal)
  * - Replicate se token configurado
@@ -877,11 +909,33 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
   }
 
-  // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
+  // ✅ CORREÇÃO: Valida se a imagem de referência existe e é válida
+  if (!existsSyncSafe(imagePngPath)) {
+    throw new Error(`Imagem de referência não encontrada: ${imagePngPath}`);
+  }
+
   const imgBuf = await fsp.readFile(imagePngPath);
+  
+  if (!imgBuf || imgBuf.length < 100) {
+    throw new Error("Imagem de referência está vazia ou corrompida.");
+  }
 
-    const imgDataUrl = bufferToDataUrlPng(imgBuf);
+  // Verifica se é uma imagem válida
+  try {
+    const meta = await sharp(imgBuf).metadata();
+    console.log("📸 Imagem de referência:", {
+      width: meta.width,
+      height: meta.height,
+      format: meta.format,
+      size: imgBuf.length
+    });
+  } catch (e) {
+    throw new Error("Imagem de referência não é uma imagem válida: " + String(e?.message || e));
+  }
 
+  const imgDataUrl = bufferToDataUrlPng(imgBuf);
+
+  // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
   const input = {
     prompt,
 
@@ -892,9 +946,25 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     safety_filter_level: REPLICATE_SAFETY || "block_only_high",
   };
 
+  // ✅ Adiciona parâmetros para melhor consistência do personagem
+  if (REPLICATE_PROMPT_STRENGTH) {
+    input.prompt_strength = parseFloat(REPLICATE_PROMPT_STRENGTH);
+  }
+  if (REPLICATE_GUIDANCE_SCALE) {
+    input.guidance_scale = parseFloat(REPLICATE_GUIDANCE_SCALE);
+  }
+
   // ✅ campo de imagem configurável (image vs image_input etc.)
   if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imgDataUrl];
   else input[REPLICATE_IMAGE_FIELD] = imgDataUrl;
+
+  console.log("🎨 Gerando imagem com Replicate:", {
+    model: REPLICATE_MODEL,
+    imageField: REPLICATE_IMAGE_FIELD,
+    promptLength: prompt.length,
+    hasReferenceImage: true,
+    imageSize: imgBuf.length
+  });
 
   // cria + aguarda prediction
   const created = await replicateCreatePrediction({
@@ -903,19 +973,25 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     timeoutMs: 120000,
   });
 
+  console.log("⏳ Aguardando prediction:", created?.id);
+
   const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+
+  console.log("✅ Prediction completada:", pred?.id, "status:", pred?.status);
 
   // ✅ Extrai saída em vários formatos possíveis
   let out = pred?.output;
 
   // 1) string URL
   if (typeof out === "string" && out.startsWith("http")) {
+    console.log("📥 Baixando imagem da URL (string)...");
     const buf = await downloadToBuffer(out, 300000);
     return await sharp(buf).png().toBuffer();
   }
 
   // 2) dataURL base64
   if (typeof out === "string" && out.startsWith("data:")) {
+    console.log("📥 Decodificando dataURL...");
     const b = dataUrlToBuffer(out);
     if (!b) throw new Error("Replicate retornou dataURL inválida.");
     return await sharp(b).png().toBuffer();
@@ -926,11 +1002,13 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
     const first = out[0];
 
     if (first.startsWith("http")) {
+      console.log("📥 Baixando imagem da URL (array)...");
       const buf = await downloadToBuffer(first, 240000);
       return await sharp(buf).png().toBuffer();
     }
 
     if (first.startsWith("data:")) {
+      console.log("📥 Decodificando dataURL (array)...");
       const b = dataUrlToBuffer(first);
       if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
       return await sharp(b).png().toBuffer();
@@ -939,12 +1017,14 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
 
   // 4) objeto { url }
   if (out && typeof out === "object" && typeof out.url === "string") {
+    console.log("📥 Baixando imagem do objeto URL...");
     const buf = await downloadToBuffer(out.url, 240000);
     return await sharp(buf).png().toBuffer();
   }
 
   // 5) array de objetos [{ url }]
   if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
+    console.log("📥 Baixando imagem do array de objetos...");
     const buf = await downloadToBuffer(out[0].url, 240000);
     return await sharp(buf).png().toBuffer();
   }
@@ -1021,18 +1101,20 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
   return norm;
 }
 
-// SUBSTITUA a função buildScenePromptFromParagraph existente por esta:
+// ✅ CORREÇÃO: Prompts melhorados para garantir que a criança seja o protagonista
 function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  // INSTRUÇÃO CRÍTICA PARA NANO BANANA PRO - IDENTITY LOCK NO INÍCIO
+  // ✅ INSTRUÇÃO CRÍTICA PARA NANO BANANA PRO - IDENTITY LOCK NO INÍCIO
   const base = [
     "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
     "Keep the person's facial features exactly the same as Image 1.",
     "Use the child from Image 1 as the main protagonist.",
+    "The child MUST be the central character in this scene.",
+    "Maintain the same face, hair color, hair style, skin tone, and facial expression from the reference image.",
     "",
     "Scene description:",
     `"${txt}"`,
@@ -1071,6 +1153,8 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
     "INSTRUCTION: PIXEL PRIORITY MODE. IDENTITY LOCK: ABSOLUTE.",
     "Keep the person's facial features exactly the same as Image 1.",
     "Use the child from Image 1 as the main central character.",
+    "The child MUST be prominently featured as the hero of the story.",
+    "Maintain the same face, hair color, hair style, skin tone from the reference image.",
     "",
     "Create a children's book cover.",
     `Theme: ${th}.`,
@@ -1097,6 +1181,7 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
 
   return parts.join("\n");
 }
+
 /* -------------------- Text stamping helpers -------------------- */
 
 function escapeXml(s) {
@@ -1331,7 +1416,7 @@ function makeEmptyManifest(id, ownerId) {
     cover: { ok: false, file: "", url: "" },
     pdf: "",
     updatedAt: nowISO(),
-       pending: null,
+    pending: null,
   };
 }
 
@@ -1596,7 +1681,7 @@ try {
   console.error("❌ admin.page.js NÃO carregou. /admin desativado.");
   console.error("Motivo:", String(e?.message || e));
   console.error("Stack:", String(e?.stack || ""));
-  // ⚠️ opcional: descomente para não deixar deploy “passar”
+  // ⚠️ opcional: descomente para não deixar deploy "passar"
   // throw e;
 }
 
@@ -1785,7 +1870,7 @@ function renderGeneratorHtml(req, res) {
       : `OpenAI (fallback): <span class="mono">${escapeHtml(IMAGE_MODEL)}</span>`;
 
   // ⚠️ Mantive seu HTML/JS exatamente como você enviou (só compactei a string para não explodir tamanho).
-  // Se você quiser, eu posso devolver a versão “bem formatada” também.
+  // Se você quiser, eu posso devolver a versão "bem formatada" também.
   res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Meu Livro Mágico — Criar</title>
 <style>
 :root{--bg1:#ede9fe;--bg2:#ffffff;--bg3:#fdf2f8;--card:#ffffff;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--shadow:0 20px 50px rgba(0,0,0,.10);--shadow2:0 10px 24px rgba(0,0,0,.08);--violet:#7c3aed;--pink:#db2777;--disabled:#e5e7eb;--disabledText:#9ca3af}
@@ -1942,7 +2027,7 @@ body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,
       </div>
 
       <div id="hintGen" class="hint"></div>
-      <div class="smallNote">Ao criar, você será levado para a tela “Gerando…”</div>
+      <div class="smallNote">Ao criar, você será levado para a tela "Gerando…"</div>
     </div>
   </div>
 </div>
@@ -3106,6 +3191,8 @@ app.get("/api/whoami", requireAuth, async (req, res) => {
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
       console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
+      console.log("ℹ️  PROMPT_STRENGTH:", REPLICATE_PROMPT_STRENGTH, "| GUIDANCE_SCALE:", REPLICATE_GUIDANCE_SCALE);
+      console.log("✅ CORREÇÃO: Imagem de referência sempre enviada como protagonista");
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
