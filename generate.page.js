@@ -499,7 +499,7 @@ if (/isReplicateThrottledError is not defined/i.test(msg)) {
   running = false;
   uiSetDot("bad");
   setHint(
-    "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\n" +
+    "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\\n" +
     "Corrija o app.js e faça redeploy."
   );
   try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
