@@ -84,18 +84,23 @@ const TEXT_MODEL = String(process.env.TEXT_MODEL || "gpt-4.1-mini").trim() || "g
 const IMAGE_MODEL = String(process.env.IMAGE_MODEL || "dall-e-2").trim() || "dall-e-2";
 
 const REPLICATE_API_TOKEN = String(process.env.REPLICATE_API_TOKEN || "").trim();
-const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "google/nano-banana-pro").trim();
-const REPLICATE_VERSION = String(process.env.REPLICATE_VERSION || "").trim(); // opcional
-const REPLICATE_RESOLUTION = String(process.env.REPLICATE_RESOLUTION || "2K").trim();
-const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "1:1").trim();
-const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "png").trim();
-const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
-const REPLICATE_IMAGE_FIELD = String(process.env.REPLICATE_IMAGE_FIELD || "image").trim();
-const REPLICATE_IMAGE_IS_ARRAY = String(process.env.REPLICATE_IMAGE_IS_ARRAY || "0").trim() === "1";
+// ✅ Seedream-4 (bytedance/seedream-4)
+const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "bytedance/seedream-4").trim();
 
-// ✅ NOVO: Configurações adicionais para garantir consistência do personagem
-const REPLICATE_PROMPT_STRENGTH = String(process.env.REPLICATE_PROMPT_STRENGTH || "0.85").trim();
-const REPLICATE_GUIDANCE_SCALE = String(process.env.REPLICATE_GUIDANCE_SCALE || "7.5").trim();
+// No Seedream-4 o campo é "size" (1K/2K/4K/custom)
+const REPLICATE_SIZE = String(process.env.REPLICATE_SIZE || "2K").trim();
+
+// Use "match_input_image" para respeitar a proporção da imagem enviada
+const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "match_input_image").trim();
+
+// ✅ Campo correto de referência do Seedream-4 é image_input (array)
+const REPLICATE_IMAGE_FIELD = String(process.env.REPLICATE_IMAGE_FIELD || "image_input").trim();
+const REPLICATE_IMAGE_IS_ARRAY = true;
+
+// O Seedream-4 aceita batch/sequencial
+const REPLICATE_SEQUENTIAL = String(process.env.REPLICATE_SEQUENTIAL || "disabled").trim(); // disabled | auto
+const REPLICATE_MAX_IMAGES = Number(process.env.REPLICATE_MAX_IMAGES || 1);
+const REPLICATE_ENHANCE_PROMPT = String(process.env.REPLICATE_ENHANCE_PROMPT || "0").trim() === "1";
 
 function pickWritableRoot() {
   const tmpRoot = path.join(os.tmpdir(), "meu-livro-magico");
@@ -758,28 +763,19 @@ async function replicateCreateImageJob({ prompt, imageDataUrl }) {
 
   // ✅ CORREÇÃO: Garante que o input tenha a imagem de referência no campo correto
   const input = {
-    prompt,
-    aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-    resolution: REPLICATE_RESOLUTION || "2K",
-    output_format: REPLICATE_OUTPUT_FORMAT || "png",
-    safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-  };
+  prompt,
 
-  // ✅ Adiciona parâmetros extras para melhor consistência do personagem (se suportado pelo modelo)
-  if (REPLICATE_PROMPT_STRENGTH) {
-    input.prompt_strength = parseFloat(REPLICATE_PROMPT_STRENGTH);
-  }
-  if (REPLICATE_GUIDANCE_SCALE) {
-    input.guidance_scale = parseFloat(REPLICATE_GUIDANCE_SCALE);
-  }
+  // ✅ Seedream-4
+  size: REPLICATE_SIZE || "2K",
+  aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
+  sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
+  max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
+  enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
+};
 
-  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
-  
-  if (REPLICATE_IMAGE_IS_ARRAY) {
-    input[imageField] = [imageDataUrl];
-  } else {
-    input[imageField] = imageDataUrl;
-  }
+// ✅ Campo correto para imagem de referência no Seedream-4
+const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
+input[imageField] = [imageDataUrl]; // sempre array (1..10)
 
   console.log("📤 Enviando para Replicate:", {
     model: REPLICATE_MODEL,
@@ -937,27 +933,18 @@ async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt,
 
   // (mask não é usado pelo Replicate aqui; mantido na assinatura para não quebrar chamadas)
   const input = {
-    prompt,
+  prompt,
 
-    // mantém seus ENV (se o modelo suportar)
-    aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-    resolution: REPLICATE_RESOLUTION || "2K",
-    output_format: REPLICATE_OUTPUT_FORMAT || "png",
-    safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-  };
+  // ✅ Seedream-4
+  size: REPLICATE_SIZE || "2K",
+  aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
+  sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
+  max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
+  enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
+};
 
-  // ✅ Adiciona parâmetros para melhor consistência do personagem
-  if (REPLICATE_PROMPT_STRENGTH) {
-    input.prompt_strength = parseFloat(REPLICATE_PROMPT_STRENGTH);
-  }
-  if (REPLICATE_GUIDANCE_SCALE) {
-    input.guidance_scale = parseFloat(REPLICATE_GUIDANCE_SCALE);
-  }
-
-  // ✅ campo de imagem configurável (image vs image_input etc.)
-  if (REPLICATE_IMAGE_IS_ARRAY) input[REPLICATE_IMAGE_FIELD] = [imgDataUrl];
-  else input[REPLICATE_IMAGE_FIELD] = imgDataUrl;
-
+const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
+input[imageField] = [imgDataUrl]; // sempre array
   console.log("🎨 Gerando imagem com Replicate:", {
     model: REPLICATE_MODEL,
     imageField: REPLICATE_IMAGE_FIELD,
