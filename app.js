@@ -836,11 +836,35 @@ if (/^https?:\/\//i.test(imgRef)) {
 }
 async function replicatePollOnce(predictionId) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
+
   const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
     method: "GET",
     timeoutMs: 20000,
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
   });
+
+  // ✅ DIAGNÓSTICO: confirma se a referência foi enviada no INPUT da prediction
+  try {
+    const inp = pred?.input || {};
+    const imgStr = typeof inp.image === "string" ? inp.image : "";
+    const imgArr0 = Array.isArray(inp.image_input) ? String(inp.image_input[0] || "") : "";
+    const altArr0 = Array.isArray(inp.image_url) ? String(inp.image_url[0] || "") : ""; // alguns modelos usam outros nomes
+
+    console.log("🧪 Replicate pred.input check:", {
+      id: pred?.id,
+      status: pred?.status,
+      has_image_string: !!imgStr,
+      image_string_head: imgStr ? imgStr.slice(0, 90) + "..." : "",
+      has_image_input_array: !!imgArr0,
+      image_input_head: imgArr0 ? imgArr0.slice(0, 90) + "..." : "",
+      has_image_url_array: !!altArr0,
+      image_url_head: altArr0 ? altArr0.slice(0, 90) + "..." : "",
+      input_keys: Object.keys(inp || {}),
+    });
+  } catch (e) {
+    console.warn("⚠️ Falha ao logar pred.input:", String(e?.message || e));
+  }
+
   return pred;
 }
 
@@ -2710,7 +2734,7 @@ if (needCover) {
 
 const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
 const pid = await replicateCreateImageJob({ prompt: coverPrompt, referenceUrl });
-  m.pending = { type: "cover", predictionId: pid, createdAt: nowISO() };
+m.pending = { type: "cover", predictionId: pid, createdAt: nowISO(), referenceUrl };
   m.step = "cover_queued";
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2804,7 +2828,7 @@ const pid = await replicateCreateImageJob({ prompt: coverPrompt, referenceUrl })
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
 const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
 const pid = await replicateCreateImageJob({ prompt, referenceUrl });
-  m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO() };
+m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO(), referenceUrl };
   m.step = `page_${nextPage}_queued`;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
