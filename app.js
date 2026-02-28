@@ -405,7 +405,26 @@ function guessExtFromMime(mime) {
   if (m.includes("png")) return "png";
   return "png";
 }
+async function fileToPngDataUrl(filePath) {
+  const buf = await fsp.readFile(filePath);
+  // normaliza pra PNG (evita referência inválida por formato)
+  const png = await sharp(buf).png().toBuffer();
+  const dataUrl = `data:image/png;base64,${png.toString("base64")}`;
 
+  // validações rápidas
+  if (!dataUrl.startsWith("data:image/png;base64,")) {
+    throw new Error("Falha ao gerar DataURL PNG da imagem de referência.");
+  }
+  if (dataUrl.length < 2000) {
+    throw new Error("Imagem de referência muito pequena/curta (DataURL suspeita).");
+  }
+  return dataUrl;
+}
+
+function isReplicate422UnknownField(errMsg) {
+  const s = String(errMsg || "");
+  return s.includes("HTTP 422") || s.toLowerCase().includes("unknown") || s.toLowerCase().includes("invalid");
+}
 function bufferToDataUrlPng(buf) {
   return `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
 }
@@ -652,6 +671,9 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
 
 /* -------------------- Replicate helpers -------------------- */
 
+// ------------------------------
+// Replicate — imagem (principal) ✅ (REF IMAGE GARANTIDA)
+// ------------------------------
 const replicateVersionCache = new Map(); // key: "owner/name" -> versionId
 
 function splitReplicateModel(model) {
@@ -697,26 +719,16 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
 
   const version = await replicateGetLatestVersionId(model);
 
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      return await fetchJson("https://api.replicate.com/v1/predictions", {
-        method: "POST",
-        timeoutMs,
-        headers: {
-          Authorization: `Token ${REPLICATE_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ version, input }),
-      });
-    } catch (e) {
-      lastErr = e;
-      // backoff: 1.2s, 2.4s
-      if (attempt < 3) await sleep(1200 * attempt);
-    }
-  }
-
-  throw lastErr || new Error("Replicate: falha ao criar prediction.");
+  // ✅ Replicate quer "version" no body (não "model")
+  return await fetchJson("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    timeoutMs,
+    headers: {
+      Authorization: `Token ${REPLICATE_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ version, input }),
+  });
 }
 
 async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollMs = 1200 } = {}) {
@@ -730,7 +742,7 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
     const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       method: "GET",
-      timeoutMs: 120000,
+      timeoutMs: 60000,
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
 
@@ -891,85 +903,75 @@ async function generateImageWithReference({
   return replicateOutputToPngBuffer(pred);
 }
 
-async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada. Use .env.local.");
-  if (typeof FormData === "undefined" || typeof Blob === "undefined") {
-    throw new Error("Seu Node não tem FormData/Blob globais. Use Node 18+.");
-  }
-
-  const imgBuf = await fsp.readFile(imagePngPath);
-  const maskBuf = maskPngPath && existsSyncSafe(maskPngPath) ? await fsp.readFile(maskPngPath) : null;
-
-  if (maskBuf) {
-    const mi = await sharp(imgBuf).metadata();
-    const mm = await sharp(maskBuf).metadata();
-    const iw = mi?.width || 0;
-    const ih = mi?.height || 0;
-    const mw = mm?.width || 0;
-    const mh = mm?.height || 0;
-    if (iw && ih && mw && mh && (iw !== mw || ih !== mh)) {
-      throw new Error(`Mask e imagem com tamanhos diferentes: image=${iw}x${ih}, mask=${mw}x${mh}. Reenvie a foto.`);
+async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
+  // ✅ REPlicate primeiro
+  if (REPLICATE_API_TOKEN) {
+    if (!existsSyncSafe(imagePngPath)) {
+      throw new Error(`Imagem de referência não encontrada: ${imagePngPath}`);
     }
-  }
 
-  const modelsTry = [IMAGE_MODEL, "dall-e-2"].filter(Boolean);
+    // 1) DataURL PNG válido (sempre)
+    const refDataUrl = await fileToPngDataUrl(imagePngPath);
 
-  let lastErr = null;
-  for (const model of modelsTry) {
-    try {
-      const form = new FormData();
-      form.append("model", model);
-      form.append("prompt", prompt);
-      form.append("size", size);
-      form.append("response_format", "b64_json");
-      form.append("n", "1");
+    // (debug opcional) — você pode manter isso por enquanto
+    console.log("[REF] reference dataurl length =", refDataUrl.length);
 
-      form.append("image", new Blob([imgBuf], { type: "image/png" }), path.basename(imagePngPath) || "image.png");
-      if (maskBuf) {
-        form.append("mask", new Blob([maskBuf], { type: "image/png" }), path.basename(maskPngPath) || "mask.png");
-      }
+    // 2) base comum de parâmetros
+    const base = {
+      prompt,
+      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+      resolution: REPLICATE_RESOLUTION || "2K",
+      output_format: REPLICATE_OUTPUT_FORMAT || "png",
+      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
+    };
 
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 180000); // 3 min
+    // 3) tenta variações de campo de referência (resolve quando o modelo ignora)
+    const tries = [
+      { ...base, image_input: [refDataUrl] }, // seu formato antigo
+      { ...base, image: refDataUrl },         // muitos modelos usam "image"
+      { ...base, input_image: refDataUrl },   // outros usam "input_image"
+    ];
 
+    let lastErr = null;
+
+    for (let i = 0; i < tries.length; i++) {
       try {
-        netMark("openai:images:edits", "https://api.openai.com/v1/images/edits", `model=${model}`);
-
-        const r = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-          body: form,
-          signal: ctrl.signal,
+        const created = await replicateCreatePrediction({
+          model: REPLICATE_MODEL || "google/nano-banana-pro",
+          input: tries[i],
+          timeoutMs: 120000,
         });
 
-        const text = await r.text();
-        if (!r.ok) {
-          const err = new Error(`OpenAI Images HTTP ${r.status}: ${text.slice(0, 2000)}`);
-          netFail("openai:images:edits", "https://api.openai.com/v1/images/edits", err);
-          throw err;
+        const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+
+        let url = "";
+        if (typeof pred?.output === "string") url = pred.output;
+        else if (Array.isArray(pred?.output) && typeof pred.output[0] === "string") url = pred.output[0];
+
+        if (!url) throw new Error("Replicate não retornou URL de imagem em output.");
+
+        const buf = await downloadToBuffer(url, 240000);
+        return await sharp(buf).png().toBuffer();
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e?.message || e || "");
+
+        // Se for “campo inválido/unknown/422”, tenta a próxima variação
+        if (isReplicate422UnknownField(msg)) {
+          console.warn(`[Replicate] tentativa ${i + 1} falhou (provável campo incompatível). Tentando próxima...`, msg);
+          continue;
         }
 
-        const data = JSON.parse(text);
-        const outB64 = data?.data?.[0]?.b64_json;
-        if (!outB64) throw new Error("Não retornou b64_json.");
-        return Buffer.from(outB64, "base64");
-      } catch (e) {
-        const msg = String(e?.message || e);
-        const err = new Error(`openai image edit fetch failed: ${msg}`);
-        netFail("openai:images:edits", "https://api.openai.com/v1/images/edits", err);
-        throw err;
-      } finally {
-        clearTimeout(t);
+        // outros erros (timeout, credit, etc.) a gente estoura mesmo
+        throw e;
       }
-    } catch (e) {
-      lastErr = e;
-      const msg = String(e?.message || e || "");
-      if (isModelAccessError(msg)) continue;
-      throw e;
     }
+
+    throw lastErr || new Error("Falha ao gerar imagem via Replicate usando imagem de referência.");
   }
 
-  throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
+  // ✅ fallback OpenAI Images
+  return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
 }
 
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
