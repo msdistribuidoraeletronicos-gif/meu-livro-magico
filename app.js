@@ -249,7 +249,61 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+function mustEnv(name, v) {
+  const s = String(v || "").trim();
+  if (!s) throw new Error(`${name} ausente/vazio`);
+  return s;
+}
 
+function looksLikeSupabaseUrl(u) {
+  const s = String(u || "").trim();
+  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(s);
+}
+
+async function supabaseSanityCheck() {
+  if (!sbEnabled()) return { ok: false, reason: "supabase_disabled" };
+
+  const url = mustEnv("SUPABASE_URL", SUPABASE_URL);
+  const key = mustEnv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE_ROLE_KEY);
+  const bucket = mustEnv("SUPABASE_STORAGE_BUCKET", SUPABASE_STORAGE_BUCKET);
+
+  if (!looksLikeSupabaseUrl(url)) {
+    throw new Error(`SUPABASE_URL inválida: "${url}" (esperado: https://xxxx.supabase.co)`);
+  }
+  if (key.length < 40) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY parece curta. Confirme se é SERVICE ROLE (não anon).");
+  }
+
+  // (opcional) tenta checar se o bucket existe (depende da versão do supabase-js)
+  try {
+    if (supabase?.storage?.listBuckets) {
+      const { data, error } = await supabase.storage.listBuckets();
+      if (error) throw new Error(String(error.message || error));
+      const names = (data || []).map((b) => b.name);
+      if (!names.includes(bucket)) {
+        throw new Error(`Bucket "${bucket}" não existe. Buckets encontrados: ${names.join(", ") || "(nenhum)"}`);
+      }
+    }
+  } catch (e) {
+    // não bloqueia, porque algumas versões não têm listBuckets ou podem negar a lista
+    console.log("ℹ️  supabaseSanityCheck: listBuckets não disponível/permitido:", String(e?.message || e));
+  }
+
+  // teste real: upload + download de um arquivo pequeno
+  const testKey = `__healthcheck__/ping-${Date.now()}.txt`;
+  const payload = Buffer.from("supabase-ok", "utf-8");
+
+  const up = await sbUploadBuffer(testKey, payload, "text/plain");
+  if (!up.ok) throw new Error(`Supabase upload falhou: ${up.reason || "unknown"}`);
+
+  const dl = await sbDownloadToBuffer(testKey);
+  if (!dl.ok || !dl.buf) throw new Error(`Supabase download falhou: ${dl.reason || "unknown"}`);
+
+  const got = dl.buf.toString("utf-8");
+  if (got !== "supabase-ok") throw new Error("Supabase download retornou conteúdo inesperado.");
+
+  return { ok: true, bucket, testKey };
+}
 // ------------------------------
 // Supabase Storage Helpers (opcional)
 // ------------------------------
@@ -2402,7 +2456,14 @@ app.get("/generate", requireAuth, async (req, res) => {
 </body>
 </html>`);
 });
-
+app.get("/api/supabase-check", requireAuth, async (req, res) => {
+  try {
+    const r = await supabaseSanityCheck();
+    return res.json({ ok: true, ...r });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 // ------------------------------
 // API
 // ------------------------------
@@ -3001,8 +3062,3 @@ app.get("/books", requireAuth, async (req, res) => {
   });
 })();
 module.exports = app;
-
-if (require.main === module) {
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log("Listening on", port));
-}
