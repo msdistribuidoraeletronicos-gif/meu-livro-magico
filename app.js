@@ -1021,11 +1021,11 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const H = Math.max(1, meta.height || 1024);
 
   const pad = Math.round(W * 0.040);
-  const bandH = Math.round(H * 0.32);
+  const bandH = Math.round(H * 0.22);
   const rx = Math.round(Math.min(W, H) * 0.03);
 
   const bandX = pad;
-  const bandY = H - bandH - pad;
+  const bandY = pad; // ✅ card branco no TOPO, igual a capa
   const bandW = W - pad * 2;
 
   const innerPadX = Math.round(bandW * 0.045);
@@ -2510,13 +2510,19 @@ app.get("/generate", requireAuth, async (req, res) => {
     setBar(p);
 
     if (j.status === "done" && j.pdf){
-      setSub("✅ Pronto!");
-      const pdfBtn = $("pdfBtn");
-      pdfBtn.style.display = "inline-flex";
-      pdfBtn.href = j.pdf;
-      setLog("Finalizado. Você já pode baixar o PDF.");
-      return;
-    }
+  setSub("✅ Pronto! Redirecionando para Meus Livros…");
+  const pdfBtn = $("pdfBtn");
+  pdfBtn.style.display = "inline-flex";
+  pdfBtn.href = j.pdf;
+  setLog("Finalizado. Abrindo seus livros…");
+
+  // ✅ pequeno delay pra UI atualizar e o usuário sentir que terminou
+  setTimeout(() => {
+    window.location.href = "/books?open=" + encodeURIComponent(bookId);
+  }, 900);
+
+  return;
+}
 
     if (j.status === "failed"){
       setSub("❌ Falhou");
@@ -3094,7 +3100,28 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         await saveManifest(userId, id, m);
         return res.json({ ok: true, step: "done" });
       }
+// ✅ garante arquivos no disco (Vercel-safe) antes de montar PDF
+const coverFinalName = "cover_final.png";
+const coverFinalPath = path.join(bookDir, coverFinalName);
 
+if (!existsSyncSafe(coverFinalPath) && sbEnabled()) {
+  const key = m.cover?.storageKey || sbKeyForOwner(m, id, coverFinalName) || sbKeyFor(userId, id, coverFinalName);
+  await ensureFileFromStorageIfMissing(coverFinalPath, key);
+}
+
+// garante cada página final
+if (Array.isArray(m.images) && sbEnabled()) {
+  for (const it of m.images) {
+    const file = String(it?.file || "");
+    const localPath = it?.path ? String(it.path) : path.join(bookDir, file);
+    const key = String(it?.storageKey || "");
+
+    if (file && localPath && !existsSyncSafe(localPath)) {
+      const fallbackKey = key || sbKeyForOwner(m, id, file) || sbKeyFor(userId, id, file);
+      await ensureFileFromStorageIfMissing(localPath, fallbackKey);
+    }
+  }
+}
       const coverPath = path.join(bookDir, "cover_final.png");
       const pageImagePaths = (m.images || []).map((it) => it.path).filter(Boolean);
 
@@ -3314,7 +3341,7 @@ app.get("/books", requireAuth, async (req, res) => {
           const up = escapeHtml(m.updatedAt || "");
           const open = `/generate?id=${encodeURIComponent(m.id)}`;
           const pdf = m.pdf ? `<a class="btn" href="${m.pdf}">⬇️ PDF</a>` : "";
-          return `<div class="item">
+          return `<div class="item" id="book-${escapeHtml(m.id)}">
             ${cover}
             <div style="margin-top:10px;font-weight:1000">${title}</div>
             <div class="muted">status=${st}</div>
@@ -3330,6 +3357,19 @@ app.get("/books", requireAuth, async (req, res) => {
     ${list.length ? "" : `<div class="muted">Nenhum livro ainda. Clique em "Criar".</div>`}
   </div>
 </div>
+<script>
+  (function(){
+    const q = new URLSearchParams(location.search);
+    const open = q.get("open");
+    if (!open) return;
+    const el = document.getElementById("book-" + open);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.style.outline = "4px solid rgba(124,58,237,.20)";
+    el.style.boxShadow = "0 20px 50px rgba(124,58,237,.20)";
+    el.style.borderColor = "rgba(124,58,237,.35)";
+  })();
+</script>
 </body>
 </html>`);
 });
