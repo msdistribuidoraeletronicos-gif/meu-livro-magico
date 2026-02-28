@@ -1044,142 +1044,133 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
 // ✅ CORREÇÃO: Prompts agora incluem TODAS as informações (nome, idade, gênero, tema, estilo)
 function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
-  const name = String(childName || "").trim();
+  const name = String(childName || "").trim() || "Child";
   const age = Number(childAge) || 6;
   const gender = String(childGender || "neutral").trim();
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  // Determina descrição de gênero para o prompt
-  let genderDesc = "";
-  if (gender === "boy") genderDesc = "menino";
-  else if (gender === "girl") genderDesc = "menina";
-  else genderDesc = "criança";
+  const genderEN =
+    gender === "girl" ? "girl" :
+    gender === "boy" ? "boy" :
+    "child";
 
-  const base = [
-    "=== INSTRUÇÕES OBRIGATÓRIAS ===",
-    "",
-    "IDENTITY LOCK = MÁXIMO. A IMAGEM DE REFERÊNCIA É A ÚNICA FONTE VERDADEIRA DE IDENTIDADE.",
-    "",
-    `PERSONAGEM PRINCIPAL (OBRIGATÓRIO):`,
-    `- Nome: ${name}`,
-    `- Idade: ${age} anos`,
-    `- Gênero: ${genderDesc}`,
-    `- A criança da foto de referência DEVE ser o protagonista desta cena`,
-    `- Mesma estrutura facial, olhos, nariz, boca, bochechas, queixo da foto`,
-    `- Mesma cor de pele, cor de cabelo e estilo de cabelo da foto`,
-    `- NÃO mude a pessoa. NÃO crie uma criança diferente.`,
-    `- Se a cena exigir pose/roupa diferente, mantenha o ROSTO idêntico.`,
-    "",
-    `CENA/CONTEXTO:`,
-    `"${txt}"`,
-    "",
-    `TEMA: ${th}.`,
-    "",
-    "REGRAS VISUAIS:",
-    "- A criança deve estar claramente visível (não pequena / não escondida / não de costas)",
-    "- SEM texto, legendas, logos, marcas d'água ou letras na imagem",
-    "- Nenhum personagem adicional que se pareça com o protagonista (evite duplicatas)",
-    "",
-    "=== FIM DAS INSTRUÇÕES ===",
-  ].filter(Boolean);
+  const genderPT =
+    gender === "girl" ? "menina" :
+    gender === "boy" ? "menino" :
+    "criança";
 
-  if (style === "color") {
-    base.push(
-      "",
-      "ESTILO: Página de livro para colorir.",
-      "Arte preto e branco, contornos limpos, linhas grossas.",
-      "SEM cores, SEM gradientes, SEM sombras.",
-      "Fundo branco ou claro, poucos detalhes de fundo para facilitar colorir."
-    );
-  } else {
-    base.push(
-      "",
-      "ESTILO: Ilustração semi-realista de livro infantil.",
-      "Cores vibrantes e alegres, luz suave, atmosfera mágica."
-    );
-  }
+  const negative = [
+    "boy", "male", "man", "teenager", "adult",
+    "masculine face", "beard", "mustache",
+    "different child", "different person", "face change",
+    "wrong gender", "gender swap",
+    "two kids", "duplicate protagonist", "twins",
+    "text", "caption", "watermark", "logo", "letters"
+  ].join(", ");
 
-  const finalPrompt = base.join("\n");
-  
-  console.log("📝 Prompt da página gerado:", {
-    name,
-    age,
-    gender: genderDesc,
-    theme: th,
-    style,
-    promptLength: finalPrompt.length,
-    preview: finalPrompt.slice(0, 300) + "..."
-  });
-  
-  return finalPrompt;
+  const styleBlock =
+    style === "color"
+      ? [
+          "STYLE: Kids coloring book page, black and white line art.",
+          "Clean bold outlines, no color, no shading, no gradients.",
+          "Simple background, easy to color."
+        ].join("\n")
+      : [
+          "STYLE: Colorful children’s book illustration.",
+          "Vibrant colors, soft light, magical atmosphere."
+        ].join("\n");
+
+  const prompt = [
+    "IMPORTANT — IDENTITY MUST MATCH THE REFERENCE IMAGE.",
+    "The reference image is the ONLY source of identity for the protagonist.",
+    "",
+    `PROTAGONIST: ${name}. A ${age}-year-old ${genderEN} (toddler/young child).`,
+    "The protagonist MUST be the same child as in the reference photo:",
+    "- same face shape and features (eyes, nose, mouth, cheeks, chin)",
+    "- same skin tone, hair color and hair style",
+    "- do NOT change gender, do NOT create a different child",
+    "",
+    `THEME: ${th}.`,
+    "",
+    "SCENE DESCRIPTION (context):",
+    txt ? `"${txt}"` : "(no scene text provided)",
+    "",
+    "COMPOSITION RULES:",
+    "- the protagonist must be clearly visible (not tiny, not hidden, not back-facing)",
+    "- no additional character that looks like the protagonist",
+    "- no text / captions / logos / watermarks in the image",
+    "",
+    styleBlock,
+    "",
+    "NEGATIVE (avoid):",
+    negative,
+    "",
+    "PT-BR reminder (do not ignore):",
+    `É obrigatório ser a MESMA criança da foto. ${genderPT}, ${age} anos. Não pode virar ${genderPT === "menina" ? "menino" : "menina"}.`
+  ].join("\n");
+
+  return prompt;
 }
-
 // ✅ CORREÇÃO: Capa também inclui todas as informações
 function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
-  const name = String(childName || "").trim();
+  const name = String(childName || "").trim() || "Child";
   const age = Number(childAge) || 6;
   const gender = String(childGender || "neutral").trim();
   const style = String(styleKey || "read").trim();
 
-  // Determina descrição de gênero para o prompt
-  let genderDesc = "";
-  if (gender === "boy") genderDesc = "menino";
-  else if (gender === "girl") genderDesc = "menina";
-  else genderDesc = "criança";
+  const genderEN =
+    gender === "girl" ? "girl" :
+    gender === "boy" ? "boy" :
+    "child";
 
-  const parts = [
-    "=== INSTRUÇÕES OBRIGATÓRIAS PARA CAPA ===",
-    "",
-    "IDENTITY LOCK = MÁXIMO. A IMAGEM DE REFERÊNCIA É A ÚNICA FONTE VERDADEIRA DE IDENTIDADE.",
-    "",
-    `PERSONAGEM PRINCIPAL DA CAPA (OBRIGATÓRIO):`,
-    `- Nome: ${name}`,
-    `- Idade: ${age} anos`,
-    `- Gênero: ${genderDesc}`,
-    `- A criança da foto de referência DEVE ser o personagem central da capa`,
-    `- Mesma estrutura facial, olhos, nariz, boca, bochechas, queixo da foto`,
-    `- Mesma cor de pele, cor de cabelo e estilo de cabelo da foto`,
-    `- NÃO mude a pessoa. NÃO crie uma criança diferente.`,
-    "",
-    `CRIAR CAPA DE LIVRO INFANTIL:`,
-    `Tema: ${th}.`,
-    "Cena: alegre, mágica, positiva, com a criança em destaque no centro.",
-    "Expressão: feliz, animada, convidativa para aventura.",
-    "SEM texto, títulos ou legendas na imagem.",
-    "",
-    "=== FIM DAS INSTRUÇÕES ===",
-  ].filter(Boolean);
+  const genderPT =
+    gender === "girl" ? "menina" :
+    gender === "boy" ? "menino" :
+    "criança";
 
-  if (style === "color") {
-    parts.push(
-      "",
-      "ESTILO: Capa de livro para colorir.",
-      "Arte preto e branco, contornos fortes e limpos.",
-      "SEM cores, SEM gradientes, SEM sombras.",
-      "Fundo branco ou claro, desenhado para colorir."
-    );
-  } else {
-    parts.push(
-      "",
-      "ESTILO: Ilustração colorida semi-realista, vibrante e alegre, luz suave."
-    );
-  }
+  const negative = [
+    "boy", "male", "man", "teenager", "adult",
+    "masculine face", "beard", "mustache",
+    "different child", "different person", "face change",
+    "wrong gender", "gender swap",
+    "text", "title", "letters", "watermark", "logo"
+  ].join(", ");
 
-  const finalPrompt = parts.join("\n");
-  
-  console.log("📝 Prompt da capa gerado:", {
-    name,
-    age,
-    gender: genderDesc,
-    theme: th,
-    style,
-    promptLength: finalPrompt.length,
-    preview: finalPrompt.slice(0, 300) + "..."
-  });
-  
-  return finalPrompt;
+  const styleBlock =
+    style === "color"
+      ? [
+          "STYLE: Coloring book cover, black and white line art.",
+          "Bold clean outlines, no color, no shading."
+        ].join("\n")
+      : [
+          "STYLE: Colorful children’s book cover illustration.",
+          "Vibrant colors, soft light, cute and magical."
+        ].join("\n");
+
+  return [
+    "IMPORTANT — IDENTITY MUST MATCH THE REFERENCE IMAGE.",
+    "The reference image is the ONLY source of identity for the protagonist.",
+    "",
+    `COVER PROTAGONIST: ${name}. A ${age}-year-old ${genderEN}.`,
+    "The protagonist MUST be the same child as in the reference photo (same face, skin tone, hair).",
+    "Do NOT change gender. Do NOT create a different child.",
+    "",
+    "CREATE A CHILDREN’S BOOK COVER:",
+    `THEME: ${th}.`,
+    "Happy, magical, positive mood.",
+    "The child centered and clearly visible, inviting expression.",
+    "NO text in the generated image (title will be added later).",
+    "",
+    styleBlock,
+    "",
+    "NEGATIVE (avoid):",
+    negative,
+    "",
+    "PT-BR reminder:",
+    `Obrigatório: mesma criança da foto. ${genderPT}, ${age} anos. Sem texto na imagem.`
+  ].join("\n");
 }
 
 /* -------------------- Text stamping helpers -------------------- */
