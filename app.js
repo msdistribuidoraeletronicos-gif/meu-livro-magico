@@ -274,7 +274,11 @@ function sbEnabled() {
 function sbKeyFor(userId, bookId, fileName) {
   return `users/${String(userId)}/books/${String(bookId)}/${String(fileName)}`;
 }
-
+function sbKeyForOwner(manifest, bookId, fileName) {
+  const ownerId = String(manifest?.ownerId || "").trim();
+  if (!ownerId) return "";
+  return sbKeyFor(ownerId, bookId, fileName);
+}
 async function sbUploadBuffer(key, buf, contentType = "application/octet-stream") {
   if (!sbEnabled()) return { ok: false, key, reason: "supabase_disabled" };
   const { error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).upload(key, buf, {
@@ -852,6 +856,9 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, chi
     "Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
     "A identidade deve ser consistente em todas as páginas (same face, same hairstyle, same skin tone).",
     "Não invente outra criança diferente.",
+     "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
+    "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
+     "Cena coerente e bonita para livro infantil.",
   ].join(" ");
 
   const meta = [
@@ -1232,7 +1239,7 @@ async function saveManifest(userId, bookId, manifest) {
 
   if (sbEnabled()) {
     const buf = Buffer.from(JSON.stringify(manifest, null, 2), "utf-8");
-    const key = sbKeyFor(userId, bookId, "book.json");
+const key = sbKeyForOwner(manifest, bookId, "book.json") || sbKeyFor(userId, bookId, "book.json");
     await sbUploadBuffer(key, buf, "application/json");
   }
 }
@@ -3112,11 +3119,10 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
 
     const fp = path.join(bookDirOf(userId, id), file);
-
-    if (!existsSyncSafe(fp) && sbEnabled()) {
-      const key = sbKeyFor(userId, id, file);
-      await ensureFileFromStorageIfMissing(fp, key);
-    }
+if (!existsSyncSafe(fp) && sbEnabled()) {
+  const key = sbKeyForOwner(m, id, file) || sbKeyFor(userId, id, file);
+  await ensureFileFromStorageIfMissing(fp, key);
+}
 
     if (!existsSyncSafe(fp)) return res.status(404).send("not found");
 
@@ -3149,9 +3155,9 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     const pdfPath = path.join(bookDirOf(userId, id), pdfName);
 
     if (!existsSyncSafe(pdfPath) && sbEnabled()) {
-      const key = m.pdfKey || sbKeyFor(userId, id, pdfName);
-      await ensureFileFromStorageIfMissing(pdfPath, key);
-    }
+  const key = m.pdfKey || sbKeyForOwner(m, id, pdfName) || sbKeyFor(userId, id, pdfName);
+  await ensureFileFromStorageIfMissing(pdfPath, key);
+}
 
     if (!existsSyncSafe(pdfPath)) return res.status(404).send("pdf não encontrado");
 
