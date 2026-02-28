@@ -2657,8 +2657,7 @@ if (maskBuf) {
       await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
     }
 
-    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey,  faceBase: faceBaseName,
-  faceBaseKey};
+    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey };
     m.mask = { ok: true, file: maskPngName, editBase: maskBaseName, storageKey: maskKey, editBaseKey: maskBaseKey };
 
     // reset geração se já estava bagunçada
@@ -2773,24 +2772,15 @@ async function ensureBasesOrThrow(userId, id, m) {
   await ensureDir(bookDir);
 
   const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
-  const maskPngPath  = path.join(bookDir, m.mask?.editBase  || "mask_base.png");
-
-  // ✅ NOVO:
-  const facePngPath  = path.join(bookDir, m.photo?.faceBase || "face_base.png");
+  const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
 
   await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.editBaseKey || "");
-  await ensureFileFromStorageIfMissing(maskPngPath,  m.mask?.editBaseKey || "");
-
-  // ✅ NOVO:
-  await ensureFileFromStorageIfMissing(facePngPath, m.photo?.faceBaseKey || "");
+  await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.editBaseKey || "");
 
   if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
-  if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+  if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
-  // ✅ NOVO:
-  if (!existsSyncSafe(facePngPath))  throw new Error("face_base.png não encontrada. Reenvie a foto.");
-
-  return { bookDir, imagePngPath, maskPngPath, facePngPath };
+  return { bookDir, imagePngPath, maskPngPath };
 }
 
 function ensureRetryFields(m) {
@@ -2881,7 +2871,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     }
 
     // garante bases no disco
-const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrThrow(userId, id, m);
+    const { bookDir, imagePngPath, maskPngPath } = await ensureBasesOrThrow(userId, id, m);
 
     const styleKey = String(m.style || "read").trim();
     const childName = String(m.child?.name || "Criança").trim() || "Criança";
@@ -2946,12 +2936,12 @@ const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrT
         styleKey,
       });
 
-    const coverBuf = await imageFromReference({
-  imagePngPath: facePngPath,   // ✅ rosto apenas
-  maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
-  prompt: coverPrompt,
-  size: "1024x1024",
-});
+      const coverBuf = await imageFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+      });
 
       const coverBaseName = "cover.png";
       const coverBasePath = path.join(bookDir, coverBaseName);
@@ -3041,12 +3031,13 @@ const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrT
         childGender,
         styleKey,
       });
-const imgBuf = await imageFromReference({
-  imagePngPath: facePngPath,   // ✅ rosto apenas
-  maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
-  prompt,
-  size: "1024x1024",
-});
+
+      const imgBuf = await imageFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+      });
 
       const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
       const basePath = path.join(bookDir, baseName);
