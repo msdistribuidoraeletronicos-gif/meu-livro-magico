@@ -82,7 +82,7 @@ const IMAGE_MODEL = String(process.env.IMAGE_MODEL || "dall-e-2").trim() || "dal
 
 // Replicate (imagem principal)
 const REPLICATE_API_TOKEN = String(process.env.REPLICATE_API_TOKEN || "").trim();
-const REPLICATE_MODEL = "bytedance/seedream-4";
+const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "google/nano-banana-pro").trim();
 const REPLICATE_VERSION = String(process.env.REPLICATE_VERSION || "").trim(); // opcional
 
 const REPLICATE_RESOLUTION = String(process.env.REPLICATE_RESOLUTION || "2K").trim();
@@ -171,35 +171,7 @@ let supabaseAdmin = null;
     console.log("ℹ️  Supabase Storage/Admin: desativado (SERVICE ROLE ausente).");
   }
 })();
-function clampInt(n, a, b) {
-  n = Math.round(Number(n) || 0);
-  return Math.max(a, Math.min(b, n));
-}
 
-// Faz um "crop de rosto" heurístico (sem face-detection):
-// pega a região superior/central onde normalmente fica o rosto
-async function makeFaceBase({ inputPngPath, outputPngPath }) {
-  const meta = await sharp(inputPngPath).metadata();
-  const W = meta?.width || 0;
-  const H = meta?.height || 0;
-  if (!W || !H) throw new Error("Falha ao ler metadata para face crop.");
-
-  // região típica de rosto: centro horizontal, topo do frame
-  const cropW = clampInt(W * 0.62, 256, W);
-  const cropH = clampInt(H * 0.62, 256, H);
-
-  const left = clampInt((W - cropW) / 2, 0, W - cropW);
-  const top  = clampInt(H * 0.06, 0, H - cropH); // um pouco abaixo do topo
-
-  // recorta e normaliza tamanho (mantém detalhe do rosto)
-  await sharp(inputPngPath)
-    .extract({ left, top, width: cropW, height: cropH })
-    .resize({ width: 512, height: 512, fit: "cover" })
-    .png()
-    .toFile(outputPngPath);
-
-  return { W, H, crop: { left, top, width: cropW, height: cropH } };
-}
 // ------------------------------
 // Helpers: FS
 // ------------------------------
@@ -620,18 +592,16 @@ function splitReplicateModel(model) {
 }
 
 async function replicateGetLatestVersionId(model) {
-  // 🔒 Se versão fixa estiver definida, usa ela
   if (REPLICATE_VERSION) return REPLICATE_VERSION;
 
-  const parsed = splitReplicateModel(model);
-  if (!parsed) {
-    throw new Error(`REPLICATE_MODEL inválido: "${model}". Use "owner/name" (ex: "bytedance/seedream-4")`);
-  }
-
-  const key = `${parsed.owner}/${parsed.name}`;
-
-  // cache
+  const key = String(model || "").trim();
+  if (!key) throw new Error("REPLICATE_MODEL vazio.");
   if (replicateVersionCache.has(key)) return replicateVersionCache.get(key);
+
+  const parsed = splitReplicateModel(key);
+  if (!parsed) {
+    throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name" (ex: google/nano-banana-pro) ou configure REPLICATE_VERSION.`);
+  }
 
   const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
     method: "GET",
@@ -639,43 +609,15 @@ async function replicateGetLatestVersionId(model) {
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
   });
 
-  const versionId =
-    info?.latest_version?.id ||
-    info?.latest_version?.version ||
-    info?.latest_version;
-
+  const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
   if (!versionId) {
-    throw new Error(`Não consegui obter latest_version do modelo "${key}".`);
+    throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente no .env.local.`);
   }
 
-  replicateVersionCache.set(key, versionId);
-  return versionId;
-}
-const replicateSchemaCache = new Map(); // key: versionId -> schema.inputs
-
-async function replicateGetVersionSchema(versionId) {
-  if (replicateSchemaCache.has(versionId)) return replicateSchemaCache.get(versionId);
-
-  const v = await fetchJson(`https://api.replicate.com/v1/models/versions/${versionId}`, {
-    method: "GET",
-    timeoutMs: 60000,
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-  });
-
-  const inputs = v?.openapi_schema?.components?.schemas?.Input?.properties || {};
-  replicateSchemaCache.set(versionId, inputs);
-  return inputs;
+  replicateVersionCache.set(key, String(versionId));
+  return String(versionId);
 }
 
-function pickFirstKey(obj, keys) {
-  for (const k of keys) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return k;
-  return "";
-}
-
-function schemaExpectsArray(inputSchema, key) {
-  const sch = inputSchema?.[key];
-  return sch?.type === "array";
-}
 async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
   const version = await replicateGetLatestVersionId(model);
@@ -809,52 +751,27 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
 
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
-    const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "bytedance/seedream-4");
-    const inputSchema = await replicateGetVersionSchema(createdVersion);
 
-    // chaves mais comuns que os modelos usam
-    const imageKey = pickFirstKey(inputSchema, ["image_input", "input_image", "image", "reference_image"]);
-    const promptKey = pickFirstKey(inputSchema, ["prompt", "text", "caption"]);
-    const maskKey   = pickFirstKey(inputSchema, ["mask", "mask_image", "input_mask"]);
-    const matchKey  = pickFirstKey(inputSchema, ["match_input_image", "preserve_identity", "identity_strength"]);
+    const input = {
+      prompt,
+      image_input: [refDataUrl],
 
-    const input = {};
+      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+      resolution: REPLICATE_RESOLUTION || "2K",
+      output_format: REPLICATE_OUTPUT_FORMAT || "png",
+      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
 
-    // prompt
-    input[promptKey || "prompt"] = prompt;
+      // ✅ só o mais “universal”
+      match_input_image: true,
+    };
 
-    // ✅ referência (usa o imagePngPath que você passou pra função)
-    // se o schema pede array, manda [ref]; se não, manda ref direto
-    if (imageKey) {
-      const expectsArray = schemaExpectsArray(inputSchema, imageKey);
-      input[imageKey] = expectsArray ? [refDataUrl] : refDataUrl;
-    } else {
-      // fallback mais comum
-      input.image_input = [refDataUrl];
-    }
+    // ✅ Opcional: só ligue se você tiver certeza que o modelo aceita
+    // input.strength = 0.45;
 
-    // ✅ máscara só se existir no schema E só se realmente tiver maskDataUrl
-    if (maskDataUrl && maskKey) {
-      input[maskKey] = maskDataUrl;
-    }
-
-    // parâmetros opcionais só se existirem no schema
-    if (Object.prototype.hasOwnProperty.call(inputSchema, "aspect_ratio")) input.aspect_ratio = REPLICATE_ASPECT_RATIO || "1:1";
-    if (Object.prototype.hasOwnProperty.call(inputSchema, "resolution")) input.resolution = REPLICATE_RESOLUTION || "2K";
-    if (Object.prototype.hasOwnProperty.call(inputSchema, "output_format")) input.output_format = REPLICATE_OUTPUT_FORMAT || "png";
-    if (Object.prototype.hasOwnProperty.call(inputSchema, "safety_filter_level")) input.safety_filter_level = REPLICATE_SAFETY || "block_only_high";
-
-    // “match” só se o modelo aceitar
-    if (matchKey) input[matchKey] = true;
-
-    const created = await fetchJson("https://api.replicate.com/v1/predictions", {
-      method: "POST",
+    const created = await replicateCreatePrediction({
+      model: REPLICATE_MODEL || "google/nano-banana-pro",
+      input,
       timeoutMs: 120000,
-      headers: {
-        Authorization: `Token ${REPLICATE_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version: createdVersion, input }),
     });
 
     const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
@@ -2711,10 +2628,7 @@ if (maskBuf) {
     const editBaseName = "edit_base.png";
     const editBasePath = path.join(bookDir, editBaseName);
     await sharp(photoPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).png().toFile(editBasePath);
-    // ✅ NOVO: cria referência só do rosto (evita herdar roupa da foto)
-const faceBaseName = "face_base.png";
-const faceBasePath = path.join(bookDir, faceBaseName);
-await makeFaceBase({ inputPngPath: editBasePath, outputPngPath: faceBasePath });
+
     const maskBaseName = "mask_base.png";
     const maskBasePath = path.join(bookDir, maskBaseName);
     await sharp(maskPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskBasePath);
@@ -2730,21 +2644,20 @@ await makeFaceBase({ inputPngPath: editBasePath, outputPngPath: faceBasePath });
     let editBaseKey = "";
     let maskKey = "";
     let maskBaseKey = "";
-    let faceBaseKey = "";
+
     if (sbEnabled()) {
       photoKey = sbKeyFor(userId, id, originalName);
       editBaseKey = sbKeyFor(userId, id, editBaseName);
       maskKey = sbKeyFor(userId, id, maskPngName);
       maskBaseKey = sbKeyFor(userId, id, maskBaseName);
-      faceBaseKey = sbKeyFor(userId, id, faceBaseName);
-      await sbUploadBuffer(faceBaseKey, await fsp.readFile(faceBasePath), "image/png");
+
       await sbUploadBuffer(photoKey, buf, mime);
       await sbUploadBuffer(editBaseKey, await fsp.readFile(editBasePath), "image/png");
       await sbUploadBuffer(maskKey, await fsp.readFile(maskPngPath), "image/png");
       await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
     }
 
-    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey, faceBase: faceBaseName,
+    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey,  faceBase: faceBaseName,
   faceBaseKey};
     m.mask = { ok: true, file: maskPngName, editBase: maskBaseName, storageKey: maskKey, editBaseKey: maskBaseKey };
 
@@ -2968,7 +2881,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     }
 
     // garante bases no disco
-   const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrThrow(userId, id, m);
+const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrThrow(userId, id, m);
 
     const styleKey = String(m.style || "read").trim();
     const childName = String(m.child?.name || "Criança").trim() || "Criança";
@@ -3033,12 +2946,13 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         styleKey,
       });
 
-     const coverBuf = await imageFromReference({
+    const coverBuf = await imageFromReference({
   imagePngPath: facePngPath,   // ✅ rosto apenas
   maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
   prompt: coverPrompt,
   size: "1024x1024",
 });
+
       const coverBaseName = "cover.png";
       const coverBasePath = path.join(bookDir, coverBaseName);
       await fsp.writeFile(coverBasePath, coverBuf);
@@ -3127,8 +3041,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         childGender,
         styleKey,
       });
-
-      const imgBuf = await imageFromReference({
+const imgBuf = await imageFromReference({
   imagePngPath: facePngPath,   // ✅ rosto apenas
   maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
   prompt,
