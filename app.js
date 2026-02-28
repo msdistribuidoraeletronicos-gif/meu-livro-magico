@@ -753,23 +753,20 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
 
     const input = {
-  prompt,
+      prompt,
+      image_input: [refDataUrl],
 
-  // 🔥 Envia SOMENTE a referência
-  image_input: [refDataUrl],
+      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+      resolution: REPLICATE_RESOLUTION || "2K",
+      output_format: REPLICATE_OUTPUT_FORMAT || "png",
+      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
 
-  // NÃO enviar máscara
-  // NÃO enviar aliases extras
+      // ✅ só o mais “universal”
+      match_input_image: true,
+    };
 
-  aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-  resolution: REPLICATE_RESOLUTION || "2K",
-  output_format: REPLICATE_OUTPUT_FORMAT || "png",
-  safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-
-  // 🔥 Força manter identidade
-  match_input_image: true,
-  strength: 0.45
-};
+    // ✅ Opcional: só ligue se você tiver certeza que o modelo aceita
+    // input.strength = 0.45;
 
     const created = await replicateCreatePrediction({
       model: REPLICATE_MODEL || "google/nano-banana-pro",
@@ -1229,14 +1226,12 @@ async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir 
   return pdfPath;
 }
 
-// ------------------------------
-// Manifest (disco) + Storage keys (Supabase opcional)
-// ------------------------------
-function bookDirOf(_userId, bookId) {
-  return path.join(BOOKS_DIR, String(bookId));
+function bookDirOf(userId, bookId) {
+  // ✅ separa por usuário (evita colisão e mistura de dados)
+  return path.join(BOOKS_DIR, String(userId), String(bookId));
 }
-function manifestPathOf(_userId, bookId) {
-  return path.join(bookDirOf("", bookId), "book.json");
+function manifestPathOf(userId, bookId) {
+  return path.join(bookDirOf(userId, bookId), "book.json");
 }
 
 async function loadManifest(userId, bookId) {
@@ -1256,7 +1251,31 @@ async function loadManifest(userId, bookId) {
   }
   return null;
 }
+async function loadManifestAsViewer(viewerUserId, bookId, viewerUser) {
+  // 1) caminho normal (próprio usuário)
+  let m = await loadManifest(viewerUserId, bookId);
+  if (m) return m;
 
+  // 2) se NÃO é admin, não tenta procurar em outros donos
+  if (!isAdminUser(viewerUser)) return null;
+
+  // 3) admin: varre BOOKS_DIR/<ownerId>/<bookId>/book.json até achar o id
+  try {
+    await ensureDir(BOOKS_DIR);
+    const ownerDirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
+
+    for (const ownerId of ownerDirs) {
+      const p = manifestPathOf(ownerId, bookId);
+      if (!existsSyncSafe(p)) continue;
+
+      const mm = await readJson(p).catch(() => null);
+      if (mm && String(mm.id) === String(bookId)) return mm;
+    }
+  } catch {}
+
+  // 4) fallback storage (opcional): se tiver bucket e ownerId desconhecido, aqui não tem como "listar" sem índice
+  return null;
+}
 async function saveManifest(userId, bookId, manifest) {
   const p = manifestPathOf(userId, bookId);
   await writeJson(p, manifest);
@@ -2545,20 +2564,20 @@ app.post("/api/uploadPhoto", async (req, res) => {
 
     const id = String(req.body?.id || "").trim();
     const photo = req.body?.photo;
-    const mask = req.body?.mask;
+ const mask = req.body?.mask;
 
-    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
-    if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
-    if (!mask || !isDataUrl(mask)) return res.status(400).json({ ok: false, error: "mask ausente ou inválida (dataURL)" });
+if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
 
+// ✅ mask pode ser opcional (se vier inválida, a gente cria uma transparente)
+const buf = dataUrlToBuffer(photo);
+let maskBuf = (mask && isDataUrl(mask)) ? dataUrlToBuffer(mask) : null;
+
+if (!buf || buf.length < 1000) return res.status(400).json({ ok: false, error: "photo inválida" });
+// se mask veio mas está muito curta, ignora
+if (maskBuf && maskBuf.length < 50) maskBuf = null;
     const m = await loadManifest(userId, id);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
-
-    const buf = dataUrlToBuffer(photo);
-    const maskBuf = dataUrlToBuffer(mask);
-    if (!buf || buf.length < 1000) return res.status(400).json({ ok: false, error: "photo inválida" });
-    if (!maskBuf || maskBuf.length < 50) return res.status(400).json({ ok: false, error: "mask inválida" });
-
     const mime = guessMimeFromDataUrl(photo);
     const ext = guessExtFromMime(mime);
 
@@ -2573,10 +2592,21 @@ app.post("/api/uploadPhoto", async (req, res) => {
     const photoPngPath = path.join(bookDir, photoPngName);
     await sharp(buf).png().toFile(photoPngPath);
 
-    const maskPngName = "mask.png";
-    const maskPngPath = path.join(bookDir, maskPngName);
-    await sharp(maskBuf).ensureAlpha().png().toFile(maskPngPath);
+  const maskPngName = "mask.png";
+const maskPngPath = path.join(bookDir, maskPngName);
 
+if (maskBuf) {
+  await sharp(maskBuf).ensureAlpha().png().toFile(maskPngPath);
+} else {
+  // ✅ cria máscara transparente do tamanho da foto PNG
+  const meta = await sharp(photoPngPath).metadata();
+  const ww = meta?.width || 1024;
+  const hh = meta?.height || 1024;
+  const transparent = await sharp({
+    create: { width: ww, height: hh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+  }).png().toBuffer();
+  await fsp.writeFile(maskPngPath, transparent);
+}
     const photoMeta = await sharp(photoPngPath).metadata();
     const w0 = photoMeta?.width || 0;
     const h0 = photoMeta?.height || 0;
@@ -2647,7 +2677,7 @@ app.get("/api/status/:id", requireAuth, async (req, res) => {
     if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
 
     const id = String(req.params?.id || "").trim();
-    const m = await loadManifest(userId, id);
+    const m = await loadManifestAsViewer(userId, id, req.user);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
 
     if (!canAccessBook(userId, m, req.user)) {
@@ -2686,7 +2716,7 @@ app.post("/api/generate", requireAuth, async (req, res) => {
   if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
 
   try {
-    const m = await loadManifest(userId, id);
+    const m = await loadManifestAsViewer(userId, id, req.user);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
 
     if (!canAccessBook(userId, m, req.user)) {
@@ -3137,7 +3167,7 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
       return res.status(400).send("bad request");
     }
 
-    const m = await loadManifest(userId, id);
+    const m = await loadManifestAsViewer(userId, id, req.user);
     if (!m) return res.status(404).send("not found");
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
 
@@ -3169,7 +3199,7 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     const id = String(req.params?.id || "").trim();
     if (!id) return res.status(400).send("id ausente");
 
-    const m = await loadManifest(userId, id);
+    const m = await loadManifestAsViewer(userId, id, req.user);
     if (!m) return res.status(404).send("book não existe");
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
     if (m.status !== "done") return res.status(409).send("PDF ainda não está pronto");
@@ -3195,19 +3225,35 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 // ------------------------------
 // Placeholder /books (simples)
 // ------------------------------
-app.get("/books", requireAuth, async (req, res) => {
-  const userId = String(req.user?.id || "");
-  const list = [];
   try {
     await ensureDir(BOOKS_DIR);
-    const dirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const p = path.join(BOOKS_DIR, d, "book.json");
-      if (!existsSyncSafe(p)) continue;
-      const m = await readJson(p).catch(() => null);
-      if (!m) continue;
-      if (!canAccessBook(userId, m, req.user)) continue;
-      list.push(m);
+
+    // BOOKS_DIR/<ownerId>/<bookId>/book.json
+    const ownerDirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
+
+    for (const ownerId of ownerDirs) {
+      const ownerPath = path.join(BOOKS_DIR, ownerId);
+      let bookDirs = [];
+      try {
+        const st = await fsp.stat(ownerPath);
+        if (!st.isDirectory()) continue;
+        bookDirs = await fsp.readdir(ownerPath).catch(() => []);
+      } catch {
+        continue;
+      }
+
+      for (const bookId of bookDirs) {
+        const p = path.join(ownerPath, bookId, "book.json");
+        if (!existsSyncSafe(p)) continue;
+
+        const m = await readJson(p).catch(() => null);
+        if (!m) continue;
+
+        // ✅ respeita permissão (admin vê tudo)
+        if (!canAccessBook(userId, m, req.user)) continue;
+
+        list.push(m);
+      }
     }
   } catch {}
 
@@ -3303,7 +3349,7 @@ app.get("/books", requireAuth, async (req, res) => {
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
       console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
-      console.log("✅ Referência: envia image_input + aliases (image/input_image). Máscara vazia é ignorada automaticamente.");
+     console.log("✅ Referência: envia image_input (máscara vazia é ignorada automaticamente).");
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
