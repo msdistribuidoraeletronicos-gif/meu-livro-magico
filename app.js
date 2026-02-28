@@ -2354,54 +2354,62 @@ app.get("/generate", requireAuth, async (req, res) => {
     }
   }
 
-  async function poll(){
-    if (!bookId){
-      setLog("Sem id. Volte ao /create e gere novamente.");
+ async function tick(){
+  if (!bookId){
+    setLog("Sem id. Volte ao /create e gere novamente.");
+    return;
+  }
+
+  try{
+    // 1) força um passo de geração
+    await fetch("/api/generateNext", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ id: bookId })
+    });
+
+    // 2) lê status e atualiza UI
+    const r = await fetch("/api/status/" + encodeURIComponent(bookId));
+    const j = await r.json().catch(()=> ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
+
+    setMeta("status=" + j.status + " • step=" + j.step);
+    setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
+    renderImages(j.coverUrl, j.images);
+
+    let p = 5;
+    if (String(j.step||"").startsWith("story")) p = 20;
+    if (String(j.step||"") === "cover") p = 35;
+    if (String(j.step||"").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1]||"0") * 6);
+    if (String(j.step||"") === "pdf") p = 92;
+    if (String(j.step||"") === "done" || j.status === "done") p = 100;
+    setBar(p);
+
+    if (j.status === "done" && j.pdf){
+      setSub("✅ Pronto!");
+      const pdfBtn = $("pdfBtn");
+      pdfBtn.style.display = "inline-flex";
+      pdfBtn.href = j.pdf;
+      setLog("Finalizado. Você já pode baixar o PDF.");
       return;
     }
 
-    try{
-      const r = await fetch("/api/status/" + encodeURIComponent(bookId));
-      const j = await r.json().catch(()=> ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
-
-      setMeta("status=" + j.status + " • step=" + j.step);
-      setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
-      renderImages(j.coverUrl, j.images);
-
-      // progresso simples: story/cover/images/pdf/done
-      let p = 5;
-      if (String(j.step||"").startsWith("story")) p = 20;
-      if (String(j.step||"") === "cover") p = 35;
-      if (String(j.step||"").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1]||"0") * 6);
-      if (String(j.step||"").includes("images_done")) p = 85;
-      if (String(j.step||"") === "pdf") p = 92;
-      if (String(j.step||"") === "done" || j.status === "done") p = 100;
-      setBar(p);
-
-      if (j.status === "done" && j.pdf){
-        setSub("✅ Pronto!");
-        const pdfBtn = $("pdfBtn");
-        pdfBtn.style.display = "inline-flex";
-        pdfBtn.href = j.pdf;
-        setLog("Finalizado. Você já pode baixar o PDF.");
-        return;
-      }
-
-      if (j.status === "failed"){
-        setSub("❌ Falhou");
-        setLog(j.error || "Falhou");
-        return;
-      }
-
-      setLog("Aguardando…");
-      setTimeout(poll, 1500);
-    }catch(e){
-      setSub("Erro");
-      setLog(String(e.message || e));
-      setTimeout(poll, 2500);
+    if (j.status === "failed"){
+      setSub("❌ Falhou");
+      setLog(j.error || "Falhou");
+      return;
     }
+
+    setLog("Gerando próximo passo…");
+    setTimeout(tick, 1400);
+  }catch(e){
+    setSub("Erro");
+    setLog(String(e.message || e));
+    setTimeout(tick, 2500);
   }
+}
+
+tick();
 
   poll();
 </script>
@@ -2596,13 +2604,232 @@ app.post("/api/generate", requireAuth, async (req, res) => {
 
     jobs.set(jobKey, { running: true });
 
-    runGeneration(userId, id).catch(() => {});
     return res.json({ ok: true, id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+app.post("/api/generateNext", requireAuth, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || "");
+    if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
 
+    const id = String(req.body?.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
+
+    let m = await loadManifest(userId, id);
+    if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    // trava por book (ainda é memória, mas agora cada passo é curto; reduz risco)
+    const jobKey = `${userId}:${id}`;
+    if (jobs.get(jobKey)?.running) {
+      return res.status(409).json({ ok: false, error: "step já em execução" });
+    }
+    jobs.set(jobKey, { running: true });
+
+    const bookDir = bookDirOf(userId, id);
+    await ensureDir(bookDir);
+
+    // garantir bases no disco (ou baixar do Storage)
+    const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
+    const maskPngPath  = path.join(bookDir, m.mask?.editBase  || "mask_base.png");
+    await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.editBaseKey || "");
+    await ensureFileFromStorageIfMissing(maskPngPath,  m.mask?.editBaseKey  || "");
+    if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
+    if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+
+    // se nunca iniciou, prepara
+    if (!m.status || m.status === "created") {
+      m.status = "generating";
+      m.step = "story";
+      m.error = "";
+      m.updatedAt = nowISO();
+      await saveManifest(userId, id, m);
+    }
+
+    const styleKey = String(m.style || "read").trim();
+
+    // PASSO 1: story
+    if (m.step === "story") {
+      const pages = await generateStoryTextPages({
+        childName: m.child?.name,
+        childAge: m.child?.age,
+        childGender: m.child?.gender,
+        themeKey: m.theme,
+        pagesCount: 8,
+      });
+      m.pages = pages;
+      m.step = "cover";
+      m.updatedAt = nowISO();
+      await saveManifest(userId, id, m);
+      return res.json({ ok: true, step: "story_done" });
+    }
+
+    // PASSO 2: cover
+    if (m.step === "cover") {
+      const coverPrompt = buildCoverPrompt({
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey,
+      });
+
+      const coverBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+      });
+
+      const coverBaseName = "cover.png";
+      const coverBase = path.join(bookDir, coverBaseName);
+      await fsp.writeFile(coverBase, coverBuf);
+
+      const coverFinalName = "cover_final.png";
+      const coverFinal = path.join(bookDir, coverFinalName);
+      await stampCoverTextOnImage({
+        inputPath: coverBase,
+        outputPath: coverFinal,
+        title: "Meu Livro Mágico",
+        subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
+      });
+
+      let coverKey = "";
+      if (sbEnabled()) {
+        coverKey = sbKeyFor(userId, id, coverFinalName);
+        await sbUploadBuffer(coverKey, await fsp.readFile(coverFinal), "image/png");
+      }
+
+      m.cover = {
+        ok: true,
+        file: coverFinalName,
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
+        storageKey: coverKey,
+      };
+
+      // vai para primeira página
+      m.step = "image_1";
+      m.updatedAt = nowISO();
+      await saveManifest(userId, id, m);
+
+      return res.json({ ok: true, step: "cover_done" });
+    }
+
+    // PASSO 3: páginas (image_1 ... image_8)
+    if (String(m.step || "").startsWith("image_")) {
+      const n = Number(String(m.step).split("_")[1] || "1");
+      const pages = Array.isArray(m.pages) ? m.pages : [];
+      if (!pages.length) {
+        m.step = "story";
+        m.updatedAt = nowISO();
+        await saveManifest(userId, id, m);
+        return res.json({ ok: true, step: "reset_to_story" });
+      }
+
+      const p = pages.find((x) => Number(x.page) === n);
+      if (!p) {
+        m.step = "pdf";
+        m.updatedAt = nowISO();
+        await saveManifest(userId, id, m);
+        return res.json({ ok: true, step: "images_done" });
+      }
+
+      const prompt = buildScenePromptFromParagraph({
+        paragraphText: p.text,
+        themeKey: m.theme,
+        childName: m.child?.name,
+        styleKey,
+      });
+
+      const imgBuf = await openaiImageEditFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+      });
+
+      const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
+      const basePath = path.join(bookDir, baseName);
+      await fsp.writeFile(basePath, imgBuf);
+
+      const finalName = `page_${String(p.page).padStart(2, "0")}_final.png`;
+      const finalPath = path.join(bookDir, finalName);
+      await stampStoryTextOnImage({
+        inputPath: basePath,
+        outputPath: finalPath,
+        title: p.title,
+        text: p.text,
+      });
+
+      let pageKey = "";
+      if (sbEnabled()) {
+        pageKey = sbKeyFor(userId, id, finalName);
+        await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+      }
+
+      const images = Array.isArray(m.images) ? m.images : [];
+      images.push({
+        page: p.page,
+        path: finalPath,
+        file: finalName,
+        prompt,
+        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+        storageKey: pageKey,
+      });
+
+      m.images = images;
+
+      // próximo passo
+      const nextN = n + 1;
+      m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
+      m.updatedAt = nowISO();
+      await saveManifest(userId, id, m);
+
+      return res.json({ ok: true, step: `image_${n}_done` });
+    }
+
+    // PASSO 4: pdf
+    if (m.step === "pdf") {
+      const coverPath = path.join(bookDir, "cover_final.png");
+      const pageImagePaths = (m.images || []).map((it) => it.path).filter(Boolean);
+
+      const pdfPath = await makePdfImagesOnly({
+        bookId: id,
+        coverPath,
+        pageImagePaths,
+        outputDir: bookDir,
+      });
+
+      let pdfKey = "";
+      if (sbEnabled()) {
+        const pdfName = `book-${id}.pdf`;
+        pdfKey = sbKeyFor(userId, id, pdfName);
+        await sbUploadBuffer(pdfKey, await fsp.readFile(pdfPath), "application/pdf");
+      }
+
+      m.status = "done";
+      m.step = "done";
+      m.error = "";
+      m.pdf = `/download/${encodeURIComponent(id)}`;
+      m.pdfKey = pdfKey;
+      m.updatedAt = nowISO();
+      await saveManifest(userId, id, m);
+
+      return res.json({ ok: true, step: "done" });
+    }
+
+    // fallback
+    return res.json({ ok: true, step: m.step || "unknown" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  } finally {
+    try {
+      const userId = String(req.user?.id || "");
+      const id = String(req.body?.id || "").trim();
+      if (userId && id) jobs.set(`${userId}:${id}`, { running: false });
+    } catch {}
+  }
+});
 // ------------------------------
 // Geração SEQUENCIAL (com blindagem do job)
 // ------------------------------
