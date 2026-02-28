@@ -753,22 +753,23 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
 
     const input = {
-      prompt,
+  prompt,
 
-      // referência (vários aliases)
-      image_input: [refDataUrl],
-      image: refDataUrl,
-      input_image: refDataUrl,
-      reference_image: refDataUrl,
+  // 🔥 Envia SOMENTE a referência
+  image_input: [refDataUrl],
 
-      // só envia máscara se NÃO for vazia
-      ...(maskDataUrl ? { mask: maskDataUrl, mask_image: maskDataUrl } : {}),
+  // NÃO enviar máscara
+  // NÃO enviar aliases extras
 
-      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-      resolution: REPLICATE_RESOLUTION || "2K",
-      output_format: REPLICATE_OUTPUT_FORMAT || "png",
-      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-    };
+  aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
+  resolution: REPLICATE_RESOLUTION || "2K",
+  output_format: REPLICATE_OUTPUT_FORMAT || "png",
+  safety_filter_level: REPLICATE_SAFETY || "block_only_high",
+
+  // 🔥 Força manter identidade
+  match_input_image: true,
+  strength: 0.45
+};
 
     const created = await replicateCreatePrediction({
       model: REPLICATE_MODEL || "google/nano-banana-pro",
