@@ -4,6 +4,7 @@
  * ✅ Geração SEQUENCIAL (1 passo por vez via /api/generateNext)
  * ✅ Texto carimbado dentro do PNG + PDF final
  * ✅ CORREÇÃO: Garante que Replicate use imagem de referência corretamente
+ * ✅ CORREÇÃO: Prompt inclui TODAS as informações (nome, idade, gênero, tema, estilo)
  *
  * CORREÇÕES APLICADAS:
  * 1) ✅ BUG CRÍTICO: /api/generateNext usava imagePngPath sem definir -> agora define corretamente.
@@ -15,6 +16,7 @@
  * 7) ✅ CORREÇÃO PROMPT: Instruções mais fortes para manter identidade da criança como protagonista
  * 8) ✅ REMOVIDO: Funções duplicadas que causavam sobrescrita incorreta
  * 9) ✅ CORREÇÃO: Consolidada função de geração de imagem para sempre enviar referência corretamente
+ * 10) ✅ CORREÇÃO: Prompt agora inclui NOME, IDADE, GÊNERO, TEMA e ESTILO completos
  */
 "use strict";
 
@@ -744,7 +746,6 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
 // ✅ Vercel-safe: NÃO espera terminar dentro do mesmo request.
 // Cria um job e retorna; nas próximas chamadas, só consulta 1 vez (poll once).
-// Na função replicateCreateImageJob, adicione logs:
 async function replicateCreateImageJob({ prompt, referenceUrl }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
 
@@ -784,6 +785,7 @@ async function replicateCreateImageJob({ prompt, referenceUrl }) {
     refType: isHttp ? "httpURL" : "dataURL",
     refLen: isHttp ? imgRef.slice(0, 60) + "..." : imgRef.length,
     inputKeys: Object.keys(input),
+    promptPreview: prompt.slice(0, 200) + "..."
   });
 
   const created = await replicateCreatePrediction({
@@ -986,8 +988,9 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
     "- title (string curta)",
     "- text (UM PARÁGRAFO, sem quebras de linha; até ~55 palavras se <=7 anos; até ~75 se >7)",
     "Regras:",
-    "- O nome da criança deve aparecer no texto e ser o protagonista.",
+    `- O protagonista é ${name}, uma criança de ${age} anos.`,
     "- Linguagem simples, divertida e mágica, com uma pequena lição.",
+    '- O nome da criança deve aparecer no texto de cada página.',
     'Responda SOMENTE JSON válido no formato: {"pages":[...]}',
   ].join("\n");
 
@@ -1038,86 +1041,145 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
   return norm;
 }
 
-// ✅ CORREÇÃO: Prompts melhorados para garantir que a criança seja o protagonista
-function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, styleKey }) {
+// ✅ CORREÇÃO: Prompts agora incluem TODAS as informações (nome, idade, gênero, tema, estilo)
+function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
+  const age = Number(childAge) || 6;
+  const gender = String(childGender || "neutral").trim();
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
+  // Determina descrição de gênero para o prompt
+  let genderDesc = "";
+  if (gender === "boy") genderDesc = "menino";
+  else if (gender === "girl") genderDesc = "menina";
+  else genderDesc = "criança";
+
   const base = [
-    "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
-    "Use the child from Image 1 as the protagonist in every scene.",
-    "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
-    "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
-    "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
-    "If the scene requires different pose/clothes, keep the face identical.",
-    "No additional characters that look similar to the protagonist (avoid duplicates).",
+    "=== INSTRUÇÕES OBRIGATÓRIAS ===",
     "",
-    "Scene description:",
+    "IDENTITY LOCK = MÁXIMO. A IMAGEM DE REFERÊNCIA É A ÚNICA FONTE VERDADEIRA DE IDENTIDADE.",
+    "",
+    `PERSONAGEM PRINCIPAL (OBRIGATÓRIO):`,
+    `- Nome: ${name}`,
+    `- Idade: ${age} anos`,
+    `- Gênero: ${genderDesc}`,
+    `- A criança da foto de referência DEVE ser o protagonista desta cena`,
+    `- Mesma estrutura facial, olhos, nariz, boca, bochechas, queixo da foto`,
+    `- Mesma cor de pele, cor de cabelo e estilo de cabelo da foto`,
+    `- NÃO mude a pessoa. NÃO crie uma criança diferente.`,
+    `- Se a cena exigir pose/roupa diferente, mantenha o ROSTO idêntico.`,
+    "",
+    `CENA/CONTEXTO:`,
     `"${txt}"`,
     "",
-    `Theme: ${th}.`,
-    "The child must be clearly visible (not tiny / not hidden / not from behind).",
-    "NO text, captions, logos, watermarks, or letters in the image.",
-    name ? `Context: child's name is ${name}.` : "",
+    `TEMA: ${th}.`,
+    "",
+    "REGRAS VISUAIS:",
+    "- A criança deve estar claramente visível (não pequena / não escondida / não de costas)",
+    "- SEM texto, legendas, logos, marcas d'água ou letras na imagem",
+    "- Nenhum personagem adicional que se pareça com o protagonista (evite duplicatas)",
+    "",
+    "=== FIM DAS INSTRUÇÕES ===",
   ].filter(Boolean);
 
   if (style === "color") {
     base.push(
       "",
-      "Style: Coloring book page.",
-      "Black and white art, clean outlines, thick lines.",
-      "NO colors, NO gradients, NO shadows.",
-      "White or light background, few background details for easy coloring."
+      "ESTILO: Página de livro para colorir.",
+      "Arte preto e branco, contornos limpos, linhas grossas.",
+      "SEM cores, SEM gradientes, SEM sombras.",
+      "Fundo branco ou claro, poucos detalhes de fundo para facilitar colorir."
     );
   } else {
     base.push(
       "",
-      "Style: Semi-realistic children's book illustration.",
-      "Cheerful, vibrant colors, soft light, magical atmosphere."
+      "ESTILO: Ilustração semi-realista de livro infantil.",
+      "Cores vibrantes e alegres, luz suave, atmosfera mágica."
     );
   }
 
-  return base.join("\n");
+  const finalPrompt = base.join("\n");
+  
+  console.log("📝 Prompt da página gerado:", {
+    name,
+    age,
+    gender: genderDesc,
+    theme: th,
+    style,
+    promptLength: finalPrompt.length,
+    preview: finalPrompt.slice(0, 300) + "..."
+  });
+  
+  return finalPrompt;
 }
 
-function buildCoverPrompt({ themeKey, childName, styleKey }) {
+// ✅ CORREÇÃO: Capa também inclui todas as informações
+function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
+  const age = Number(childAge) || 6;
+  const gender = String(childGender || "neutral").trim();
   const style = String(styleKey || "read").trim();
 
+  // Determina descrição de gênero para o prompt
+  let genderDesc = "";
+  if (gender === "boy") genderDesc = "menino";
+  else if (gender === "girl") genderDesc = "menina";
+  else genderDesc = "criança";
+
   const parts = [
-    "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
-    "Use the child from Image 1 as the main central character on the cover.",
-    "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
-    "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
-    "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
+    "=== INSTRUÇÕES OBRIGATÓRIAS PARA CAPA ===",
     "",
-    "Create a children's book cover.",
-    `Theme: ${th}.`,
-    "Scene: cheerful, magical, positive, with child prominently centered.",
-    "Expression: happy, excited, inviting adventure.",
-    "NO text, titles, or captions in the image.",
-    name ? `Context: child's name is ${name}.` : "",
+    "IDENTITY LOCK = MÁXIMO. A IMAGEM DE REFERÊNCIA É A ÚNICA FONTE VERDADEIRA DE IDENTIDADE.",
+    "",
+    `PERSONAGEM PRINCIPAL DA CAPA (OBRIGATÓRIO):`,
+    `- Nome: ${name}`,
+    `- Idade: ${age} anos`,
+    `- Gênero: ${genderDesc}`,
+    `- A criança da foto de referência DEVE ser o personagem central da capa`,
+    `- Mesma estrutura facial, olhos, nariz, boca, bochechas, queixo da foto`,
+    `- Mesma cor de pele, cor de cabelo e estilo de cabelo da foto`,
+    `- NÃO mude a pessoa. NÃO crie uma criança diferente.`,
+    "",
+    `CRIAR CAPA DE LIVRO INFANTIL:`,
+    `Tema: ${th}.`,
+    "Cena: alegre, mágica, positiva, com a criança em destaque no centro.",
+    "Expressão: feliz, animada, convidativa para aventura.",
+    "SEM texto, títulos ou legendas na imagem.",
+    "",
+    "=== FIM DAS INSTRUÇÕES ===",
   ].filter(Boolean);
 
   if (style === "color") {
     parts.push(
       "",
-      "Style: Coloring book cover.",
-      "Black and white art, strong clean outlines.",
-      "NO colors, NO gradients, NO shadows.",
-      "White or light background, designed for coloring."
+      "ESTILO: Capa de livro para colorir.",
+      "Arte preto e branco, contornos fortes e limpos.",
+      "SEM cores, SEM gradientes, SEM sombras.",
+      "Fundo branco ou claro, desenhado para colorir."
     );
   } else {
     parts.push(
       "",
-      "Style: Semi-realistic colorful illustration, vibrant and cheerful, soft light."
+      "ESTILO: Ilustração colorida semi-realista, vibrante e alegre, luz suave."
     );
   }
 
-  return parts.join("\n");
+  const finalPrompt = parts.join("\n");
+  
+  console.log("📝 Prompt da capa gerado:", {
+    name,
+    age,
+    gender: genderDesc,
+    theme: th,
+    style,
+    promptLength: finalPrompt.length,
+    preview: finalPrompt.slice(0, 300) + "..."
+  });
+  
+  return finalPrompt;
 }
 
 /* -------------------- Text stamping helpers -------------------- */
@@ -1549,22 +1611,7 @@ async function ensureFileFromStorageIfMissing(localPath, storageKey) {
     return false;
   }
 }
-// ✅ Seedream funciona melhor com URL http(s) (signed URL) do que dataURL base64.
-// Gera uma URL temporária para a imagem de referência já salva no Storage.
-async function getReferenceImageUrlForReplicate(manifest, userId, bookId) {
-  // tenta usar a storageKey já salva no manifest (ideal)
-  const key = manifest?.photo?.storageKey || `${manifest?.ownerId || userId}/${bookId}/edit_base.png`;
 
-  // signed URL (bucket privado) — se bucket for público, você pode usar sbPublicUrl também
-  const signed = await sbSignedUrl(key, 60 * 60); // 1 hora
-  if (signed) return signed;
-
-  // fallback: se por algum motivo não conseguiu signed url, tenta public url
-  const pub = sbPublicUrl(key);
-  if (pub) return pub;
-
-  throw new Error("Não consegui obter URL de referência (signed/public) do Storage para o Replicate.");
-}
 /* -------------------- Express app -------------------- */
 
 const app = express();
@@ -2486,9 +2533,12 @@ const coverFinalPath = path.join(bookDir, "cover_final.png");
 const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
 
 if (needCover) {
+  // ✅ CORREÇÃO: Agora passa TODAS as informações (nome, idade, gênero, tema, estilo)
   const coverPrompt = buildCoverPrompt({
     themeKey: m.theme,
     childName: m.child?.name,
+    childAge: m.child?.age,
+    childGender: m.child?.gender,
     styleKey: m.style,
   });
 
@@ -2582,10 +2632,13 @@ const pid = await replicateCreateImageJob({ prompt: coverPrompt, referenceUrl })
   const title = String(pageObj.title || `Página ${nextPage}`).trim();
   const text = String(pageObj.text || "").trim();
 
+  // ✅ CORREÇÃO: Agora passa TODAS as informações (nome, idade, gênero, tema, estilo)
   const prompt = buildScenePromptFromParagraph({
     paragraphText: text,
     themeKey: m.theme,
     childName: m.child?.name,
+    childAge: m.child?.age,
+    childGender: m.child?.gender,
     styleKey: m.style,
   });
 
@@ -2831,9 +2884,12 @@ async function runGeneration(userId, bookId) {
     await setStep("story_done", { pages });
 
     await setStep("cover");
+    // ✅ CORREÇÃO: Agora passa TODAS as informações
     const coverPrompt = buildCoverPrompt({
       themeKey: m.theme,
       childName: m.child?.name,
+      childAge: m.child?.age,
+      childGender: m.child?.gender,
       styleKey,
     });
 
@@ -2871,10 +2927,13 @@ async function runGeneration(userId, bookId) {
     for (const p of pages) {
       await setStep(`image_${p.page}`);
 
+      // ✅ CORREÇÃO: Agora passa TODAS as informações
       const prompt = buildScenePromptFromParagraph({
         paragraphText: p.text,
         themeKey: m.theme,
         childName: m.child?.name,
+        childAge: m.child?.age,
+        childGender: m.child?.gender,
         styleKey,
       });
 
@@ -3154,7 +3213,7 @@ app.get("/api/whoami", requireAuth, async (req, res) => {
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
      console.log("ℹ️  SIZE:", REPLICATE_SIZE, "| ASPECT:", REPLICATE_ASPECT_RATIO);
-console.log("ℹ️  SEQUENTIAL:", REPLICATE_SEQUENTIAL, "| MAX_IMAGES:", REPLICATE_MAX_IMAGES, "| ENHANCE_PROMPT:", REPLICATE_ENHANCE_PROMPT);      console.log("✅ CORREÇÃO: Imagem de referência sempre enviada como protagonista");
+console.log("ℹ️  SEQUENTIAL:", REPLICATE_SEQUENTIAL, "| MAX_IMAGES:", REPLICATE_MAX_IMAGES, "| ENHANCE_PROMPT:", REPLICATE_ENHANCE_PROMPT);      console.log("✅ CORREÇÃO: Prompt inclui NOME, IDADE, GÊNERO, TEMA e ESTILO completos");
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
