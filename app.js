@@ -171,7 +171,35 @@ let supabaseAdmin = null;
     console.log("ℹ️  Supabase Storage/Admin: desativado (SERVICE ROLE ausente).");
   }
 })();
+function clampInt(n, a, b) {
+  n = Math.round(Number(n) || 0);
+  return Math.max(a, Math.min(b, n));
+}
 
+// Faz um "crop de rosto" heurístico (sem face-detection):
+// pega a região superior/central onde normalmente fica o rosto
+async function makeFaceBase({ inputPngPath, outputPngPath }) {
+  const meta = await sharp(inputPngPath).metadata();
+  const W = meta?.width || 0;
+  const H = meta?.height || 0;
+  if (!W || !H) throw new Error("Falha ao ler metadata para face crop.");
+
+  // região típica de rosto: centro horizontal, topo do frame
+  const cropW = clampInt(W * 0.62, 256, W);
+  const cropH = clampInt(H * 0.62, 256, H);
+
+  const left = clampInt((W - cropW) / 2, 0, W - cropW);
+  const top  = clampInt(H * 0.06, 0, H - cropH); // um pouco abaixo do topo
+
+  // recorta e normaliza tamanho (mantém detalhe do rosto)
+  await sharp(inputPngPath)
+    .extract({ left, top, width: cropW, height: cropH })
+    .resize({ width: 512, height: 512, fit: "cover" })
+    .png()
+    .toFile(outputPngPath);
+
+  return { W, H, crop: { left, top, width: cropW, height: cropH } };
+}
 // ------------------------------
 // Helpers: FS
 // ------------------------------
@@ -880,6 +908,9 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, chi
      "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
     "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
      "Cena coerente e bonita para livro infantil.",
+     "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
+"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
+"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
   ].join(" ");
 
   const meta = [
@@ -932,6 +963,9 @@ function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey
     "Use a criança da imagem enviada como personagem principal.",
     "Mantenha TODAS as características originais do rosto (identidade consistente).",
     "A capa deve combinar com as páginas (mesma identidade).",
+    "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
+"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
+"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
   ].join(" ");
 
   const meta = [
@@ -954,6 +988,9 @@ function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey
       "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
       "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
       "Composição: alegre, mágica, positiva, criança em destaque central.",
+      "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
+"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
+"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
       rules,
     ].join(" ");
   }
@@ -2619,7 +2656,10 @@ if (maskBuf) {
     const editBaseName = "edit_base.png";
     const editBasePath = path.join(bookDir, editBaseName);
     await sharp(photoPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).png().toFile(editBasePath);
-
+    // ✅ NOVO: cria referência só do rosto (evita herdar roupa da foto)
+const faceBaseName = "face_base.png";
+const faceBasePath = path.join(bookDir, faceBaseName);
+await makeFaceBase({ inputPngPath: editBasePath, outputPngPath: faceBasePath });
     const maskBaseName = "mask_base.png";
     const maskBasePath = path.join(bookDir, maskBaseName);
     await sharp(maskPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskBasePath);
@@ -2635,20 +2675,22 @@ if (maskBuf) {
     let editBaseKey = "";
     let maskKey = "";
     let maskBaseKey = "";
-
+    let faceBaseKey = "";
     if (sbEnabled()) {
       photoKey = sbKeyFor(userId, id, originalName);
       editBaseKey = sbKeyFor(userId, id, editBaseName);
       maskKey = sbKeyFor(userId, id, maskPngName);
       maskBaseKey = sbKeyFor(userId, id, maskBaseName);
-
+      faceBaseKey = sbKeyFor(userId, id, faceBaseName);
+      await sbUploadBuffer(faceBaseKey, await fsp.readFile(faceBasePath), "image/png");
       await sbUploadBuffer(photoKey, buf, mime);
       await sbUploadBuffer(editBaseKey, await fsp.readFile(editBasePath), "image/png");
       await sbUploadBuffer(maskKey, await fsp.readFile(maskPngPath), "image/png");
       await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
     }
 
-    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey };
+    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey, faceBase: faceBaseName,
+  faceBaseKey};
     m.mask = { ok: true, file: maskPngName, editBase: maskBaseName, storageKey: maskKey, editBaseKey: maskBaseKey };
 
     // reset geração se já estava bagunçada
@@ -2763,15 +2805,24 @@ async function ensureBasesOrThrow(userId, id, m) {
   await ensureDir(bookDir);
 
   const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
-  const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+  const maskPngPath  = path.join(bookDir, m.mask?.editBase  || "mask_base.png");
+
+  // ✅ NOVO:
+  const facePngPath  = path.join(bookDir, m.photo?.faceBase || "face_base.png");
 
   await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.editBaseKey || "");
-  await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.editBaseKey || "");
+  await ensureFileFromStorageIfMissing(maskPngPath,  m.mask?.editBaseKey || "");
+
+  // ✅ NOVO:
+  await ensureFileFromStorageIfMissing(facePngPath, m.photo?.faceBaseKey || "");
 
   if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
-  if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
+  if (!existsSyncSafe(maskPngPath))  throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
-  return { bookDir, imagePngPath, maskPngPath };
+  // ✅ NOVO:
+  if (!existsSyncSafe(facePngPath))  throw new Error("face_base.png não encontrada. Reenvie a foto.");
+
+  return { bookDir, imagePngPath, maskPngPath, facePngPath };
 }
 
 function ensureRetryFields(m) {
@@ -2862,7 +2913,7 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     }
 
     // garante bases no disco
-    const { bookDir, imagePngPath, maskPngPath } = await ensureBasesOrThrow(userId, id, m);
+   const { bookDir, imagePngPath, maskPngPath, facePngPath } = await ensureBasesOrThrow(userId, id, m);
 
     const styleKey = String(m.style || "read").trim();
     const childName = String(m.child?.name || "Criança").trim() || "Criança";
@@ -2927,13 +2978,12 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
         styleKey,
       });
 
-      const coverBuf = await imageFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt: coverPrompt,
-        size: "1024x1024",
-      });
-
+     const coverBuf = await imageFromReference({
+  imagePngPath: facePngPath,   // ✅ rosto apenas
+  maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
+  prompt: coverPrompt,
+  size: "1024x1024",
+});
       const coverBaseName = "cover.png";
       const coverBasePath = path.join(bookDir, coverBaseName);
       await fsp.writeFile(coverBasePath, coverBuf);
@@ -3024,11 +3074,11 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
       });
 
       const imgBuf = await imageFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt,
-        size: "1024x1024",
-      });
+  imagePngPath: facePngPath,   // ✅ rosto apenas
+  maskPngPath: null,           // ✅ não use máscara aqui (deixa trocar roupa)
+  prompt,
+  size: "1024x1024",
+});
 
       const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
       const basePath = path.join(bookDir, baseName);
