@@ -649,8 +649,6 @@ async function replicateGetLatestVersionId(model) {
     }
     throw e;
   }
-
-  const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
   const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
   if (!versionId) {
     throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente no .env.local.`);
