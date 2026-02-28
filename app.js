@@ -631,12 +631,26 @@ async function replicateGetLatestVersionId(model) {
     throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name" (ex: google/nano-banana-pro) ou configure REPLICATE_VERSION.`);
   }
 
-  const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
-    method: "GET",
-    timeoutMs: 60000,
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-  });
+    let info = null;
+  try {
+    info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
+      method: "GET",
+      timeoutMs: 60000,
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+    });
+  } catch (e) {
+    const msg = String(e?.message || e || "");
+    // Quando o model não existe ou você não tem acesso, Replicate retorna 404 "Model not found"
+    if (msg.includes("HTTP 404") && msg.toLowerCase().includes("model not found")) {
+      throw new Error(
+        `REPLICATE_MODEL inválido/sem acesso: "${key}". ` +
+        `Ajuste REPLICATE_MODEL (owner/name) nas ENV da Vercel ou defina REPLICATE_VERSION fixa.`
+      );
+    }
+    throw e;
+  }
 
+  const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
   const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
   if (!versionId) {
     throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente no .env.local.`);
@@ -803,50 +817,53 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
 
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
+    const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "google/nano-banana-pro");
+    const inputSchema = await replicateGetVersionSchema(createdVersion);
 
-   const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "google/nano-banana-pro");
-const inputSchema = await replicateGetVersionSchema(createdVersion);
+    // chaves mais comuns que os modelos usam
+    const imageKey = pickFirstKey(inputSchema, ["image_input", "input_image", "image", "reference_image"]);
+    const promptKey = pickFirstKey(inputSchema, ["prompt", "text", "caption"]);
+    const maskKey   = pickFirstKey(inputSchema, ["mask", "mask_image", "input_mask"]);
+    const matchKey  = pickFirstKey(inputSchema, ["match_input_image", "preserve_identity", "identity_strength"]);
 
-// chaves mais comuns que os modelos usam
-const imageKey = pickFirstKey(inputSchema, ["image_input", "input_image", "image", "reference_image"]);
-const promptKey = pickFirstKey(inputSchema, ["prompt", "text", "caption"]);
-const matchKey  = pickFirstKey(inputSchema, ["match_input_image", "preserve_identity", "identity_strength"]);
+    const input = {};
 
-const input = {};
+    // prompt
+    input[promptKey || "prompt"] = prompt;
 
-// prompt
-input[promptKey || "prompt"] = prompt;
+    // ✅ referência (usa o imagePngPath que você passou pra função)
+    // se o schema pede array, manda [ref]; se não, manda ref direto
+    if (imageKey) {
+      const expectsArray = schemaExpectsArray(inputSchema, imageKey);
+      input[imageKey] = expectsArray ? [refDataUrl] : refDataUrl;
+    } else {
+      // fallback mais comum
+      input.image_input = [refDataUrl];
+    }
 
-// imagem (dataURL)
-if (imageKey) {
-const ref1 = bufferToDataUrlPng(await fsp.readFile(facePngPath));
-const ref2 = bufferToDataUrlPng(await fsp.readFile(imagePngPath)); // edit_base
-const expectsArray = schemaExpectsArray(inputSchema, imageKey);
+    // ✅ máscara só se existir no schema E só se realmente tiver maskDataUrl
+    if (maskDataUrl && maskKey) {
+      input[maskKey] = maskDataUrl;
+    }
 
-input[imageKey] = expectsArray ? [ref1, ref2] : ref2; // se não aceitar array, manda edit_base
-} else {
-  // fallback: tenta o mais comum
-  input.image_input = [refDataUrl];
-}
+    // parâmetros opcionais só se existirem no schema
+    if (Object.prototype.hasOwnProperty.call(inputSchema, "aspect_ratio")) input.aspect_ratio = REPLICATE_ASPECT_RATIO || "1:1";
+    if (Object.prototype.hasOwnProperty.call(inputSchema, "resolution")) input.resolution = REPLICATE_RESOLUTION || "2K";
+    if (Object.prototype.hasOwnProperty.call(inputSchema, "output_format")) input.output_format = REPLICATE_OUTPUT_FORMAT || "png";
+    if (Object.prototype.hasOwnProperty.call(inputSchema, "safety_filter_level")) input.safety_filter_level = REPLICATE_SAFETY || "block_only_high";
 
-// parâmetros opcionais só se existirem no schema (evita enviar coisa que o modelo ignora/estranha)
-if (Object.prototype.hasOwnProperty.call(inputSchema, "aspect_ratio")) input.aspect_ratio = REPLICATE_ASPECT_RATIO || "1:1";
-if (Object.prototype.hasOwnProperty.call(inputSchema, "resolution")) input.resolution = REPLICATE_RESOLUTION || "2K";
-if (Object.prototype.hasOwnProperty.call(inputSchema, "output_format")) input.output_format = REPLICATE_OUTPUT_FORMAT || "png";
-if (Object.prototype.hasOwnProperty.call(inputSchema, "safety_filter_level")) input.safety_filter_level = REPLICATE_SAFETY || "block_only_high";
+    // “match” só se o modelo aceitar
+    if (matchKey) input[matchKey] = true;
 
-// “match” só se o modelo aceitar
-if (matchKey) input[matchKey] = true;
-
-const created = await fetchJson("https://api.replicate.com/v1/predictions", {
-  method: "POST",
-  timeoutMs: 120000,
-  headers: {
-    Authorization: `Token ${REPLICATE_API_TOKEN}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ version: createdVersion, input }),
-});
+    const created = await fetchJson("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      timeoutMs: 120000,
+      headers: {
+        Authorization: `Token ${REPLICATE_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: createdVersion, input }),
+    });
 
     const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
 
