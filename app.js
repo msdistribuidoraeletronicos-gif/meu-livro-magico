@@ -1057,7 +1057,7 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const rx = Math.round(Math.min(W, H) * 0.03);
 
   const bandX = pad;
-  const bandY = pad; // ✅ card branco no TOPO, igual a capa
+  const bandY = pad; // card no topo
   const bandW = W - pad * 2;
 
   const innerPadX = Math.round(bandW * 0.045);
@@ -1067,10 +1067,10 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const bodyTxt = String(text || "").trim().replace(/\s+/g, " ");
 
   let titleSize = Math.max(34, Math.min(76, Math.round(H * 0.064)));
-  let textSize = Math.max(30, Math.min(60, Math.round(H * 0.052)));
+  let textSize  = Math.max(30, Math.min(60, Math.round(H * 0.052)));
 
   const TITLE_MIN = 28;
-  const TEXT_MIN = 20;
+  const TEXT_MIN  = 20;
 
   const topPadY = Math.round(bandH * 0.18);
   const botPadY = Math.round(bandH * 0.16);
@@ -1085,32 +1085,25 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
 
   function buildLines(ts, bs) {
     const titleChars = Math.max(18, Math.floor(estimateCharsPerLine(ts) * 0.82));
-    const bodyChars = estimateCharsPerLine(bs);
+    const bodyChars  = estimateCharsPerLine(bs);
 
     const titleLines = titleTxt ? wrapLines(titleTxt, titleChars) : [];
-    const bodyLines = bodyTxt ? wrapLines(bodyTxt, bodyChars) : [];
+    const bodyLines  = bodyTxt ? wrapLines(bodyTxt, bodyChars) : [];
 
     const lineGapTitle = Math.round(ts * 1.15);
-    const lineGapBody = Math.round(bs * 1.28);
+    const lineGapBody  = Math.round(bs * 1.28);
 
     const titleH = titleLines.length ? titleLines.length * lineGapTitle : 0;
     const spacer = titleLines.length ? Math.round(bs * 0.55) : 0;
-    const bodyH = bodyLines.length ? bodyLines.length * lineGapBody : 0;
+    const bodyH  = bodyLines.length ? bodyLines.length * lineGapBody : 0;
 
-    return {
-      titleLines,
-      bodyLines,
-      lineGapTitle,
-      lineGapBody,
-      usedH: titleH + spacer + bodyH,
-      spacer,
-    };
+    return { titleLines, bodyLines, lineGapTitle, lineGapBody, usedH: titleH + spacer + bodyH, spacer };
   }
 
   let pack = buildLines(titleSize, textSize);
   let guard = 0;
 
-  while (pack.usedH > usableH && guard < 60) {
+  while (pack.usedH > usableH && guard < 80) {
     guard++;
     if (textSize > TEXT_MIN) textSize -= 1;
     else if (titleSize > TITLE_MIN) titleSize -= 1;
@@ -1118,24 +1111,40 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     pack = buildLines(titleSize, textSize);
   }
 
-  let tY = bandY + topPadY;
+  // y inicial dentro do card (topo)
+  let y = bandY + topPadY;
 
+  // ✅ desenha linhas com Y absoluto (sem dy)
   const titleSvg = pack.titleLines.length
-    ? `<text x="${textX}" y="${tY}" font-family="Helvetica, Arial, sans-serif" font-size="${titleSize}" font-weight="900" fill="#0f172a">
+    ? `
+      <g>
         ${pack.titleLines
-          .map((ln, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : pack.lineGapTitle}">${escapeXml(ln)}</tspan>`)
-          .join("")}
-      </text>`
+          .map((ln, i) => {
+            const yy = y + i * pack.lineGapTitle;
+            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${titleSize}"
+                          font-weight="900" fill="#0f172a">${escapeXml(ln)}</text>`;
+          })
+          .join("\n")}
+      </g>
+    `
     : "";
 
-  tY += pack.titleLines.length ? pack.titleLines.length * pack.lineGapTitle + pack.spacer : 0;
+  if (pack.titleLines.length) {
+    y += pack.titleLines.length * pack.lineGapTitle + pack.spacer;
+  }
 
-  const textSvg = pack.bodyLines.length
-    ? `<text x="${textX}" y="${tY}" font-family="Helvetica, Arial, sans-serif" font-size="${textSize}" font-weight="800" fill="#0f172a">
+  const bodySvg = pack.bodyLines.length
+    ? `
+      <g>
         ${pack.bodyLines
-          .map((ln, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : pack.lineGapBody}">${escapeXml(ln)}</tspan>`)
-          .join("")}
-      </text>`
+          .map((ln, i) => {
+            const yy = y + i * pack.lineGapBody;
+            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${textSize}"
+                          font-weight="800" fill="#0f172a">${escapeXml(ln)}</text>`;
+          })
+          .join("\n")}
+      </g>
+    `
     : "";
 
   const svg = `
@@ -1152,11 +1161,17 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
           filter="url(#shadow)"/>
 
     ${titleSvg}
-    ${textSvg}
+    ${bodySvg}
   </svg>`;
 
   await sharp(inputPath)
-    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .composite([
+      {
+        input: Buffer.from(svg),
+        top: 0,
+        left: 0,
+      },
+    ])
     .png()
     .toFile(outputPath);
 
@@ -1175,36 +1190,54 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   const rx = Math.round(Math.min(W, H) * 0.035);
 
   const titleSize = Math.max(34, Math.min(78, Math.round(H * 0.07)));
-  const subSize = Math.max(22, Math.min(48, Math.round(H * 0.043)));
+  const subSize   = Math.max(22, Math.min(48, Math.round(H * 0.043)));
 
   const maxChars = Math.max(18, Math.min(46, Math.round(W / 26)));
-  const titleLines = wrapLines(title, Math.max(18, Math.min(34, Math.round(maxChars * 0.85)))).slice(0, 2);
-  const subLines = wrapLines(subtitle, maxChars).slice(0, 2);
+  const titleLines = wrapLines(String(title || ""), Math.max(18, Math.min(34, Math.round(maxChars * 0.85)))).slice(0, 2);
+  const subLines   = wrapLines(String(subtitle || ""), maxChars).slice(0, 2);
 
   const bandX = pad;
   const bandY = pad;
   const bandW = W - pad * 2;
 
   const textX = bandX + Math.round(bandW * 0.06);
-  let tY = bandY + Math.round(bandH * 0.48);
+
+  const topPadY = Math.round(bandH * 0.22);
+  let y = bandY + topPadY;
 
   const lineGapTitle = Math.round(titleSize * 1.15);
-  const lineGapSub = Math.round(subSize * 1.25);
+  const lineGapSub   = Math.round(subSize * 1.25);
 
-  const titleSvg = `<text x="${textX}" y="${tY}" font-family="Helvetica, Arial, sans-serif" font-size="${titleSize}" font-weight="950" fill="#0f172a">
-      ${titleLines
-        .map((ln, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineGapTitle}">${escapeXml(ln)}</tspan>`)
-        .join("")}
-    </text>`;
+  const titleSvg = titleLines.length
+    ? `
+      <g>
+        ${titleLines
+          .map((ln, i) => {
+            const yy = y + i * lineGapTitle;
+            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${titleSize}"
+                          font-weight="900" fill="#0f172a">${escapeXml(ln)}</text>`;
+          })
+          .join("\n")}
+      </g>
+    `
+    : "";
 
-  tY += titleLines.length ? lineGapTitle * titleLines.length + Math.round(subSize * 0.35) : 0;
+  if (titleLines.length) {
+    y += titleLines.length * lineGapTitle + Math.round(subSize * 0.35);
+  }
 
   const subSvg = subLines.length
-    ? `<text x="${textX}" y="${tY}" font-family="Helvetica, Arial, sans-serif" font-size="${subSize}" font-weight="800" fill="#0f172a">
+    ? `
+      <g>
         ${subLines
-          .map((ln, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineGapSub}">${escapeXml(ln)}</tspan>`)
-          .join("")}
-      </text>`
+          .map((ln, i) => {
+            const yy = y + i * lineGapSub;
+            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${subSize}"
+                          font-weight="800" fill="#0f172a">${escapeXml(ln)}</text>`;
+          })
+          .join("\n")}
+      </g>
+    `
     : "";
 
   const svg = `
@@ -1225,7 +1258,13 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   </svg>`;
 
   await sharp(inputPath)
-    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .composite([
+      {
+        input: Buffer.from(svg),
+        top: 0,
+        left: 0,
+      },
+    ])
     .png()
     .toFile(outputPath);
 
