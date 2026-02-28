@@ -645,7 +645,31 @@ async function replicateGetLatestVersionId(model) {
   replicateVersionCache.set(key, String(versionId));
   return String(versionId);
 }
+const replicateSchemaCache = new Map(); // key: versionId -> schema.inputs
 
+async function replicateGetVersionSchema(versionId) {
+  if (replicateSchemaCache.has(versionId)) return replicateSchemaCache.get(versionId);
+
+  const v = await fetchJson(`https://api.replicate.com/v1/models/versions/${versionId}`, {
+    method: "GET",
+    timeoutMs: 60000,
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+  });
+
+  const inputs = v?.openapi_schema?.components?.schemas?.Input?.properties || {};
+  replicateSchemaCache.set(versionId, inputs);
+  return inputs;
+}
+
+function pickFirstKey(obj, keys) {
+  for (const k of keys) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return k;
+  return "";
+}
+
+function schemaExpectsArray(inputSchema, key) {
+  const sch = inputSchema?.[key];
+  return sch?.type === "array";
+}
 async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
   const version = await replicateGetLatestVersionId(model);
@@ -780,27 +804,49 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
 
-    const input = {
-      prompt,
-      image_input: [refDataUrl],
+   const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "google/nano-banana-pro");
+const inputSchema = await replicateGetVersionSchema(createdVersion);
 
-      aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
-      resolution: REPLICATE_RESOLUTION || "2K",
-      output_format: REPLICATE_OUTPUT_FORMAT || "png",
-      safety_filter_level: REPLICATE_SAFETY || "block_only_high",
+// chaves mais comuns que os modelos usam
+const imageKey = pickFirstKey(inputSchema, ["image_input", "input_image", "image", "reference_image"]);
+const promptKey = pickFirstKey(inputSchema, ["prompt", "text", "caption"]);
+const matchKey  = pickFirstKey(inputSchema, ["match_input_image", "preserve_identity", "identity_strength"]);
 
-      // ✅ só o mais “universal”
-      match_input_image: true,
-    };
+const input = {};
 
-    // ✅ Opcional: só ligue se você tiver certeza que o modelo aceita
-    // input.strength = 0.45;
+// prompt
+input[promptKey || "prompt"] = prompt;
 
-    const created = await replicateCreatePrediction({
-      model: REPLICATE_MODEL || "google/nano-banana-pro",
-      input,
-      timeoutMs: 120000,
-    });
+// imagem (dataURL)
+if (imageKey) {
+const ref1 = bufferToDataUrlPng(await fsp.readFile(facePngPath));
+const ref2 = bufferToDataUrlPng(await fsp.readFile(imagePngPath)); // edit_base
+const expectsArray = schemaExpectsArray(inputSchema, imageKey);
+
+input[imageKey] = expectsArray ? [ref1, ref2] : ref2; // se não aceitar array, manda edit_base
+} else {
+  // fallback: tenta o mais comum
+  input.image_input = [refDataUrl];
+}
+
+// parâmetros opcionais só se existirem no schema (evita enviar coisa que o modelo ignora/estranha)
+if (Object.prototype.hasOwnProperty.call(inputSchema, "aspect_ratio")) input.aspect_ratio = REPLICATE_ASPECT_RATIO || "1:1";
+if (Object.prototype.hasOwnProperty.call(inputSchema, "resolution")) input.resolution = REPLICATE_RESOLUTION || "2K";
+if (Object.prototype.hasOwnProperty.call(inputSchema, "output_format")) input.output_format = REPLICATE_OUTPUT_FORMAT || "png";
+if (Object.prototype.hasOwnProperty.call(inputSchema, "safety_filter_level")) input.safety_filter_level = REPLICATE_SAFETY || "block_only_high";
+
+// “match” só se o modelo aceitar
+if (matchKey) input[matchKey] = true;
+
+const created = await fetchJson("https://api.replicate.com/v1/predictions", {
+  method: "POST",
+  timeoutMs: 120000,
+  headers: {
+    Authorization: `Token ${REPLICATE_API_TOKEN}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ version: createdVersion, input }),
+});
 
     const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
 
