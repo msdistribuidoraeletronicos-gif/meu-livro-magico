@@ -141,7 +141,55 @@ let supabase = null;
     supabase = null;
   }
 })();
+function mustEnv(name, v) {
+  if (!v || !String(v).trim()) throw new Error(`${name} ausente/vazio`);
+  return String(v).trim();
+}
 
+function looksLikeSupabaseUrl(u) {
+  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(String(u || "").trim());
+}
+
+async function supabaseSanityCheck() {
+  if (!sbEnabled()) return { ok: false, reason: "supabase_disabled" };
+
+  // validações
+  const url = mustEnv("SUPABASE_URL", SUPABASE_URL);
+  const key = mustEnv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE_ROLE_KEY);
+  const bucket = mustEnv("SUPABASE_STORAGE_BUCKET", SUPABASE_STORAGE_BUCKET);
+
+  if (!looksLikeSupabaseUrl(url)) {
+    throw new Error(`SUPABASE_URL inválida: "${url}" (deve ser https://xxxx.supabase.co)`);
+  }
+  if (key.length < 40) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY parece curta/diferente do esperado. Confira se é SERVICE ROLE mesmo.");
+  }
+
+  // teste: upload + download
+  const testKey = `__healthcheck__/ping-${Date.now()}.txt`;
+  const payload = Buffer.from("supabase-ok", "utf-8");
+
+  const up = await sbUploadBuffer(testKey, payload, "text/plain");
+  if (!up.ok) throw new Error(`Supabase upload falhou: ${up.reason || "unknown"}`);
+
+  const dl = await sbDownloadToBuffer(testKey);
+  if (!dl.ok || !dl.buf) throw new Error(`Supabase download falhou: ${dl.reason || "unknown"}`);
+
+  const got = dl.buf.toString("utf-8");
+  if (got !== "supabase-ok") throw new Error("Supabase download retornou conteúdo inesperado.");
+
+  return { ok: true, bucket, testKey };
+}
+
+// endpoint pra testar no Vercel (sem precisar gerar livro)
+app.get("/api/supabase-check", requireAuth, async (req, res) => {
+  try {
+    const r = await supabaseSanityCheck();
+    return res.json({ ok: true, ...r });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 // ------------------------------
 // Helpers: FS
 // ------------------------------
@@ -2988,7 +3036,13 @@ app.get("/books", requireAuth, async (req, res) => {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
     }
-
+// Teste opcional no boot (se preferir, deixe só o endpoint /api/supabase-check)
+supabaseSanityCheck()
+  .then((r) => {
+    if (r.ok) console.log("✅ Supabase sanity check OK:", r.bucket);
+    else console.log("ℹ️  Supabase sanity check skip:", r.reason);
+  })
+  .catch((e) => console.log("❌ Supabase sanity check FAIL:", String(e?.message || e)));
     if (sbEnabled()) {
       console.log("✅ Supabase Storage ativo:", SUPABASE_URL);
       console.log("ℹ️  Bucket:", SUPABASE_STORAGE_BUCKET);
