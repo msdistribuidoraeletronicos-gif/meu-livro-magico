@@ -621,12 +621,17 @@ function splitReplicateModel(model) {
 
 async function replicateGetLatestVersionId(model) {
   // 🔒 Se versão fixa estiver definida, usa ela
-  if (REPLICATE_VERSION) {
-    return REPLICATE_VERSION;
+  if (REPLICATE_VERSION) return REPLICATE_VERSION;
+
+  const parsed = splitReplicateModel(model);
+  if (!parsed) {
+    throw new Error(`REPLICATE_MODEL inválido: "${model}". Use "owner/name" (ex: "bytedance/seedream-4")`);
   }
 
-  const parsed = parseReplicateModel(model);
   const key = `${parsed.owner}/${parsed.name}`;
+
+  // cache
+  if (replicateVersionCache.has(key)) return replicateVersionCache.get(key);
 
   const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
     method: "GET",
@@ -643,6 +648,7 @@ async function replicateGetLatestVersionId(model) {
     throw new Error(`Não consegui obter latest_version do modelo "${key}".`);
   }
 
+  replicateVersionCache.set(key, versionId);
   return versionId;
 }
 const replicateSchemaCache = new Map(); // key: versionId -> schema.inputs
