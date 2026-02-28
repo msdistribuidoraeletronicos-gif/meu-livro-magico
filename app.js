@@ -125,23 +125,50 @@ const EXEMPLOS_HTML = path.join(__dirname, "exemplos.html");
 // ------------------------------
 // Supabase client (opcional)
 // ------------------------------
-let supabase = null;
+// ------------------------------
+// Supabase clients
+// - supabaseAuth: Auth (ANON KEY)  ✅ login/signup real
+// - supabaseAdmin: Storage/admin (SERVICE ROLE) ✅ upload/download
+// ------------------------------
+const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "").trim();
+
+let supabaseAuth = null;
+let supabaseAdmin = null;
+
 (function initSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.log("ℹ️  Supabase Storage: desativado (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes).");
+  let createClient;
+  try {
+    ({ createClient } = require("@supabase/supabase-js"));
+  } catch (e) {
+    console.warn("⚠️  Instale: npm i @supabase/supabase-js");
     return;
   }
-  try {
-    const { createClient } = require("@supabase/supabase-js");
-    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+
+  if (!SUPABASE_URL) {
+    console.log("ℹ️  Supabase: desativado (SUPABASE_URL ausente).");
+    return;
+  }
+
+  // Auth (ANON)
+  if (SUPABASE_ANON_KEY) {
+    supabaseAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
-      global: { headers: { "X-Client-Info": "mlm-monocode" } },
+      global: { headers: { "X-Client-Info": "mlm-auth" } },
     });
-    console.log("✅ Supabase Storage: ativo (bucket =", SUPABASE_STORAGE_BUCKET + ")");
-  } catch (e) {
-    console.warn("⚠️  Supabase Storage: NÃO inicializou. Instale: npm i @supabase/supabase-js");
-    console.warn("   Motivo:", String(e?.message || e));
-    supabase = null;
+    console.log("✅ Supabase Auth: ativo (ANON)");
+  } else {
+    console.log("⚠️  Supabase Auth: SUPABASE_ANON_KEY ausente.");
+  }
+
+  // Admin/Storage (SERVICE ROLE)
+  if (SUPABASE_SERVICE_ROLE_KEY) {
+    supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { "X-Client-Info": "mlm-admin" } },
+    });
+    console.log("✅ Supabase Storage/Admin: ativo (SERVICE ROLE) bucket =", SUPABASE_STORAGE_BUCKET);
+  } else {
+    console.log("ℹ️  Supabase Storage/Admin: desativado (SERVICE ROLE ausente).");
   }
 })();
 
@@ -267,9 +294,7 @@ function escapeHtml(s) {
 // ------------------------------
 // Supabase Storage Helpers (opcional)
 // ------------------------------
-function sbEnabled() {
-  return !!supabase;
-}
+function sbEnabled() { return !!supabaseAdmin; }
 
 function sbKeyFor(userId, bookId, fileName) {
   return `users/${String(userId)}/books/${String(bookId)}/${String(fileName)}`;
@@ -281,7 +306,7 @@ function sbKeyForOwner(manifest, bookId, fileName) {
 }
 async function sbUploadBuffer(key, buf, contentType = "application/octet-stream") {
   if (!sbEnabled()) return { ok: false, key, reason: "supabase_disabled" };
-  const { error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).upload(key, buf, {
+  const { error } = await supabaseAdmin.storage.from(SUPABASE_STORAGE_BUCKET).upload(key, buf, {
     upsert: true,
     contentType,
     cacheControl: "3600",
@@ -292,7 +317,7 @@ async function sbUploadBuffer(key, buf, contentType = "application/octet-stream"
 
 async function sbDownloadToBuffer(key) {
   if (!sbEnabled()) return { ok: false, reason: "supabase_disabled", buf: null };
-  const { data, error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(key);
+const { data, error } = await supabaseAdmin.storage.from(SUPABASE_STORAGE_BUCKET).download(key);
   if (error || !data) return { ok: false, reason: String(error?.message || error || "download_failed"), buf: null };
   const ab = await data.arrayBuffer();
   return { ok: true, buf: Buffer.from(ab) };
@@ -408,24 +433,47 @@ function clearCookie(res, name) {
 }
 
 async function getCurrentUser(req) {
-  try {
-    const cookies = parseCookies(req);
-    const token = cookies[SESSION_COOKIE] || "";
-    if (!token) return null;
+  if (!supabaseAuth) return null;
 
-    const sess = sessions.get(token);
-    if (!sess?.userId) return null;
+  const cookies = parseCookies(req);
+  const access = String(cookies[AUTH_COOKIE] || "");
+  const refresh = String(cookies[REFRESH_COOKIE] || "");
 
-    const users = await loadUsers();
-    const u = users.find((x) => x.id === sess.userId);
-    if (!u) return null;
-
-    return { id: u.id, name: u.name, email: u.email };
-  } catch {
-    return null;
+  // 1) tenta com access token
+  if (access) {
+    const { data, error } = await supabaseAuth.auth.getUser(access);
+    if (!error && data?.user) {
+      return {
+        id: data.user.id,
+        email: data.user.email || "",
+        name: (data.user.user_metadata && (data.user.user_metadata.name || data.user.user_metadata.full_name)) || "",
+      };
+    }
   }
-}
 
+  // 2) se access expirou, tenta refresh
+  if (refresh) {
+    const { data, error } = await supabaseAuth.auth.refreshSession({ refresh_token: refresh });
+    if (!error && data?.session?.access_token && data?.session?.refresh_token) {
+      // atualiza cookies
+      req._newAuthSession = {
+        access: data.session.access_token,
+        refresh: data.session.refresh_token,
+      };
+
+      const u = data.user;
+      if (u) {
+        return {
+          id: u.id,
+          email: u.email || "",
+          name: (u.user_metadata && (u.user_metadata.name || u.user_metadata.full_name)) || "",
+        };
+      }
+    }
+  }
+
+  return null;
+}
 async function getCurrentUserId(req) {
   const user = await getCurrentUser(req).catch(() => null);
   return user?.id || "";
@@ -1492,6 +1540,8 @@ app.get("/login", async (req, res) => {
 // ------------------------------
 app.post("/api/auth/signup", async (req, res) => {
   try {
+    if (!supabaseAuth) return res.status(500).json({ ok: false, error: "Supabase Auth não configurado (SUPABASE_ANON_KEY)." });
+
     const name = String(req.body?.name || "").trim();
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
@@ -1500,22 +1550,24 @@ app.post("/api/auth/signup", async (req, res) => {
     if (!email || !email.includes("@")) return res.status(400).json({ ok: false, error: "E-mail inválido." });
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: "Senha deve ter no mínimo 6 caracteres." });
 
-    const users = await loadUsers();
-    if (users.some((u) => normalizeEmail(u.email) === email)) {
-      return res.status(409).json({ ok: false, error: "Este e-mail já está cadastrado." });
+    const { data, error } = await supabaseAuth.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { name }, // vira user_metadata
+      },
+    });
+
+    if (error) return res.status(400).json({ ok: false, error: String(error.message || error) });
+
+    // Se email confirmation estiver LIGADO, session pode vir null
+    if (data?.session?.access_token && data?.session?.refresh_token) {
+      setAuthCookies(res, data.session.access_token, data.session.refresh_token);
+      return res.json({ ok: true });
     }
 
-    const id = safeId();
-    const pass = makePasswordRecord(password);
-
-    users.push({ id, name, email, pass, createdAt: nowISO() });
-    await saveUsers(users);
-
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.set(token, { userId: id, createdAt: Date.now() });
-    setCookie(res, SESSION_COOKIE, token, { maxAgeSec: 60 * 60 * 24 * 30 });
-
-    return res.json({ ok: true });
+    // Sem sessão (confirmação por email)
+    return res.json({ ok: true, needs_email_confirmation: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
@@ -1523,24 +1575,22 @@ app.post("/api/auth/signup", async (req, res) => {
 
 app.post("/api/auth/login", async (req, res) => {
   try {
+    if (!supabaseAuth) return res.status(500).json({ ok: false, error: "Supabase Auth não configurado (SUPABASE_ANON_KEY)." });
+
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
 
     if (!email || !email.includes("@")) return res.status(400).json({ ok: false, error: "E-mail inválido." });
     if (!password) return res.status(400).json({ ok: false, error: "Senha obrigatória." });
 
-    const users = await loadUsers();
-    const u = users.find((x) => normalizeEmail(x.email) === email);
-    if (!u) return res.status(401).json({ ok: false, error: "E-mail ou senha incorretos." });
+    const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
+    if (error) return res.status(401).json({ ok: false, error: "E-mail ou senha incorretos." });
 
-    if (!verifyPassword(password, u.pass)) {
-      return res.status(401).json({ ok: false, error: "E-mail ou senha incorretos." });
+    if (!data?.session?.access_token || !data?.session?.refresh_token) {
+      return res.status(401).json({ ok: false, error: "Sem sessão. Verifique confirmação de e-mail no Supabase." });
     }
 
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.set(token, { userId: u.id, createdAt: Date.now() });
-    setCookie(res, SESSION_COOKIE, token, { maxAgeSec: 60 * 60 * 24 * 30 });
-
+    setAuthCookies(res, data.session.access_token, data.session.refresh_token);
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -1549,10 +1599,7 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/logout", async (req, res) => {
   try {
-    const cookies = parseCookies(req);
-    const token = cookies[SESSION_COOKIE] || "";
-    if (token) sessions.delete(token);
-    clearCookie(res, SESSION_COOKIE);
+    clearAuthCookies(res);
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
