@@ -760,29 +760,30 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
 
-    // ✅ input base: SEMPRE manda image_input com a foto
+    // ✅ Compat: alguns modelos usam image_input (array), outros image/input_image (string)
+    // A ideia é: mandar a mesma referência em aliases diferentes para evitar o modelo ignorar.
     const input = {
       prompt,
 
-      // ✅ referência de identidade (a foto enviada)
-      image_input: [refDataUrl],
+      // --- REFERÊNCIA (aliases) ---
+      image_input: [refDataUrl], // muitos modelos (inclusive vários do Replicate) usam array
+      image: refDataUrl,         // alguns usam "image"
+      input_image: refDataUrl,   // outros usam "input_image"
 
+      // --- CONFIGS ---
       aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
       resolution: REPLICATE_RESOLUTION || "2K",
       output_format: REPLICATE_OUTPUT_FORMAT || "png",
       safety_filter_level: REPLICATE_SAFETY || "block_only_high",
 
-      // ✅ força o modelo a respeitar a referência
+      // ✅ força respeito à referência (quando suportado)
       match_input_image: true,
     };
 
-    // ✅ Só manda mask se ela NÃO estiver vazia (isso evita ignorar a referência)
-    // (muitos modelos “bugam” se mask transparente é enviada)
+    // ✅ Só manda mask se NÃO estiver vazia (evita ignorar referência)
     if (maskDataUrl) {
-      // Alguns modelos aceitam "mask", outros "mask_image".
-      // Se o seu modelo aceitar mask, mantenha esta linha.
-      // Se não aceitar, comente.
-      input.mask = maskDataUrl;
+      input.mask = maskDataUrl;       // alguns modelos usam "mask"
+      input.mask_image = maskDataUrl; // alguns usam "mask_image"
     }
 
     const created = await replicateCreatePrediction({
@@ -2947,173 +2948,199 @@ app.post("/api/generateNext", requireAuth, async (req, res) => {
     // --------------------------
     // STEP: cover (idempotente)
     // --------------------------
-    if (m.step === "cover") {
-      const coverFinalName = "cover_final.png";
-      const coverFinalPath = path.join(bookDir, coverFinalName);
+   // --------------------------
+// STEP: cover (idempotente)
+// - gera cover.png (base)
+// - gera cover_final.png (final com card/texto)
+// - manifest/UI apontam SOMENTE para cover_final.png
+// --------------------------
+if (m.step === "cover") {
+  const coverBaseName = "cover.png";
+  const coverBasePath = path.join(bookDir, coverBaseName);
 
-      // se já existe, pula
-      if (existsSyncSafe(coverFinalPath)) {
-        m.cover = {
-          ok: true,
-          file: coverFinalName,
-          url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
-          storageKey: m.cover?.storageKey || "",
-        };
-        m.step = "image_1";
-        m.updatedAt = nowISO();
-        await saveManifest(userId, id, m);
-        return res.json({ ok: true, step: "cover_skipped" });
-      }
+  const coverFinalName = "cover_final.png";
+  const coverFinalPath = path.join(bookDir, coverFinalName);
 
-      const coverPrompt = buildCoverPrompt({
-        themeKey: theme,
-        childName,
-        childAge,
-        childGender,
-        styleKey,
-      });
+  // ✅ Se a FINAL já existe, garante manifest e pula
+  if (existsSyncSafe(coverFinalPath)) {
+    m.cover = {
+      ok: true,
+      file: coverFinalName,
+      url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
+      storageKey: m.cover?.storageKey || "",
+    };
+    m.step = "image_1";
+    m.updatedAt = nowISO();
+    await saveManifest(userId, id, m);
+    return res.json({ ok: true, step: "cover_skipped" });
+  }
 
-      const coverBuf = await imageFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt: coverPrompt,
-        size: "1024x1024",
-      });
+  // 1) prompt da capa
+  const coverPrompt = buildCoverPrompt({
+    themeKey: theme,
+    childName,
+    childAge,
+    childGender,
+    styleKey,
+  });
 
-      const coverBaseName = "cover.png";
-      const coverBasePath = path.join(bookDir, coverBaseName);
-      await fsp.writeFile(coverBasePath, coverBuf);
+  // 2) gera a BASE (sem texto)
+  const coverBuf = await imageFromReference({
+    imagePngPath,
+    maskPngPath,
+    prompt: coverPrompt,
+    size: "1024x1024",
+  });
+  await fsp.writeFile(coverBasePath, coverBuf);
 
-      await stampCoverTextOnImage({
-        inputPath: coverBasePath,
-        outputPath: coverFinalPath,
-        title: "Meu Livro Mágico",
-        subtitle: `A aventura de ${childName} • ${themeLabel(theme)}`,
-      });
+  // 3) cria a FINAL (com card + texto)
+  await stampCoverTextOnImage({
+    inputPath: coverBasePath,
+    outputPath: coverFinalPath,
+    title: "Meu Livro Mágico",
+    subtitle: `A aventura de ${childName} • ${themeLabel(theme)}`,
+  });
 
-      let coverKey = "";
-      if (sbEnabled()) {
-        coverKey = sbKeyFor(userId, id, coverFinalName);
-        await sbUploadBuffer(coverKey, await fsp.readFile(coverFinalPath), "image/png");
-      }
+  // (opcional, recomendado) remove BASE para ninguém servir por engano
+  try { await fsp.unlink(coverBasePath); } catch {}
 
-      m.cover = {
-        ok: true,
-        file: coverFinalName,
-        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
-        storageKey: coverKey,
-      };
+  // 4) sobe FINAL no storage (se ativo)
+  let coverKey = "";
+  if (sbEnabled()) {
+    coverKey = sbKeyFor(userId, id, coverFinalName);
+    await sbUploadBuffer(coverKey, await fsp.readFile(coverFinalPath), "image/png");
+  }
 
-      m.step = "image_1";
-      m.error = "";
-      m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
-      m.updatedAt = nowISO();
-      await saveManifest(userId, id, m);
+  // 5) manifest aponta SOMENTE para FINAL
+  m.cover = {
+    ok: true,
+    file: coverFinalName,
+    url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(coverFinalName)}`,
+    storageKey: coverKey,
+  };
 
-      return res.json({ ok: true, step: "cover_done" });
-    }
+  m.step = "image_1";
+  m.error = "";
+  m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
+  m.updatedAt = nowISO();
+  await saveManifest(userId, id, m);
 
+  return res.json({ ok: true, step: "cover_done" });
+}
     // --------------------------
     // STEP: pages image_N (idempotente)
     // --------------------------
-    if (String(m.step || "").startsWith("image_")) {
-      const n = Number(String(m.step).split("_")[1] || "1");
-      const pages = Array.isArray(m.pages) ? m.pages : [];
+// --------------------------
+// STEP: pages image_N (idempotente)
+// - gera page_XX.png (base)
+// - gera page_XX_final.png (final com card/texto)
+// - manifest/UI apontam SOMENTE para *_final.png
+// --------------------------
+if (String(m.step || "").startsWith("image_")) {
+  const n = Number(String(m.step).split("_")[1] || "1");
+  const pages = Array.isArray(m.pages) ? m.pages : [];
 
-      if (!pages.length) {
-        m.step = "story";
-        m.updatedAt = nowISO();
-        await saveManifest(userId, id, m);
-        return res.json({ ok: true, step: "reset_to_story" });
-      }
+  if (!pages.length) {
+    m.step = "story";
+    m.updatedAt = nowISO();
+    await saveManifest(userId, id, m);
+    return res.json({ ok: true, step: "reset_to_story" });
+  }
 
-      const p = pages.find((x) => Number(x.page) === n);
-      if (!p) {
-        m.step = "pdf";
-        m.updatedAt = nowISO();
-        await saveManifest(userId, id, m);
-        return res.json({ ok: true, step: "images_done" });
-      }
+  const p = pages.find((x) => Number(x.page) === n);
+  if (!p) {
+    m.step = "pdf";
+    m.updatedAt = nowISO();
+    await saveManifest(userId, id, m);
+    return res.json({ ok: true, step: "images_done" });
+  }
 
-      const finalName = `page_${String(p.page).padStart(2, "0")}_final.png`;
-      const finalPath = path.join(bookDir, finalName);
+  const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
+  const basePath = path.join(bookDir, baseName);
 
-      // Se já existe, garante no manifest e pula pro próximo
-      if (existsSyncSafe(finalPath)) {
-        const images = Array.isArray(m.images) ? m.images : [];
-        if (!images.some((it) => Number(it.page) === Number(p.page))) {
-          images.push({
-            page: p.page,
-            path: finalPath,
-            file: finalName,
-            prompt: "",
-            url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
-            storageKey: "",
-          });
-          m.images = images;
-        }
+  const finalName = `page_${String(p.page).padStart(2, "0")}_final.png`;
+  const finalPath = path.join(bookDir, finalName);
 
-        const nextN = n + 1;
-        m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
-        m.updatedAt = nowISO();
-        await saveManifest(userId, id, m);
-        return res.json({ ok: true, step: `image_${n}_skipped` });
-      }
-
-      const prompt = buildScenePromptFromParagraph({
-        paragraphText: p.text,
-        themeKey: theme,
-        childName,
-        childAge,
-        childGender,
-        styleKey,
-      });
-
-      const imgBuf = await imageFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt,
-        size: "1024x1024",
-      });
-
-      const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
-      const basePath = path.join(bookDir, baseName);
-      await fsp.writeFile(basePath, imgBuf);
-
-      await stampStoryTextOnImage({
-        inputPath: basePath,
-        outputPath: finalPath,
-        title: p.title,
-        text: p.text,
-      });
-
-      let pageKey = "";
-      if (sbEnabled()) {
-        pageKey = sbKeyFor(userId, id, finalName);
-        await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
-      }
-
-      const images = Array.isArray(m.images) ? m.images : [];
+  // ✅ Se a FINAL já existe, garante manifest e pula
+  if (existsSyncSafe(finalPath)) {
+    const images = Array.isArray(m.images) ? m.images : [];
+    if (!images.some((it) => Number(it.page) === Number(p.page))) {
       images.push({
         page: p.page,
         path: finalPath,
         file: finalName,
-        prompt,
+        prompt: "",
         url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
-        storageKey: pageKey,
+        storageKey: "",
       });
       m.images = images;
-
-      const nextN = n + 1;
-      m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
-      m.error = "";
-      m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
-      m.updatedAt = nowISO();
-      await saveManifest(userId, id, m);
-
-      return res.json({ ok: true, step: `image_${n}_done` });
     }
 
+    const nextN = n + 1;
+    m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
+    m.updatedAt = nowISO();
+    await saveManifest(userId, id, m);
+    return res.json({ ok: true, step: `image_${n}_skipped` });
+  }
+
+  // 1) prompt da cena
+  const prompt = buildScenePromptFromParagraph({
+    paragraphText: p.text,
+    themeKey: theme,
+    childName,
+    childAge,
+    childGender,
+    styleKey,
+  });
+
+  // 2) gera a BASE (sem texto)
+  const imgBuf = await imageFromReference({
+    imagePngPath,
+    maskPngPath,
+    prompt,
+    size: "1024x1024",
+  });
+  await fsp.writeFile(basePath, imgBuf);
+
+  // 3) cria a FINAL (com card + texto)
+  await stampStoryTextOnImage({
+    inputPath: basePath,
+    outputPath: finalPath,
+    title: p.title,
+    text: p.text,
+  });
+
+  // (opcional, recomendado) remove BASE para ninguém servir por engano
+  try { await fsp.unlink(basePath); } catch {}
+
+  // 4) sobe FINAL no storage (se ativo)
+  let pageKey = "";
+  if (sbEnabled()) {
+    pageKey = sbKeyFor(userId, id, finalName);
+    await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+  }
+
+  // 5) manifest aponta SOMENTE para FINAL
+  const images = Array.isArray(m.images) ? m.images : [];
+  images.push({
+    page: p.page,
+    path: finalPath,
+    file: finalName,
+    prompt,
+    url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+    storageKey: pageKey,
+  });
+  m.images = images;
+
+  const nextN = n + 1;
+  m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
+  m.error = "";
+  m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
+  m.updatedAt = nowISO();
+  await saveManifest(userId, id, m);
+
+  return res.json({ ok: true, step: `image_${n}_done` });
+}
     // --------------------------
     // STEP: pdf (idempotente)
     // --------------------------
