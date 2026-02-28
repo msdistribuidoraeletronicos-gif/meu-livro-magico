@@ -356,52 +356,11 @@ function canAccessBook(userId, manifest, reqUser) {
 // - usuários: output/users.json
 // - sessão: cookie + Map em memória
 // ------------------------------
-const SESSION_COOKIE = "mlm_session";
-const sessions = new Map(); // token -> { userId, createdAt }
-
-async function loadUsers() {
-  try {
-    if (!existsSyncSafe(USERS_FILE)) return [];
-    const raw = await fsp.readFile(USERS_FILE, "utf-8");
-    const j = JSON.parse(raw);
-    return Array.isArray(j) ? j : [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveUsers(users) {
-  await ensureDir(path.dirname(USERS_FILE));
-  await fsp.writeFile(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
-}
-
-function normalizeEmail(s) {
-  return String(s || "").trim().toLowerCase();
-}
-
-function hashPassword(password, saltHex) {
-  const salt = Buffer.from(saltHex, "hex");
-  const key = pbkdf2Sync(String(password), salt, 120000, 32, "sha256");
-  return key.toString("hex");
-}
-
-function makePasswordRecord(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = hashPassword(password, salt);
-  return { salt, hash, alg: "pbkdf2_sha256", iter: 120000 };
-}
-
-function verifyPassword(password, rec) {
-  try {
-    if (!rec?.salt || !rec?.hash) return false;
-    const got = Buffer.from(hashPassword(password, rec.salt), "hex");
-    const exp = Buffer.from(String(rec.hash), "hex");
-    if (got.length !== exp.length) return false;
-    return timingSafeEqual(got, exp);
-  } catch {
-    return false;
-  }
-}
+// ------------------------------
+// AUTH (Supabase) — cookie httpOnly
+// ------------------------------
+const AUTH_COOKIE = "sb_access";
+const REFRESH_COOKIE = "sb_refresh";
 
 function parseCookies(req) {
   const header = String(req.headers.cookie || "");
@@ -417,19 +376,29 @@ function parseCookies(req) {
   return out;
 }
 
-function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
-  const parts = [
-    `${name}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${maxAgeSec}`,
-  ];
-  res.setHeader("Set-Cookie", parts.join("; "));
+function setAuthCookies(res, accessToken, refreshToken) {
+  const base = ["Path=/", "HttpOnly", "SameSite=Lax"];
+  if (process.env.VERCEL) base.push("Secure");
+
+  const c1 = [`${AUTH_COOKIE}=${encodeURIComponent(accessToken || "")}`, ...base, `Max-Age=${60 * 60}`].join("; ");
+  const c2 = [`${REFRESH_COOKIE}=${encodeURIComponent(refreshToken || "")}`, ...base, `Max-Age=${60 * 60 * 24 * 30}`].join("; ");
+
+  // Importante: mandar DOIS Set-Cookie
+  res.setHeader("Set-Cookie", [c1, c2]);
 }
 
-function clearCookie(res, name) {
-  res.setHeader("Set-Cookie", `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+function clearAuthCookies(res) {
+  const base = ["Path=/", "HttpOnly", "SameSite=Lax"];
+  if (process.env.VERCEL) base.push("Secure");
+
+  const c1 = [`${AUTH_COOKIE}=`, ...base, "Max-Age=0"].join("; ");
+  const c2 = [`${REFRESH_COOKIE}=`, ...base, "Max-Age=0"].join("; ");
+
+  res.setHeader("Set-Cookie", [c1, c2]);
+}
+
+function normalizeEmail(s) {
+  return String(s || "").trim().toLowerCase();
 }
 
 async function getCurrentUser(req) {
@@ -496,6 +465,12 @@ function requireAuth(req, res, next) {
         const nextUrl = encodeURIComponent(req.originalUrl || "/create");
         return res.redirect(`/login?next=${nextUrl}`);
       }
+
+      // ✅ se teve refresh, regrava cookies
+      if (req._newAuthSession?.access && req._newAuthSession?.refresh) {
+        setAuthCookies(res, req._newAuthSession.access, req._newAuthSession.refresh);
+      }
+
       req.user = user;
       next();
     })
