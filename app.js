@@ -864,109 +864,97 @@ async function generateStoryTextPages({ childName, childAge, childGender, themeK
 // Prompt de imagem por parágrafo + estilo (read | color)
 // (REFEITO: inclui nome + idade + gênero + tema + estilo explicitamente)
 // ------------------------------
-function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, childAge, childGender, styleKey }) {
+// ------------------------------
+// Prompt de imagem por parágrafo + estilo (read | color)
+// (FORTE: usa foto + nome + idade + genero + tema + estilo)
+// ------------------------------
+function buildScenePromptFromParagraph({
+  paragraphText,
+  themeKey,
+  childName,
+  childAge,
+  childGender,
+  styleKey,
+}) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const age = clamp(childAge ?? 6, 2, 12);
-  const g = genderLabel(childGender);
+  const gender = String(childGender || "neutral");
+  const genderPt = genderLabel(gender);
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  const identity = [
-    "Use a criança da imagem enviada como personagem principal.",
-    "Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
-    "A identidade deve ser consistente em todas as páginas (same face, same hairstyle, same skin tone).",
-    "Não invente outra criança diferente.",
-     "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
+  const base = [
+    "Estou escrevendo um livro infantil e quero que você crie UMA CENA para este texto:",
+    `"${txt}"`,
+    "Regras IMPORTANTES:",
+    "- Use a criança da imagem enviada como personagem principal.",
+    "- Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
+    "- Mantenha a identidade consistente em todas as páginas (same face, same hairstyle, same skin tone).",
+    "- Não invente outra criança diferente. A criança TEM que ser a mesma da foto enviada.",
+    `- Tema da história: ${th}.`,
+    `- Nome da criança (apenas contexto): ${name || "Criança"}.`,
+    `- Idade: ${age} anos.`,
+    `- Gênero do texto: ${gender}. (a criança deve parecer um(a) ${genderPt} de aproximadamente ${age} anos, SEM mudar a identidade da foto)`,
+    "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
     "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
-     "Cena coerente e bonita para livro infantil.",
-  ].join(" ");
-
-  const meta = [
-    name ? `Nome (contexto): ${name}.` : "",
-    `Idade: ${age} anos.`,
-    `Gênero do texto: ${String(childGender || "neutral")}.`,
-    `A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade da foto).`,
-  ].filter(Boolean).join(" ");
-
-  const rules = [
-    "NÃO escreva texto/legendas dentro da imagem.",
-    "A criança deve estar integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
-    "Cena coerente e bonita para livro infantil.",
-  ].join(" ");
+    "- Fundo coerente com o tema; cena bonita e clara.",
+  ].filter(Boolean);
 
   if (style === "color") {
-    return [
-      "Crie UMA ilustração para um livro infantil baseado no texto abaixo.",
-      `TEXTO: "${txt}"`,
-      `TEMA: ${th}.`,
-      meta,
-      identity,
-      "ESTILO: livro para colorir (coloring book).",
-      "Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
-      "SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM textura realista.",
-      "Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
-      rules,
-    ].join(" ");
+    base.push(
+      "- Estilo: página de livro de colorir (coloring book).",
+      "- Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
+      "- SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM texturas realistas.",
+      "- Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
+      "- Visual infantil, fofo e amigável; formas simples; alta legibilidade dos contornos."
+    );
+  } else {
+    base.push(
+      "- Estilo: ilustração semi-realista de livro infantil, bonita, alegre, cores agradáveis, luz suave."
+    );
   }
 
-  return [
-    "Crie UMA ilustração para um livro infantil baseado no texto abaixo.",
-    `TEXTO: "${txt}"`,
-    `TEMA: ${th}.`,
-    meta,
-    identity,
-    "ESTILO: ilustração semi-realista de livro infantil, alegre, cores agradáveis, luz suave.",
-    rules,
-  ].join(" ");
+  return base.join(" ");
 }
 
 function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const age = clamp(childAge ?? 6, 2, 12);
-  const g = genderLabel(childGender);
+  const gender = String(childGender || "neutral");
+  const genderPt = genderLabel(gender);
   const style = String(styleKey || "read").trim();
 
-  const identity = [
-    "Use a criança da imagem enviada como personagem principal.",
-    "Mantenha TODAS as características originais dela (identidade consistente).",
-    "A capa deve combinar com as páginas (mesma identidade).",
-  ].join(" ");
-
-  const meta = [
-    name ? `Nome (contexto): ${name}.` : "",
+  const parts = [
+    "Crie uma CAPA de livro infantil.",
+    "Use a criança da imagem como personagem principal e mantenha suas características originais (identidade consistente).",
+    "Mantenha a identidade consistente com a foto (same face, same hairstyle, same skin tone).",
+    "Não invente outra criança diferente. A criança TEM que ser a mesma da foto enviada.",
+    `Tema: ${th}.`,
+    `Nome da criança (apenas contexto): ${name || "Criança"}.`,
     `Idade: ${age} anos.`,
-    `Gênero do texto: ${String(childGender || "neutral")}.`,
-    `A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade da foto).`,
-  ].filter(Boolean).join(" ");
-
-  const rules = "NÃO escreva texto/legendas dentro da imagem (eu aplico depois).";
+    `Gênero do texto: ${gender}. (a criança deve parecer um(a) ${genderPt} de aproximadamente ${age} anos, SEM mudar a identidade da foto)`,
+    "Cena de capa: alegre, mágica, positiva, com a criança em destaque no centro.",
+    "NÃO escreva texto/legendas na imagem (eu vou aplicar depois).",
+  ].filter(Boolean);
 
   if (style === "color") {
-    return [
-      "Crie uma CAPA de livro infantil.",
-      `TEMA: ${th}.`,
-      meta,
-      identity,
-      "ESTILO: CAPA em formato de livro para colorir (coloring book).",
-      "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
-      "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
-      "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
-      "Composição: alegre, mágica, positiva, criança em destaque central.",
-      rules,
-    ].join(" ");
+    parts.splice(
+      1,
+      0,
+      [
+        "Estilo: CAPA em formato de livro para colorir (coloring book).",
+        "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
+        "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
+        "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
+      ].join(" ")
+    );
+  } else {
+    parts.splice(1, 0, "Estilo: ilustração semi-realista, alegre, colorida, luz suave.");
   }
 
-  return [
-    "Crie uma CAPA de livro infantil.",
-    `TEMA: ${th}.`,
-    meta,
-    identity,
-    "ESTILO: ilustração semi-realista, alegre, colorida, luz suave.",
-    "Composição: alegre, mágica, positiva, criança em destaque central.",
-    rules,
-  ].join(" ");
+  return parts.join(" ");
 }
 
 // ------------------------------
