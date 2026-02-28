@@ -7,6 +7,12 @@
  * ✅ RESPEITA COOLDOWN DO BACKEND: se /api/generateNext retornar nextTryAt, espera até lá.
  * ✅ HARD-LIMIT: para após 10min tentando (pra não ficar eternamente).
  *
+ * ✅ CORREÇÃO PRINCIPAL DE UX:
+ * - Se /generate abrir sem bookId no localStorage, tenta:
+ *   (1) capturar bookId via querystring (?bookId=... ou ?id=...)
+ *   (2) se ainda não tiver, cria automaticamente chamando POST /api/create
+ * - Se faltar dados mínimos, redireciona para /create (sem travar em "Sem bookId").
+ *
  * mount: require("./generate.page.js")(app, { requireAuth })
  */
 "use strict";
@@ -179,6 +185,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     window.location.href = "/login?next=" + next;
   }
 
+  function goCreate(withMsg){
+    try {
+      if (withMsg) localStorage.setItem("generateHint", String(withMsg));
+    } catch {}
+    addLog("↪ goCreate -> /create");
+    window.location.href = "/create";
+  }
+
   function getState(){
     return {
       bookId: localStorage.getItem("bookId") || "",
@@ -237,14 +251,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     const r = await fetch(url, o);
 
-    // ✅ Se o backend redirecionar (ex.: para /login)
     if (r.redirected) {
       addLog("↪ redirected to: " + r.url);
       window.location.href = r.url;
       return { status: r.status, ok: false, json: { ok:false, error:"redirected" }, raw: "" };
     }
 
-    // ✅ Se não está logado
     if (r.status === 401) {
       addLog("↪ 401 not_logged_in");
       goLogin();
@@ -267,7 +279,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   function isHighDemandError(msg){
     const s = String(msg || "");
-    return /high demand/i.test(s) || /unavailable/i.test(s) || /\\(E003\\)/i.test(s) || /service is currently unavailable/i.test(s);
+    return /high demand/i.test(s) || /unavailable/i.test(s) || /(E003)/i.test(s) || /service is currently unavailable/i.test(s);
   }
 
   function getNextTryAtFromResponse(g){
@@ -289,6 +301,30 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     return r.json;
   }
 
+  async function apiCreateBook(payload){
+    const r = await fetchJsonLogged("/api/create", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(payload || {})
+    });
+
+    if (r.status === 401 || (r.json && (r.json.error === "not_logged_in" || r.json.error === "redirected"))) {
+      throw new Error("not_logged_in");
+    }
+    if (!r.ok) {
+      const err = (r.json && (r.json.error || r.json.message)) ? (r.json.error || r.json.message) : ("HTTP " + r.status);
+      throw new Error(err);
+    }
+    if (!r.json || !r.json.ok) {
+      throw new Error((r.json && r.json.error) ? r.json.error : "Falha /api/create");
+    }
+
+    // compatível com vários formatos:
+    const id = r.json.id || r.json.bookId || (r.json.book && (r.json.book.id || r.json.book.bookId)) || "";
+    if (!id) throw new Error("Falha /api/create: resposta sem id");
+    return { id, raw: r.json };
+  }
+
   async function apiGenerateNext(payload){
     const r = await fetchJsonLogged("/api/generateNext", {
       method:"POST",
@@ -296,7 +332,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       body: JSON.stringify(payload || {})
     });
 
-    // ✅ se não logado/redirected, PARA de vez (não fica em loop infinito)
     if (r.status === 401 || (r.json && r.json.error === "not_logged_in") || (r.json && r.json.error === "redirected")) {
       throw new Error("not_logged_in");
     }
@@ -330,7 +365,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     $("progressTxt").textContent = "Progresso: " + done + "/" + total + " · " + (p?.message || "");
     setBar(done, total);
 
-    // ✅ Se "failed" mas é HIGH DEMAND, não pinta como erro final
     if (status === "done") uiSetDot("ok");
     else if (status === "failed" && !isHighDemandError(p?.error || p?.message || "")) uiSetDot("bad");
     else if (running) uiSetDot("run");
@@ -348,16 +382,106 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     }
   }
 
-  async function refreshOnce(){
+  async function sleep(ms){
+    await new Promise(r=>setTimeout(r, ms));
+  }
+
+  function readBookIdFromUrl(){
+    try {
+      const qs = new URLSearchParams(location.search || "");
+      const id =
+        (qs.get("bookId") || qs.get("id") || qs.get("book") || qs.get("b") || "").trim();
+      return id || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function buildCreatePayload(){
     const st = getState();
-    if (!st.bookId) {
-      setHint("Sem bookId. Volte em /create e crie um livro.");
-      addLog("⚠️ sem bookId no localStorage");
-      return null;
+    return {
+      childName: st.childName,
+      childAge: st.childAge,
+      childGender: st.childGender,
+      theme: st.theme,
+      style: st.style
+    };
+  }
+
+  function buildPayload(){
+    const st = getState();
+    return {
+      id: st.bookId,
+      childName: st.childName,
+      childAge: st.childAge,
+      childGender: st.childGender,
+      theme: st.theme,
+      style: st.style
+    };
+  }
+
+  async function ensureBookId(){
+    // 1) tenta pegar do URL (?bookId=...)
+    const urlId = readBookIdFromUrl();
+    if (urlId) {
+      try { localStorage.setItem("bookId", urlId); } catch {}
+      addLog("✅ bookId capturado da URL: " + urlId);
+      return urlId;
     }
 
+    // 2) já tem no localStorage?
+    const st = getState();
+    if (st.bookId) return st.bookId;
+
+    // 3) se faltar dados mínimos, manda pra /create
+    const minimalOk =
+      st.childName && st.childName.length >= 2 &&
+      st.theme && st.style;
+
+    if (!minimalOk) {
+      setHint(
+        "⚠️ Você abriu /generate sem criar o livro antes.\\n" +
+        "Vou te levar para /create para preencher os dados."
+      );
+      addLog("⚠️ sem bookId e sem dados mínimos -> redirecionando /create");
+      await sleep(700);
+      goCreate("Abra /create e finalize os dados (nome/tema/estilo) para gerar.");
+      return "";
+    }
+
+    // 4) cria automaticamente via /api/create
+    setHint("✨ Criando seu livro automaticamente…");
+    addLog("🆕 sem bookId -> chamando POST /api/create");
     try {
-      const p = await apiProgress(st.bookId);
+      const created = await apiCreateBook(buildCreatePayload());
+      try { localStorage.setItem("bookId", created.id); } catch {}
+      setHint("✅ Livro criado! Iniciando geração…");
+      addLog("✅ /api/create OK -> bookId=" + created.id);
+      return created.id;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      addLog("❌ /api/create falhou: " + msg);
+
+      if (msg === "not_logged_in") {
+        setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
+        goLogin();
+        return "";
+      }
+
+      setHint(
+        "❌ Não consegui criar o livro automaticamente.\\n" +
+        "Volte em /create e crie normalmente.\\n\\nDetalhe: " + msg
+      );
+      return "";
+    }
+  }
+
+  async function refreshOnce(){
+    const ensuredId = await ensureBookId();
+    if (!ensuredId) return null;
+
+    try {
+      const p = await apiProgress(ensuredId);
       applyProgressUI(p);
       return p;
     } catch (e) {
@@ -385,24 +509,14 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     }
   }
 
-  function buildPayload(){
-    const st = getState();
-    return {
-      id: st.bookId,
-      childName: st.childName,
-      childAge: st.childAge,
-      childGender: st.childGender,
-      theme: st.theme,
-      style: st.style
-    };
-  }
-
   async function testOneStep(){
     setHint("");
+    const ensuredId = await ensureBookId();
+    if (!ensuredId) return;
+
     const st = getState();
     addLog("STATE: " + JSON.stringify(st));
 
-    if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
     if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
     if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
@@ -411,16 +525,15 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     applyProgressUI(g);
   }
 
-  async function sleep(ms){
-    await new Promise(r=>setTimeout(r, ms));
-  }
-
   async function startLoop(){
     setHint("");
+
+    const ensuredId = await ensureBookId();
+    if (!ensuredId) return;
+
     const st = getState();
     addLog("START LOOP | STATE: " + JSON.stringify(st));
 
-    if (!st.bookId) return setHint("Sem bookId. Volte em /create e crie um livro.");
     if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
     if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
     if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
@@ -441,7 +554,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     let demandBackoffMs = 2500;
 
     while (!stopFlag) {
-      // ✅ hard limit pra não travar infinito
       if (Date.now() - startedAt > HARD_LIMIT_MS) {
         stopFlag = true;
         running = false;
@@ -464,11 +576,9 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
           continue;
         }
 
-        // ✅ (normal)
         busyBackoffMs = 900;
         applyProgressUI(g);
 
-        // ✅ RESPEITA COOLDOWN DO BACKEND (nextTryAt)
         const nextTryAt = getNextTryAtFromResponse(g);
         if (nextTryAt && nextTryAt > Date.now()) {
           const waitMs = Math.max(300, nextTryAt - Date.now());
@@ -477,7 +587,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
           continue;
         }
 
-        // ✅ se falhou por HIGH DEMAND, não para
         if (g.status === "failed" && isHighDemandError(g.error || g.message || "")) {
           addLog("⏳ HIGH DEMAND (E003) — aguardando " + demandBackoffMs + "ms e tentando novamente");
           await sleep(demandBackoffMs);
@@ -494,17 +603,19 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       } catch (e) {
         const msg = String(e?.message || e);
         addLog("❌ ERRO: " + msg);
-if (/isReplicateThrottledError is not defined/i.test(msg)) {
-  stopFlag = true;
-  running = false;
-  uiSetDot("bad");
-  setHint(
-    "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\\n" +
-    "Corrija o app.js e faça redeploy."
-  );
-  try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
-  return;
-}
+
+        if (/isReplicateThrottledError is not defined/i.test(msg)) {
+          stopFlag = true;
+          running = false;
+          uiSetDot("bad");
+          setHint(
+            "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\\n" +
+            "Corrija o app.js e faça redeploy."
+          );
+          try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
+          return;
+        }
+
         if (msg === "not_logged_in") {
           stopFlag = true;
           running = false;
@@ -526,7 +637,6 @@ if (/isReplicateThrottledError is not defined/i.test(msg)) {
           return;
         }
 
-        // ✅ erro temporário do provider (E003 / high demand)
         if (isHighDemandError(msg)) {
           setHint("⏳ Serviço ocupado (E003). Tentando novamente em instantes…\\n" + msg);
           addLog("⏳ HIGH DEMAND — aguardando " + demandBackoffMs + "ms");
@@ -535,7 +645,6 @@ if (/isReplicateThrottledError is not defined/i.test(msg)) {
           continue;
         }
 
-        // fallback: tenta atualizar status e continua
         try { await refreshOnce(); } catch {}
         await sleep(1400);
       } finally {
@@ -615,6 +724,16 @@ if (/isReplicateThrottledError is not defined/i.test(msg)) {
 
   (async function init(){
     addLog("INIT /generate");
+
+    // dica opcional vinda do /create
+    try {
+      const h = (localStorage.getItem("generateHint") || "").trim();
+      if (h) {
+        setHint(h);
+        localStorage.removeItem("generateHint");
+      }
+    } catch {}
+
     try { await refreshOnce(); } catch (e) { addLog("⚠️ " + String(e?.message||e)); }
     autoStartIfPossible();
   })();
