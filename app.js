@@ -13,6 +13,8 @@
  * 5) ✅ Pequenas correções de robustez e organização (sem mudar seu fluxo).
  * 6) ✅ CORREÇÃO REPLICATE: Garante que imagem de referência seja enviada e usada corretamente
  * 7) ✅ CORREÇÃO PROMPT: Instruções mais fortes para manter identidade da criança como protagonista
+ * 8) ✅ REMOVIDO: Funções duplicadas que causavam sobrescrita incorreta
+ * 9) ✅ CORREÇÃO: Consolidada função de geração de imagem para sempre enviar referência corretamente
  */
 "use strict";
 
@@ -693,28 +695,6 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
 
   const version = await replicateGetLatestVersionId(model);
 
-  // ✅ DEBUG: registra o payload real
-  try {
-    const keys = Object.keys(input || {});
-    const imageFieldGuess = keys.find(k => /image/i.test(k)) || "";
-    const refVal = imageFieldGuess ? input?.[imageFieldGuess] : null;
-    const ref0 = Array.isArray(refVal) ? refVal[0] : refVal;
-
-    REPLICATE_LAST.at = new Date().toISOString();
-    REPLICATE_LAST.model = String(model || "");
-    REPLICATE_LAST.version = String(version || "");
-    REPLICATE_LAST.inputKeys = keys;
-    REPLICATE_LAST.imageField = imageFieldGuess;
-    REPLICATE_LAST.refType = typeof ref0 === "string" && /^https?:\/\//i.test(ref0) ? "http" : (typeof ref0 === "string" && ref0.startsWith("data:") ? "data" : typeof ref0);
-    REPLICATE_LAST.refSample = typeof ref0 === "string" ? ref0.slice(0, 120) + "..." : "";
-    // não salva o input inteiro se tiver dataURL gigante
-    REPLICATE_LAST.inputPreview = JSON.parse(JSON.stringify(input, (k, v) => {
-      if (typeof v === "string" && v.startsWith("data:image")) return "data:image/... (omitted)";
-      if (typeof v === "string" && v.length > 400) return v.slice(0, 400) + "...";
-      return v;
-    }));
-  } catch {}
-
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -729,6 +709,7 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
       });
     } catch (e) {
       lastErr = e;
+      // backoff: 1.2s, 2.4s
       if (attempt < 3) await sleep(1200 * attempt);
     }
   }
@@ -774,15 +755,17 @@ async function replicateCreateImageJob({ prompt, referenceUrl }) {
   if (!imgRef || (!isData && !isHttp)) {
     throw new Error("Imagem de referência inválida. Deve ser URL http(s) ou data:image/...base64.");
   }
-// ✅ PREFLIGHT: garante que a URL realmente baixa (e não expira / 403 / 404)
-if (/^https?:\/\//i.test(imgRef)) {
-  try {
-    const testBuf = await downloadToBuffer(imgRef, 20000);
-    console.log("✅ PREFLIGHT referenceUrl OK:", { bytes: testBuf.length });
-  } catch (e) {
-    throw new Error("REFERENCE_URL_NOT_FETCHABLE: " + String(e?.message || e));
+  
+  // ✅ PREFLIGHT: garante que a URL realmente baixa (e não expira / 403 / 404)
+  if (/^https?:\/\//i.test(imgRef)) {
+    try {
+      const testBuf = await downloadToBuffer(imgRef, 20000);
+      console.log("✅ PREFLIGHT referenceUrl OK:", { bytes: testBuf.length });
+    } catch (e) {
+      throw new Error("REFERENCE_URL_NOT_FETCHABLE: " + String(e?.message || e));
+    }
   }
-}
+  
   const input = {
     prompt,
     size: REPLICATE_SIZE || "2K",
@@ -792,30 +775,8 @@ if (/^https?:\/\//i.test(imgRef)) {
     enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
   };
 
-  // ✅ REFERÊNCIA: envia de forma compatível (string e/ou array)
-  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
-
-  // alguns modelos esperam string; outros aceitam array. Vamos suportar ambos.
-  const refAsArray = [imgRef];
-  const refAsString = imgRef;
-
-  // 1) campo configurável
-  input[imageField] = REPLICATE_IMAGE_IS_ARRAY ? refAsArray : refAsString;
-
-  // 2) fallback seguro: muitos modelos do Replicate usam "image" (string)
-  if (!("image" in input)) input.image = refAsString;
-
-  // 3) fallback seguro: alguns modelos usam "image_input" (array)
-  if (!("image_input" in input)) input.image_input = refAsArray;
-
-  // ✅ LOG: confirma se a referência está indo MESMO no payload
-  console.log("📤 Seedream payload check:", {
-    model: REPLICATE_MODEL,
-    imageFieldUsed: imageField,
-    has_image: typeof input.image === "string" && input.image.startsWith("http"),
-    has_image_input: Array.isArray(input.image_input) && String(input.image_input[0] || "").startsWith("http"),
-    keys: Object.keys(input),
-  });
+  const imageField = String(REPLICATE_IMAGE_FIELD || "image_input").trim() || "image_input";
+  input[imageField] = [imgRef];
 
   console.log("📤 Enviando para Replicate (Seedream-4):", {
     model: REPLICATE_MODEL,
@@ -834,38 +795,98 @@ if (/^https?:\/\//i.test(imgRef)) {
   console.log("✅ Prediction criada:", created?.id);
   return String(created?.id || "").trim();
 }
+
 async function replicatePollOnce(predictionId) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado.");
-
   const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
     method: "GET",
     timeoutMs: 20000,
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
   });
+  return pred;
+}
 
-  // ✅ DIAGNÓSTICO: confirma se a referência foi enviada no INPUT da prediction
-  try {
-    const inp = pred?.input || {};
-    const imgStr = typeof inp.image === "string" ? inp.image : "";
-    const imgArr0 = Array.isArray(inp.image_input) ? String(inp.image_input[0] || "") : "";
-    const altArr0 = Array.isArray(inp.image_url) ? String(inp.image_url[0] || "") : ""; // alguns modelos usam outros nomes
+// ✅ Extrai a imagem do output do Replicate (Seedream e outros)
+// Retorna Buffer PNG
+async function replicateOutputToPngBuffer(pred) {
+  let out = pred?.output;
 
-    console.log("🧪 Replicate pred.input check:", {
-      id: pred?.id,
-      status: pred?.status,
-      has_image_string: !!imgStr,
-      image_string_head: imgStr ? imgStr.slice(0, 90) + "..." : "",
-      has_image_input_array: !!imgArr0,
-      image_input_head: imgArr0 ? imgArr0.slice(0, 90) + "..." : "",
-      has_image_url_array: !!altArr0,
-      image_url_head: altArr0 ? altArr0.slice(0, 90) + "..." : "",
-      input_keys: Object.keys(inp || {}),
-    });
-  } catch (e) {
-    console.warn("⚠️ Falha ao logar pred.input:", String(e?.message || e));
+  // 1) string URL
+  if (typeof out === "string" && out.startsWith("http")) {
+    const buf = await downloadToBuffer(out, 300000);
+    return sharp(buf).png().toBuffer();
   }
 
-  return pred;
+  // 2) dataURL base64
+  if (typeof out === "string" && out.startsWith("data:")) {
+    const b = dataUrlToBuffer(out);
+    if (!b) throw new Error("Replicate retornou dataURL inválida.");
+    return sharp(b).png().toBuffer();
+  }
+
+  // 3) array de strings
+  if (Array.isArray(out) && typeof out[0] === "string") {
+    const first = out[0];
+    if (first.startsWith("http")) {
+      const buf = await downloadToBuffer(first, 300000);
+      return sharp(buf).png().toBuffer();
+    }
+    if (first.startsWith("data:")) {
+      const b = dataUrlToBuffer(first);
+      if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
+      return sharp(b).png().toBuffer();
+    }
+  }
+
+  // 4) objeto { url }
+  if (out && typeof out === "object" && typeof out.url === "string") {
+    const buf = await downloadToBuffer(out.url, 300000);
+    return sharp(buf).png().toBuffer();
+  }
+
+  // 5) array de objetos [{ url }]
+  if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
+    const buf = await downloadToBuffer(out[0].url, 300000);
+    return sharp(buf).png().toBuffer();
+  }
+
+  throw new Error("Replicate não retornou imagem válida. Output=" + JSON.stringify(out).slice(0, 900));
+}
+
+/**
+ * ✅ GERA IMAGEM COM REPlicate USANDO REFERÊNCIA (Seedream-4)
+ * - referência vem do Storage via signedUrl/publicUrl
+ * - retorna Buffer PNG
+ */
+async function generateImageWithReference({
+  prompt,
+  userId,
+  bookId,
+  manifest,
+}) {
+  if (!REPLICATE_API_TOKEN) {
+    throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
+  }
+
+  const uid = String(userId || manifest?.ownerId || "").trim();
+  const bid = String(bookId || manifest?.id || "").trim();
+  if (!uid || !bid) throw new Error("generateImageWithReference: userId/bookId ausentes.");
+
+  // ✅ URL http(s) estável para o Seedream (preferível a dataURL)
+  const referenceUrl = await getSeedreamReferenceUrl({ userId: uid, bookId: bid, manifest });
+
+  console.log("🎨 Gerando imagem com referência:", {
+    userId: uid,
+    bookId: bid,
+    refUrl: referenceUrl.slice(0, 80) + "...",
+    promptLen: prompt.length,
+  });
+
+  // Cria job e aguarda completion
+  const predictionId = await replicateCreateImageJob({ prompt, referenceUrl });
+  const pred = await replicateWaitPrediction(predictionId, { timeoutMs: 300000, pollMs: 1200 });
+  
+  return replicateOutputToPngBuffer(pred);
 }
 
 async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
@@ -949,195 +970,6 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
   throw lastErr || new Error("Falha ao gerar imagem (OpenAI fallback).");
 }
 
-/**
- * IMAGEM SEQUENCIAL (principal)
- * - Replicate se token configurado
- * - Senão: fallback OpenAI /v1/images/edits
- * - Retorna Buffer PNG
- */
-/**
- * IMAGEM SEQUENCIAL (IMAGENS SEMPRE PELO REPLICATE)
- * - OpenAI: somente TEXTO
- * - Replicate: SEMPRE IMAGEM
- * - Retorna Buffer PNG
- */
-// ✅ Extrai a imagem do output do Replicate (Seedream e outros)
-// Retorna Buffer PNG
-async function replicateOutputToPngBuffer(pred) {
-  let out = pred?.output;
-
-  // 1) string URL
-  if (typeof out === "string" && out.startsWith("http")) {
-    const buf = await downloadToBuffer(out, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  // 2) dataURL base64
-  if (typeof out === "string" && out.startsWith("data:")) {
-    const b = dataUrlToBuffer(out);
-    if (!b) throw new Error("Replicate retornou dataURL inválida.");
-    return sharp(b).png().toBuffer();
-  }
-
-  // 3) array de strings
-  if (Array.isArray(out) && typeof out[0] === "string") {
-    const first = out[0];
-    if (first.startsWith("http")) {
-      const buf = await downloadToBuffer(first, 300000);
-      return sharp(buf).png().toBuffer();
-    }
-    if (first.startsWith("data:")) {
-      const b = dataUrlToBuffer(first);
-      if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
-      return sharp(b).png().toBuffer();
-    }
-  }
-
-  // 4) objeto { url }
-  if (out && typeof out === "object" && typeof out.url === "string") {
-    const buf = await downloadToBuffer(out.url, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  // 5) array de objetos [{ url }]
-  if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
-    const buf = await downloadToBuffer(out[0].url, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  throw new Error("Replicate não retornou imagem válida. Output=" + JSON.stringify(out).slice(0, 900));
-}
-
-/**
- * ✅ GERA IMAGEM COM REPlicate USANDO REFERÊNCIA (Seedream-4)
- * - referência vem do Storage via signedUrl/publicUrl
- * - retorna Buffer PNG
- */
-// ✅ Extrai a imagem do output do Replicate (Seedream e outros)
-// Retorna Buffer PNG
-async function replicateOutputToPngBuffer(pred) {
-  let out = pred?.output;
-
-  // 1) string URL
-  if (typeof out === "string" && out.startsWith("http")) {
-    const buf = await downloadToBuffer(out, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  // 2) dataURL base64
-  if (typeof out === "string" && out.startsWith("data:")) {
-    const b = dataUrlToBuffer(out);
-    if (!b) throw new Error("Replicate retornou dataURL inválida.");
-    return sharp(b).png().toBuffer();
-  }
-
-  // 3) array de strings
-  if (Array.isArray(out) && typeof out[0] === "string") {
-    const first = out[0];
-    if (first.startsWith("http")) {
-      const buf = await downloadToBuffer(first, 300000);
-      return sharp(buf).png().toBuffer();
-    }
-    if (first.startsWith("data:")) {
-      const b = dataUrlToBuffer(first);
-      if (!b) throw new Error("Replicate retornou dataURL inválida (array).");
-      return sharp(b).png().toBuffer();
-    }
-  }
-
-  // 4) objeto { url }
-  if (out && typeof out === "object" && typeof out.url === "string") {
-    const buf = await downloadToBuffer(out.url, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  // 5) array de objetos [{ url }]
-  if (Array.isArray(out) && out[0] && typeof out[0] === "object" && typeof out[0].url === "string") {
-    const buf = await downloadToBuffer(out[0].url, 300000);
-    return sharp(buf).png().toBuffer();
-  }
-
-  throw new Error("Replicate não retornou imagem válida. Output=" + JSON.stringify(out).slice(0, 900));
-}
-
-/**
- * ✅ GERA IMAGEM COM REPlicate USANDO REFERÊNCIA (Seedream-4)
- * - referência vem do Storage via signedUrl/publicUrl
- * - retorna Buffer PNG
- */
-async function openaiImageEditFromReference({
-  prompt,
-  userId,
-  bookId,
-  manifest,
-}) {
-  if (!REPLICATE_API_TOKEN) {
-    throw new Error("REPLICATE_API_TOKEN ausente. Imagens devem ser geradas pelo Replicate.");
-  }
-
-  const uid = String(userId || manifest?.ownerId || "").trim();
-  const bid = String(bookId || manifest?.id || "").trim();
-  if (!uid || !bid) throw new Error("openaiImageEditFromReference: userId/bookId ausentes.");
-
-  // ✅ URL http(s) estável para o Seedream (preferível a dataURL)
-  const referenceUrl = await getSeedreamReferenceUrl({ userId: uid, bookId: bid, manifest });
-
-  // ✅ opcional (recomendado): preflight pra garantir que a URL baixa (evita 403/expirada)
-  if (/^https?:\/\//i.test(referenceUrl)) {
-    try {
-      const testBuf = await downloadToBuffer(referenceUrl, 20000);
-      console.log("✅ PREFLIGHT referenceUrl OK:", { bytes: testBuf.length });
-    } catch (e) {
-      throw new Error("REFERENCE_URL_NOT_FETCHABLE: " + String(e?.message || e));
-    }
-  }
-
-  const input = {
-    prompt,
-    size: REPLICATE_SIZE || "2K",
-    aspect_ratio: REPLICATE_ASPECT_RATIO || "match_input_image",
-    sequential_image_generation: REPLICATE_SEQUENTIAL || "disabled",
-    max_images: clamp(REPLICATE_MAX_IMAGES || 1, 1, 15),
-    enhance_prompt: !!REPLICATE_ENHANCE_PROMPT,
-  };
-  const imageField = String(REPLICATE_IMAGE_FIELD || "image").trim() || "image";
-
-  const refAsArray = [referenceUrl];
-  const refAsString = referenceUrl;
-
-  input[imageField] = REPLICATE_IMAGE_IS_ARRAY ? refAsArray : refAsString;
-  if (!("image" in input)) input.image = refAsString;
-  if (!("image_input" in input)) input.image_input = refAsArray;
-
-  console.log("📤 Seedream payload check (sync):", {
-    model: REPLICATE_MODEL,
-    imageFieldUsed: imageField,
-    has_image: typeof input.image === "string" && input.image.startsWith("http"),
-    has_image_input: Array.isArray(input.image_input) && String(input.image_input[0] || "").startsWith("http"),
-    keys: Object.keys(input),
-  });
-
-  console.log("📤 Replicate (Seedream-4) createPrediction:", {
-    model: REPLICATE_MODEL,
-    imageField,
-    ref: referenceUrl.slice(0, 90) + "...",
-    inputKeys: Object.keys(input),
-    promptLen: String(prompt || "").length,
-  });
-
-  const created = await replicateCreatePrediction({
-    model: REPLICATE_MODEL,
-    input,
-    timeoutMs: 120000,
-  });
-
-  const pid = String(created?.id || "").trim();
-  if (!pid) throw new Error("Replicate não retornou prediction id.");
-
-  // ✅ aqui é modo “sequencial local” (espera terminar)
-  const pred = await replicateWaitPrediction(pid, { timeoutMs: 300000, pollMs: 1200 });
-  return replicateOutputToPngBuffer(pred);
-}
 async function generateStoryTextPages({ childName, childAge, childGender, themeKey, pagesCount }) {
   const theme_key = String(themeKey || "space");
   const age = clamp(childAge, 2, 12);
@@ -1256,13 +1088,13 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
   const style = String(styleKey || "read").trim();
 
   const parts = [
-  "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
-  "Use the child from Image 1 as the main central character on the cover.",
-  "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
-  "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
-  "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
-  "",
-  "Create a children's book cover.",
+    "INSTRUCTION: IDENTITY LOCK = MAXIMUM. REFERENCE IMAGE IS THE ONLY TRUE IDENTITY SOURCE.",
+    "Use the child from Image 1 as the main central character on the cover.",
+    "Face match must be exact: same facial structure, eyes, nose, mouth, cheeks, chin.",
+    "Keep the same skin tone, hair color, hair style, and approximate age as Image 1.",
+    "DO NOT change the person. Do NOT create a different child. Do NOT average faces.",
+    "",
+    "Create a children's book cover.",
     `Theme: ${th}.`,
     "Scene: cheerful, magical, positive, with child prominently centered.",
     "Expression: happy, excited, inviting adventure.",
@@ -2504,10 +2336,6 @@ app.get("/api/progress/:id", requireAuth, async (req, res) => {
 });
 
 /**
- * ✅ /api/generateNext — 1 passo por request
- * CORREÇÃO: define imagePngPath (antes não existia) e faz fallback do Storage quando disco não tem.
- */
-/**
  * ✅ /api/generateNext — 1 passo por request (SEM lock duplicado)
  */
 app.post("/api/generateNext", async (req, res) => {
@@ -2653,7 +2481,6 @@ if (m?.nextTryAt && Number(m.nextTryAt) > now) {
       return res.json(buildProgress(m, "História criada ✅"));
     }
 
-    // 2) COVER
     // 2) COVER (ASSÍNCRONO via Replicate job + poll once)
 const coverFinalPath = path.join(bookDir, "cover_final.png");
 const needCover = !(m.cover?.ok && (m.cover?.storageKey || m.cover?.url));
@@ -2734,7 +2561,7 @@ if (needCover) {
 
 const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
 const pid = await replicateCreateImageJob({ prompt: coverPrompt, referenceUrl });
-m.pending = { type: "cover", predictionId: pid, createdAt: nowISO(), referenceUrl };
+  m.pending = { type: "cover", predictionId: pid, createdAt: nowISO() };
   m.step = "cover_queued";
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -2828,7 +2655,7 @@ m.pending = { type: "cover", predictionId: pid, createdAt: nowISO(), referenceUr
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
 const referenceUrl = await getSeedreamReferenceUrl({ userId, bookId: id, manifest: m });
 const pid = await replicateCreateImageJob({ prompt, referenceUrl });
-m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO(), referenceUrl };
+  m.pending = { type: "page", page: nextPage, predictionId: pid, createdAt: nowISO() };
   m.step = `page_${nextPage}_queued`;
   m.updatedAt = nowISO();
   await saveManifestAll(userId, id, m, { sbUser: req.sb });
@@ -3010,12 +2837,13 @@ async function runGeneration(userId, bookId) {
       styleKey,
     });
 
-const coverBuf = await openaiImageEditFromReference({
-  prompt: coverPrompt,
-  userId,
-  bookId,
-  manifest: m,
-});
+    // ✅ CORREÇÃO: Usa generateImageWithReference em vez de openaiImageEditFromReference
+    const coverBuf = await generateImageWithReference({
+      prompt: coverPrompt,
+      userId,
+      bookId,
+      manifest: m,
+    });
 
     const coverBase = path.join(bookDir, "cover.png");
     await fsp.writeFile(coverBase, coverBuf);
@@ -3050,12 +2878,13 @@ const coverBuf = await openaiImageEditFromReference({
         styleKey,
       });
 
-    const imgBuf = await openaiImageEditFromReference({
-  prompt,
-  userId,
-  bookId,
-  manifest: m,
-});
+      // ✅ CORREÇÃO: Usa generateImageWithReference em vez de openaiImageEditFromReference
+      const imgBuf = await generateImageWithReference({
+        prompt,
+        userId,
+        bookId,
+        manifest: m,
+      });
 
       const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
       await fsp.writeFile(basePath, imgBuf);
