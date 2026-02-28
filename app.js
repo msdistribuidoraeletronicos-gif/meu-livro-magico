@@ -3036,13 +3036,7 @@ app.get("/books", requireAuth, async (req, res) => {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
     }
-// Teste opcional no boot (se preferir, deixe só o endpoint /api/supabase-check)
-supabaseSanityCheck()
-  .then((r) => {
-    if (r.ok) console.log("✅ Supabase sanity check OK:", r.bucket);
-    else console.log("ℹ️  Supabase sanity check skip:", r.reason);
-  })
-  .catch((e) => console.log("❌ Supabase sanity check FAIL:", String(e?.message || e)));
+
     if (sbEnabled()) {
       console.log("✅ Supabase Storage ativo:", SUPABASE_URL);
       console.log("ℹ️  Bucket:", SUPABASE_STORAGE_BUCKET);
