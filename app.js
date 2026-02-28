@@ -743,17 +743,28 @@ async function removeMaskIfBlank(maskBuf) {
 // - Senão: fallback OpenAI /v1/images/edits
 // - Retorna Buffer PNG
 // ------------------------------
+// ------------------------------
+// IMAGEM SEQUENCIAL (principal)
+// - Replicate se token configurado
+// - Senão: fallback OpenAI /v1/images/edits
+// - Retorna Buffer PNG
+// ------------------------------
 async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
   if (REPLICATE_API_TOKEN) {
     const imgBuf = await fsp.readFile(imagePngPath);
     const maskBuf = maskPngPath && existsSyncSafe(maskPngPath) ? await fsp.readFile(maskPngPath) : null;
+
+    // ✅ NÃO envia máscara se estiver “em branco”
     const effectiveMask = maskBuf ? await removeMaskIfBlank(maskBuf).catch(() => maskBuf) : null;
 
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
 
+    // ✅ input base: SEMPRE manda image_input com a foto
     const input = {
       prompt,
+
+      // ✅ referência de identidade (a foto enviada)
       image_input: [refDataUrl],
 
       aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
@@ -761,12 +772,18 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
       output_format: REPLICATE_OUTPUT_FORMAT || "png",
       safety_filter_level: REPLICATE_SAFETY || "block_only_high",
 
-      // ✅ só o mais “universal”
+      // ✅ força o modelo a respeitar a referência
       match_input_image: true,
     };
 
-    // ✅ Opcional: só ligue se você tiver certeza que o modelo aceita
-    // input.strength = 0.45;
+    // ✅ Só manda mask se ela NÃO estiver vazia (isso evita ignorar a referência)
+    // (muitos modelos “bugam” se mask transparente é enviada)
+    if (maskDataUrl) {
+      // Alguns modelos aceitam "mask", outros "mask_image".
+      // Se o seu modelo aceitar mask, mantenha esta linha.
+      // Se não aceitar, comente.
+      input.mask = maskDataUrl;
+    }
 
     const created = await replicateCreatePrediction({
       model: REPLICATE_MODEL || "google/nano-banana-pro",
@@ -786,6 +803,7 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     return await sharp(buf).png().toBuffer();
   }
 
+  // fallback OpenAI
   return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
 }
 
@@ -868,114 +886,127 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, chi
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const age = clamp(childAge ?? 6, 2, 12);
-  const g = genderLabel(childGender);
+  const genderRaw = String(childGender || "neutral");
+  const g = genderLabel(genderRaw);
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  const identity = [
-    "Use a criança da imagem enviada como personagem principal.",
-    "Mantenha TODAS as características originais do rosto (cabelo, cor da pele, traços). Não altere identidade.",
-    "A identidade deve ser consistente em todas as páginas (same face, same hairstyle, same skin tone).",
-    "Não invente outra criança diferente.",
-     "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
-    "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
-     "Cena coerente e bonita para livro infantil.",
-     "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
-"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
-"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
-  ].join(" ");
+  // ✅ “hard header” (isso ajuda MUITO o modelo)
+  const header = [
+    "DADOS OBRIGATÓRIOS (NÃO IGNORAR):",
+    `- Foto de referência: usar o ROSTO da criança enviada (mesma identidade).`,
+    name ? `- Nome (contexto): ${name}` : "",
+    `- Idade: ${age}`,
+    `- Gênero do texto: ${genderRaw}`,
+    `- Tema: ${String(themeKey || "space")}`,
+    `- Estilo: ${style}`,
+  ].filter(Boolean).join("\n");
 
-  const meta = [
-    name ? `Nome (contexto): ${name}.` : "",
-    `Idade: ${age} anos.`,
-    `Gênero do texto: ${String(childGender || "neutral")}.`,
-    `A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade da foto).`,
-  ].filter(Boolean).join(" ");
+  const identityRules = [
+    "REGRAS DE IDENTIDADE (OBRIGATÓRIO):",
+    "1) Use a criança da foto enviada como personagem principal.",
+    "2) Preserve o rosto (mesmos traços, pele, cabelo). NÃO invente outra criança.",
+    "3) Identidade consistente em TODAS as páginas.",
+    "4) Use APENAS o ROSTO como referência de identidade.",
+    "5) Você PODE mudar roupa, corpo, pose e cenário para combinar com a cena.",
+    "6) NÃO copie a roupa original da foto; vista conforme o tema.",
+  ].join("\n");
 
-  const rules = [
-    "NÃO escreva texto/legendas dentro da imagem.",
-    "A criança deve estar integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
-    "Cena coerente e bonita para livro infantil.",
-  ].join(" ");
+  const sceneRules = [
+    "REGRAS DA IMAGEM:",
+    `- A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade da foto).`,
+    "- Cena integrada naturalmente, com ação e emoção compatíveis com o texto.",
+    "- Não escrever texto/legendas na imagem.",
+    "- Ilustração bonita e coerente para livro infantil.",
+  ].join("\n");
 
   if (style === "color") {
     return [
-      "Crie UMA ilustração para um livro infantil baseado no texto abaixo.",
-      `TEXTO: "${txt}"`,
-      `TEMA: ${th}.`,
-      meta,
-      identity,
-      "ESTILO: livro para colorir (coloring book).",
-      "Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
-      "SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM textura realista.",
-      "Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
-      rules,
-    ].join(" ");
+      header,
+      identityRules,
+      sceneRules,
+      "ESTILO VISUAL:",
+      "- Livro para colorir (coloring book).",
+      "- Preto e branco, contornos fortes e limpos, linhas mais grossas.",
+      "- Sem cores, sem gradientes, sem sombras, sem textura realista.",
+      "- Fundo branco (ou bem claro) e poucos detalhes no fundo.",
+      "",
+      `TEMA (descrição): ${th}`,
+      `TEXTO DA PÁGINA: "${txt}"`,
+    ].join("\n");
   }
 
   return [
-    "Crie UMA ilustração para um livro infantil baseado no texto abaixo.",
-    `TEXTO: "${txt}"`,
-    `TEMA: ${th}.`,
-    meta,
-    identity,
-    "ESTILO: ilustração semi-realista de livro infantil, alegre, cores agradáveis, luz suave.",
-    rules,
-  ].join(" ");
+    header,
+    identityRules,
+    sceneRules,
+    "ESTILO VISUAL:",
+    "- Ilustração semi-realista de livro infantil, alegre, colorida, luz suave.",
+    "",
+    `TEMA (descrição): ${th}`,
+    `TEXTO DA PÁGINA: "${txt}"`,
+  ].join("\n");
 }
 
 function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey }) {
   const th = themeDesc(themeKey);
   const name = String(childName || "").trim();
   const age = clamp(childAge ?? 6, 2, 12);
-  const g = genderLabel(childGender);
+  const genderRaw = String(childGender || "neutral");
+  const g = genderLabel(genderRaw);
   const style = String(styleKey || "read").trim();
 
-  const identity = [
-    "Use a criança da imagem enviada como personagem principal.",
-    "Mantenha TODAS as características originais do rosto (identidade consistente).",
-    "A capa deve combinar com as páginas (mesma identidade).",
-    "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
-"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
-"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
-  ].join(" ");
+  const header = [
+    "CAPA DE LIVRO INFANTIL (NÃO IGNORAR DADOS):",
+    `- Foto de referência: usar o ROSTO da criança enviada (mesma identidade).`,
+    name ? `- Nome (contexto): ${name}` : "",
+    `- Idade: ${age}`,
+    `- Gênero do texto: ${genderRaw}`,
+    `- Tema: ${String(themeKey || "space")}`,
+    `- Estilo: ${style}`,
+  ].filter(Boolean).join("\n");
 
-  const meta = [
-    name ? `Nome (contexto): ${name}.` : "",
-    `Idade: ${age} anos.`,
-    `Gênero do texto: ${String(childGender || "neutral")}.`,
-    `A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade da foto).`,
-  ].filter(Boolean).join(" ");
+  const identityRules = [
+    "REGRAS DE IDENTIDADE (OBRIGATÓRIO):",
+    "1) Use a criança da foto enviada como personagem principal.",
+    "2) Preserve o rosto (mesmos traços, pele, cabelo). NÃO invente outra criança.",
+    "3) Use APENAS o ROSTO como referência de identidade.",
+    "4) Você PODE mudar roupa, corpo, pose e cenário para combinar com o tema.",
+    "5) NÃO copie a roupa original da foto; vista conforme o tema.",
+  ].join("\n");
 
-  const rules = "NÃO escreva texto/legendas dentro da imagem (eu aplico depois).";
+  const coverRules = [
+    "REGRAS DA CAPA:",
+    `- A criança deve parecer uma/um ${g} de aproximadamente ${age} anos (sem mudar a identidade).`,
+    "- Composição: criança em destaque central + elementos do tema ao redor.",
+    "- Não escrever texto/legendas na imagem (o sistema adiciona depois).",
+    "- Visual mágico, alegre e positivo.",
+  ].join("\n");
 
   if (style === "color") {
     return [
-      "Crie uma CAPA de livro infantil.",
-      `TEMA: ${th}.`,
-      meta,
-      identity,
-      "ESTILO: CAPA em formato de livro para colorir (coloring book).",
-      "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
-      "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
-      "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
-      "Composição: alegre, mágica, positiva, criança em destaque central.",
-      "IMPORTANTE: Use APENAS o ROSTO da criança como referência de identidade.",
-"Você PODE e DEVE mudar roupas, corpo, pose, cenário e acessórios conforme o tema e o texto.",
-"NÃO copie a roupa da foto original. Vista a criança apropriadamente para a cena (ex: super-herói, mergulho, selva, etc).",
-      rules,
-    ].join(" ");
+      header,
+      identityRules,
+      coverRules,
+      "ESTILO VISUAL:",
+      "- Capa em formato de livro para colorir (coloring book).",
+      "- Preto e branco, contornos fortes e limpos.",
+      "- Sem cores, sem gradientes, sem sombras, sem textura realista.",
+      "- Fundo branco (ou bem claro) e poucos detalhes.",
+      "",
+      `TEMA (descrição): ${th}`,
+    ].join("\n");
   }
 
   return [
-    "Crie uma CAPA de livro infantil.",
-    `TEMA: ${th}.`,
-    meta,
-    identity,
-    "ESTILO: ilustração semi-realista, alegre, colorida, luz suave.",
-    "Composição: alegre, mágica, positiva, criança em destaque central.",
-    rules,
-  ].join(" ");
+    header,
+    identityRules,
+    coverRules,
+    "ESTILO VISUAL:",
+    "- Ilustração semi-realista de livro infantil, alegre, colorida, luz suave.",
+    "",
+    `TEMA (descrição): ${th}`,
+  ].join("\n");
 }
 
 // ------------------------------
