@@ -1,28 +1,14 @@
 /**
  * app.js — MONOCÓDIGO (UI + API + OpenAI + PDF)
- * MODO SEQUENCIAL (1 imagem por vez) + TEXTO DENTRO DA IMAGEM
- *
- * ✅ OBJETIVO desta versão (correção pedida):
- * - Trazer PARA O SEU CÓDIGO ATUAL a MESMA “lógica vencedora” do seu antigo:
- *   → gerar TODAS as imagens SEMPRE a partir da MESMA imagem de referência (edit_base.png),
- *   → com prompt forte de consistência de identidade,
- *   → e com Replicate “blindado” para enviar o campo correto do modelo (image_input/image/input_image/etc)
- *     baseado no schema real do version.
- *
- * ✅ Correções principais:
- * 1) ✅ Replicate: Descobre dinamicamente, via OpenAPI schema do VERSION, qual o nome do campo de imagem
- *    (ex.: image_input, image, input_image, reference_image, etc) e envia SÓ os campos suportados.
- *    (Isso evita “não segue referência” por estar enviando no campo errado OU sendo ignorado.)
- * 2) ✅ Replicate: Se o schema disser que o campo de imagem é string, envia DataURL string.
- *    Se disser array, envia [DataURL].
- * 3) ✅ Replicate: “match_input_image / strength / guidance / seed / negative_prompt” só são enviados
- *    se o schema suportar (evita erro e maximiza aderência).
- * 4) ✅ Prompt: reforço explícito “use a criança da imagem como protagonista, mesma identidade”,
- *    e um “negative prompt” (se suportado) bloqueando “criança aleatória / rosto diferente / idade diferente”.
+ * ✅ MODO SEQUENCIAL (1 imagem por vez) + TEXTO DENTRO DA IMAGEM
+ * ✅ Replicate (principal) com imagem de referência (image_input) + compat aliases (image/input_image)
+ * ✅ VERCEL-SAFE: grava em /tmp quando process.env.VERCEL estiver ativo
+ * ✅ SUPABASE STORAGE (opcional): faz upload/restore quando arquivo não existir no disco
  *
  * Requisitos:
  *  - Node 18+ (fetch global)
  *  - npm i express pdfkit dotenv sharp
+ *  - (opcional) npm i @supabase/supabase-js  -> se quiser Storage no Supabase
  *
  * Rodar:
  *   node app.js
@@ -101,17 +87,28 @@ const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "1:1
 const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "png").trim();
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
 
-// parâmetros extras (aplicados somente se o schema suportar)
-const REPLICATE_SEED = process.env.REPLICATE_SEED ? Number(process.env.REPLICATE_SEED) : null;
-const REPLICATE_GUIDANCE = process.env.REPLICATE_GUIDANCE ? Number(process.env.REPLICATE_GUIDANCE) : null;
-const REPLICATE_STRENGTH = process.env.REPLICATE_STRENGTH ? Number(process.env.REPLICATE_STRENGTH) : null;
+// Supabase Storage (opcional)
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "books").trim();
 
-const OUT_DIR = path.join(__dirname, "output");
-const USERS_DIR = path.join(OUT_DIR, "users");
+// Vercel-safe base
+const IS_VERCEL = !!process.env.VERCEL;
+
+// Onde salva arquivos localmente
+const LOCAL_BASE = IS_VERCEL ? path.join("/tmp", "mlm-output") : path.join(__dirname, "output");
+
+// ✅ mantém users.json aqui
+const OUT_DIR = LOCAL_BASE;
+const USERS_FILE = path.join(OUT_DIR, "users.json");
+
+// ✅ livros ficam aqui
 const BOOKS_DIR = path.join(OUT_DIR, "books");
+
+// JSON limit
 const JSON_LIMIT = "25mb";
 
-// Base de edição (mantém performance e garante match image/mask)
+// Base de edição
 const EDIT_MAX_SIDE = 1024;
 
 // Provider de imagem ativo
@@ -121,6 +118,29 @@ const IMAGE_PROVIDER = REPLICATE_API_TOKEN ? "replicate" : "openai";
 const LANDING_HTML = path.join(__dirname, "landing.html");
 const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
 const EXEMPLOS_HTML = path.join(__dirname, "exemplos.html");
+
+// ------------------------------
+// Supabase client (opcional)
+// ------------------------------
+let supabase = null;
+(function initSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.log("ℹ️  Supabase Storage: desativado (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes).");
+    return;
+  }
+  try {
+    const { createClient } = require("@supabase/supabase-js");
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { "X-Client-Info": "mlm-monocode" } },
+    });
+    console.log("✅ Supabase Storage: ativo (bucket =", SUPABASE_STORAGE_BUCKET + ")");
+  } catch (e) {
+    console.warn("⚠️  Supabase Storage: NÃO inicializou. Instale: npm i @supabase/supabase-js");
+    console.warn("   Motivo:", String(e?.message || e));
+    supabase = null;
+  }
+})();
 
 // ------------------------------
 // Helpers: FS
@@ -231,6 +251,47 @@ function escapeHtml(s) {
 }
 
 // ------------------------------
+// Supabase Storage Helpers (opcional)
+// ------------------------------
+function sbEnabled() {
+  return !!supabase;
+}
+
+function sbKeyFor(userId, bookId, fileName) {
+  // organização simples
+  return `users/${String(userId)}/books/${String(bookId)}/${String(fileName)}`;
+}
+
+async function sbUploadBuffer(key, buf, contentType = "application/octet-stream") {
+  if (!sbEnabled()) return { ok: false, key, reason: "supabase_disabled" };
+  const { error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).upload(key, buf, {
+    upsert: true,
+    contentType,
+    cacheControl: "3600",
+  });
+  if (error) return { ok: false, key, reason: String(error.message || error) };
+  return { ok: true, key };
+}
+
+async function sbDownloadToBuffer(key) {
+  if (!sbEnabled()) return { ok: false, reason: "supabase_disabled", buf: null };
+  const { data, error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(key);
+  if (error || !data) return { ok: false, reason: String(error?.message || error || "download_failed"), buf: null };
+  const ab = await data.arrayBuffer();
+  return { ok: true, buf: Buffer.from(ab) };
+}
+
+async function ensureFileFromStorageIfMissing(localPath, storageKey) {
+  if (existsSyncSafe(localPath)) return true;
+  if (!storageKey) return false;
+  const got = await sbDownloadToBuffer(storageKey);
+  if (!got.ok || !got.buf) return false;
+  await ensureDir(path.dirname(localPath));
+  await fsp.writeFile(localPath, got.buf);
+  return true;
+}
+
+// ------------------------------
 // ADMIN helpers
 // - ADMIN_EMAILS no .env.local: "email1@x.com,email2@y.com"
 // ------------------------------
@@ -254,7 +315,6 @@ function canAccessBook(userId, manifest, reqUser) {
 // - usuários: output/users.json
 // - sessão: cookie + Map em memória
 // ------------------------------
-const USERS_FILE = path.join(OUT_DIR, "users.json");
 const SESSION_COOKIE = "mlm_session";
 const sessions = new Map(); // token -> { userId, createdAt }
 
@@ -468,6 +528,7 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
     try {
       const body = { model, input };
       if (jsonObject) body.text = { format: { type: "json_object" } };
+      // ✅ CORREÇÃO: URL sem espaço
       return await openaiFetchJson("https://api.openai.com/v1/responses", body, timeoutMs);
     } catch (e) {
       lastErr = e;
@@ -481,11 +542,9 @@ async function openaiResponsesWithFallback({ models, input, jsonObject = true, t
 }
 
 // ------------------------------
-// Replicate — imagem (principal)
-// ✅ BLINDADO: schema-driven input (campo certo de referência)
+// Replicate — imagem (principal) ✅ FIX 422: version obrigatório
 // ------------------------------
 const replicateVersionCache = new Map(); // key: "owner/name" -> versionId
-const replicateSchemaCache = new Map(); // key: versionId -> { properties, required, raw }
 
 function splitReplicateModel(model) {
   const s = String(model || "").trim();
@@ -508,6 +567,7 @@ async function replicateGetLatestVersionId(model) {
     );
   }
 
+  // ✅ CORREÇÃO: URL sem espaço
   const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
     method: "GET",
     timeoutMs: 60000,
@@ -525,182 +585,12 @@ async function replicateGetLatestVersionId(model) {
   return String(versionId);
 }
 
-async function replicateGetVersionSchema(versionId) {
-  const vid = String(versionId || "").trim();
-  if (!vid) return null;
-  if (replicateSchemaCache.has(vid)) return replicateSchemaCache.get(vid);
-
-  // endpoint oficial: /v1/models/{owner}/{name}/versions/{version}
-  // mas para evitar depender do owner/name aqui, usamos o que o /v1/predictions exige: version id
-  // O Replicate não tem endpoint direto /versions/{id} público em todos os casos, então:
-  // - tentamos primeiro pelo modelo/version (se REPLICATE_MODEL tiver owner/name)
-  // - senão, não teremos schema (e cairemos no fallback de heurística)
-  const parsed = splitReplicateModel(REPLICATE_MODEL);
-  if (!parsed) return null;
-
-  let ver;
-  try {
-    ver = await fetchJson(
-      `https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}/versions/${encodeURIComponent(vid)}`,
-      {
-        method: "GET",
-        timeoutMs: 60000,
-        headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-      }
-    );
-  } catch (e) {
-    // sem schema
-    return null;
-  }
-
-  const schema = ver?.openapi_schema || ver?.openapi_schema?.components || ver?.openapi_schema?.schema;
-  // Na prática o que a gente precisa: input.properties + required
-  // Replicate costuma usar: openapi_schema.components.schemas.Input
-  let inputSchema = null;
-
-  try {
-    const comp = ver?.openapi_schema?.components?.schemas;
-    if (comp?.Input) inputSchema = comp.Input;
-    else if (comp?.Prediction?.properties?.input) inputSchema = comp.Prediction.properties.input;
-    else if (ver?.openapi_schema?.components?.schemas?.input) inputSchema = ver.openapi_schema.components.schemas.input;
-  } catch {}
-
-  // fallback: tenta achar “Input” em qualquer lugar
-  if (!inputSchema) {
-    try {
-      const comp = ver?.openapi_schema?.components?.schemas || {};
-      for (const k of Object.keys(comp)) {
-        if (String(k).toLowerCase() === "input") {
-          inputSchema = comp[k];
-          break;
-        }
-      }
-    } catch {}
-  }
-
-  const normalized = inputSchema
-    ? {
-        properties: inputSchema.properties || {},
-        required: Array.isArray(inputSchema.required) ? inputSchema.required : [],
-        raw: inputSchema,
-      }
-    : null;
-
-  replicateSchemaCache.set(vid, normalized);
-  return normalized;
-}
-
-function schemaHasProp(schema, key) {
-  if (!schema?.properties) return false;
-  return Object.prototype.hasOwnProperty.call(schema.properties, key);
-}
-
-function schemaPropType(schema, key) {
-  try {
-    const p = schema?.properties?.[key];
-    if (!p) return "";
-    if (p.type) return String(p.type);
-    if (Array.isArray(p.anyOf)) {
-      const t = p.anyOf.map((x) => x?.type).filter(Boolean)[0];
-      if (t) return String(t);
-    }
-  } catch {}
-  return "";
-}
-
-// encontra o “campo de imagem” mais provável pelo schema
-function findImageFieldFromSchema(schema) {
-  const candidates = [
-    "image_input",
-    "image",
-    "input_image",
-    "reference_image",
-    "source_image",
-    "init_image",
-    "base_image",
-    "img",
-    "images",
-  ];
-
-  for (const k of candidates) {
-    if (schemaHasProp(schema, k)) return k;
-  }
-
-  // heurística: qualquer property com formato “uri”/“data-url”/“binary”
-  try {
-    const props = schema?.properties || {};
-    for (const [k, v] of Object.entries(props)) {
-      const s = JSON.stringify(v || {}).toLowerCase();
-      if (s.includes("image") && (s.includes("uri") || s.includes("base64") || s.includes("data:") || s.includes("binary"))) {
-        return k;
-      }
-    }
-  } catch {}
-
-  return ""; // desconhecido
-}
-
-// monta input usando SOMENTE campos suportados
-function buildReplicateInputFromSchema(schema, baseInput, overrides) {
-  const out = {};
-  const props = schema?.properties || null;
-
-  // sem schema: manda o que temos (fallback antigo)
-  if (!props) {
-    return { ...baseInput, ...(overrides || {}) };
-  }
-
-  const addIfSupported = (k, v) => {
-    if (!schemaHasProp(schema, k)) return;
-    if (typeof v === "undefined") return;
-    out[k] = v;
-  };
-
-  // copia prompt sempre se suportado; se schema não tiver prompt, ainda tentamos "text_prompt"
-  if (schemaHasProp(schema, "prompt")) out.prompt = baseInput.prompt;
-  else if (schemaHasProp(schema, "text_prompt")) out.text_prompt = baseInput.prompt;
-
-  // imagem (campo correto)
-  if (baseInput.__imageField && schemaHasProp(schema, baseInput.__imageField)) {
-    out[baseInput.__imageField] = baseInput.__imageValue;
-  }
-
-  // opcional: mask se suportado
-  if (baseInput.__maskField && schemaHasProp(schema, baseInput.__maskField)) {
-    out[baseInput.__maskField] = baseInput.__maskValue;
-  }
-
-  // “extras” comuns — só se suportado
-  addIfSupported("aspect_ratio", baseInput.aspect_ratio);
-  addIfSupported("resolution", baseInput.resolution);
-  addIfSupported("output_format", baseInput.output_format);
-  addIfSupported("safety_filter_level", baseInput.safety_filter_level);
-
-  // qualidade / aderência (depende do modelo)
-  addIfSupported("guidance", overrides?.guidance);
-  addIfSupported("cfg_scale", overrides?.guidance);
-  addIfSupported("strength", overrides?.strength);
-  addIfSupported("prompt_strength", overrides?.strength);
-  addIfSupported("seed", overrides?.seed);
-
-  addIfSupported("negative_prompt", overrides?.negative_prompt);
-  addIfSupported("neg_prompt", overrides?.negative_prompt);
-
-  addIfSupported("match_input_image", overrides?.match_input_image);
-  addIfSupported("preserve_input_image", overrides?.match_input_image);
-  addIfSupported("keep_identity", overrides?.match_input_image);
-  addIfSupported("id_strength", overrides?.id_strength);
-
-  // outros conhecidos (não quebra se não existir)
-  addIfSupported("num_inference_steps", overrides?.steps);
-  addIfSupported("steps", overrides?.steps);
-
-  return out;
-}
-
-async function replicateCreatePredictionByVersion({ version, input, timeoutMs = 180000 }) {
+async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN não configurado (.env.local).");
 
+  const version = await replicateGetLatestVersionId(model);
+
+  // ✅ CORREÇÃO: URL sem espaço
   return await fetchJson("https://api.replicate.com/v1/predictions", {
     method: "POST",
     timeoutMs,
@@ -721,6 +611,7 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
       throw new Error("Timeout aguardando prediction do Replicate.");
     }
 
+    // ✅ CORREÇÃO: URL sem espaço
     const pred = await fetchJson(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       method: "GET",
       timeoutMs: 60000,
@@ -778,6 +669,7 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
         form.append("mask", new Blob([maskBuf], { type: "image/png" }), path.basename(maskPngPath) || "mask.png");
       }
 
+      // ✅ CORREÇÃO: URL sem espaço
       const r = await fetch("https://api.openai.com/v1/images/edits", {
         method: "POST",
         headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
@@ -803,91 +695,47 @@ async function openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size
 }
 
 /**
- * IMAGEM SEQUENCIAL (principal)
- * - Replicate se token configurado (com schema-driven image field)
+ * IMAGEM SEQUENCIAL (principal) — LÓGICA CORRIGIDA DO CÓDIGO ANTERIOR
+ * - Replicate se token configurado
  * - Senão: fallback OpenAI /v1/images/edits
  * - Retorna Buffer PNG
+ *
+ * ✅ Correção do "ignora referência":
+ *   Continua mandando image_input: [dataUrl]
+ *   MAS também manda aliases (image / input_image) com o MESMO dataUrl
+ *   (muitos modelos ignoram image_input e só aceitam image ou input_image)
+ * ✅ Envia máscara quando disponível
  */
 async function openaiImageEditFromReference({ imagePngPath, maskPngPath, prompt, size = "1024x1024" }) {
   if (REPLICATE_API_TOKEN) {
     const imgBuf = await fsp.readFile(imagePngPath);
     const maskBuf = maskPngPath && existsSyncSafe(maskPngPath) ? await fsp.readFile(maskPngPath) : null;
 
-    const version = await replicateGetLatestVersionId(REPLICATE_MODEL || "google/nano-banana-pro");
-    const schema = await replicateGetVersionSchema(version);
+    const refDataUrl = bufferToDataUrlPng(imgBuf);
+    const maskDataUrl = maskBuf ? bufferToDataUrlPng(maskBuf) : null;
 
-    // Descobre qual é o campo “certo” para referência
-    const imageField = findImageFieldFromSchema(schema) || "image_input";
-
-    // prepara valor conforme o tipo (string vs array)
-    const t = schemaPropType(schema, imageField).toLowerCase();
-    const dataUrl = bufferToDataUrlPng(imgBuf);
-    const imageValue = t === "array" ? [dataUrl] : dataUrl;
-
-    // mask: só envia se existir no schema (alguns modelos aceitam "mask", "mask_image", etc)
-    let maskField = "";
-    let maskValue = null;
-
-    if (schema) {
-      const maskCandidates = ["mask", "mask_image", "mask_input", "mask_png", "image_mask"];
-      for (const k of maskCandidates) {
-        if (schemaHasProp(schema, k)) {
-          maskField = k;
-          const mt = schemaPropType(schema, k).toLowerCase();
-          if (maskBuf) {
-            const mdu = bufferToDataUrlPng(maskBuf);
-            maskValue = mt === "array" ? [mdu] : mdu;
-          }
-          break;
-        }
-      }
-    }
-
-    // base input “universal”
-    const baseInput = {
+    const input = {
       prompt,
+
+      // ✅ LÓGICA DO CÓDIGO ANTERIOR: referência em image_input (array)
+      image_input: [refDataUrl],
+
+      // ✅ Aliases compatíveis (NÃO MUDA a lógica, só garante que o modelo pegue a referência)
+      image: refDataUrl,
+      input_image: refDataUrl,
+      reference_image: refDataUrl,
+
+      // ✅ máscara (se o modelo aceitar)
+      ...(maskDataUrl ? { mask: maskDataUrl, mask_image: maskDataUrl } : {}),
+
       aspect_ratio: REPLICATE_ASPECT_RATIO || "1:1",
       resolution: REPLICATE_RESOLUTION || "2K",
       output_format: REPLICATE_OUTPUT_FORMAT || "png",
       safety_filter_level: REPLICATE_SAFETY || "block_only_high",
-
-      __imageField: imageField,
-      __imageValue: imageValue,
-
-      __maskField: maskField || "",
-      __maskValue: maskValue,
     };
 
-    const negative_prompt = [
-      "different child",
-      "different face",
-      "random child",
-      "face swap",
-      "changed identity",
-      "different hairstyle",
-      "different skin tone",
-      "different age",
-      "adult",
-      "teen",
-      "wrong gender",
-      "text",
-      "caption",
-      "watermark",
-      "logo",
-    ].join(", ");
-
-    const input = buildReplicateInputFromSchema(schema, baseInput, {
-      match_input_image: true,
-      guidance: Number.isFinite(REPLICATE_GUIDANCE) ? REPLICATE_GUIDANCE : undefined,
-      strength: Number.isFinite(REPLICATE_STRENGTH) ? REPLICATE_STRENGTH : undefined,
-      seed: Number.isFinite(REPLICATE_SEED) ? REPLICATE_SEED : undefined,
-      negative_prompt,
-      steps: undefined,
-      id_strength: undefined,
-    });
-
-    const created = await replicateCreatePredictionByVersion({
-      version,
+    const created = await replicateCreatePrediction({
+      model: REPLICATE_MODEL || "google/nano-banana-pro",
       input,
       timeoutMs: 120000,
     });
@@ -988,16 +836,16 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, sty
   const style = String(styleKey || "read").trim();
 
   const base = [
-    "Crie UMA ÚNICA ILUSTRAÇÃO para um livro infantil com base neste texto:",
+    "Estou escrevendo um livro infantil e quero que você crie UMA CENA para este texto:",
     `"${txt}"`,
-    "REGRAS OBRIGATÓRIAS:",
-    "- Use EXATAMENTE a criança da imagem enviada como personagem principal.",
-    "- Mantenha IDENTIDADE 100%: mesmo rosto, mesmos traços, mesmo cabelo, mesmo tom de pele.",
-    "- NÃO troque por outra criança. NÃO mude idade. NÃO mude gênero aparente de forma diferente da foto.",
-    "- A criança deve estar integrada naturalmente na cena e fazendo uma ação coerente com o texto.",
-    `- Tema: ${th}.`,
-    "- NÃO escreva texto/legendas na imagem (sem letras, sem watermark).",
-    name ? `Nome da criança (apenas contexto, NÃO escrever na imagem): ${name}.` : "",
+    "Regras IMPORTANTES:",
+    "- Use a criança da imagem enviada como personagem principal.",
+    "- Mantenha TODAS as características originais dela (rosto, cabelo, cor da pele, traços). Não altere identidade.",
+    "- Mantenha a identidade consistente em todas as páginas (same face, same hairstyle, same skin tone).",
+    `- Tema da história: ${th}.`,
+    "- Composição: a criança integrada naturalmente na cena, com ação e emoção compatíveis com o texto.",
+    "- NÃO escreva texto/legendas na imagem gerada (eu vou colocar o texto depois no PNG).",
+    name ? `Nome da criança (apenas contexto): ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
@@ -1006,9 +854,10 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, sty
       0,
       [
         "- Estilo: página de livro de colorir (coloring book).",
-        "- Preto e branco, contornos bem definidos, linhas limpas e mais grossas.",
-        "- SEM cores, SEM gradientes, SEM sombras, SEM textura realista.",
-        "- Fundo branco (ou bem claro), poucos detalhes no fundo.",
+        "- Arte em PRETO E BRANCO, contornos bem definidos, traço limpo, linhas mais grossas.",
+        "- SEM cores, SEM gradientes, SEM sombras, SEM pintura, SEM texturas realistas.",
+        "- Fundo branco (ou bem claro), poucos detalhes no fundo (para facilitar colorir).",
+        "- Visual infantil, fofo e amigável; formas simples; alta legibilidade dos contornos.",
       ].join(" ")
     );
   } else {
@@ -1025,12 +874,12 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
 
   const parts = [
     "Crie uma CAPA de livro infantil.",
-    "OBRIGATÓRIO: Use EXATAMENTE a criança da imagem enviada como protagonista (mesma identidade).",
-    "Mantenha 100%: mesmo rosto, mesmos traços, mesmo cabelo, mesmo tom de pele.",
+    "Use a criança da imagem como personagem principal e mantenha suas características originais (identidade consistente).",
+    "Mantenha a identidade consistente com a foto (same face, same hairstyle, same skin tone).",
     `Tema: ${th}.`,
-    "Cena de capa: alegre, mágica, positiva, com a criança em destaque central.",
-    "NÃO escreva texto/legendas na imagem (sem letras, sem watermark).",
-    name ? `Nome da criança (apenas contexto, NÃO escrever na imagem): ${name}.` : "",
+    "Cena de capa: alegre, mágica, positiva, com a criança em destaque no centro.",
+    "NÃO escreva texto/legendas na imagem (eu vou aplicar depois).",
+    name ? `Nome da criança (apenas contexto): ${name}.` : "",
   ].filter(Boolean);
 
   if (style === "color") {
@@ -1039,9 +888,9 @@ function buildCoverPrompt({ themeKey, childName, styleKey }) {
       0,
       [
         "Estilo: CAPA em formato de livro para colorir (coloring book).",
-        "Preto e branco, contornos fortes, traço limpo.",
+        "Arte em PRETO E BRANCO, contornos fortes, traço limpo.",
         "SEM cores, SEM gradientes, SEM sombras, SEM pintura.",
-        "Fundo branco (ou bem claro) e poucos detalhes.",
+        "Fundo branco (ou bem claro) e poucos detalhes para facilitar colorir.",
       ].join(" ")
     );
   } else {
@@ -1138,7 +987,14 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     const spacer = titleLines.length ? Math.round(bs * 0.55) : 0;
     const bodyH = bodyLines.length ? bodyLines.length * lineGapBody : 0;
 
-    return { titleLines, bodyLines, lineGapTitle, lineGapBody, usedH: titleH + spacer + bodyH, spacer };
+    return {
+      titleLines,
+      bodyLines,
+      lineGapTitle,
+      lineGapBody,
+      usedH: titleH + spacer + bodyH,
+      spacer,
+    };
   }
 
   let pack = buildLines(titleSize, textSize);
@@ -1302,7 +1158,7 @@ async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir 
 }
 
 // ------------------------------
-// Manifest (disco)
+// Manifest (disco) + Storage keys (Supabase opcional)
 // ------------------------------
 function bookDirOf(_userId, bookId) {
   return path.join(BOOKS_DIR, String(bookId));
@@ -1313,11 +1169,33 @@ function manifestPathOf(_userId, bookId) {
 
 async function loadManifest(userId, bookId) {
   const p = manifestPathOf(userId, bookId);
-  if (!existsSyncSafe(p)) return null;
-  return readJson(p);
+  if (existsSyncSafe(p)) return readJson(p);
+
+  // se não existir no disco e Supabase ativo, tenta restaurar
+  const key = sbKeyFor(userId, bookId, "book.json");
+  if (sbEnabled()) {
+    const got = await sbDownloadToBuffer(key);
+    if (got.ok && got.buf) {
+      await ensureDir(path.dirname(p));
+      await fsp.writeFile(p, got.buf);
+      try {
+        return JSON.parse(got.buf.toString("utf-8"));
+      } catch {}
+    }
+  }
+  return null;
 }
+
 async function saveManifest(userId, bookId, manifest) {
-  await writeJson(manifestPathOf(userId, bookId), manifest);
+  const p = manifestPathOf(userId, bookId);
+  await writeJson(p, manifest);
+
+  // espelha no Supabase Storage (se ativo)
+  if (sbEnabled()) {
+    const buf = Buffer.from(JSON.stringify(manifest, null, 2), "utf-8");
+    const key = sbKeyFor(userId, bookId, "book.json");
+    await sbUploadBuffer(key, buf, "application/json");
+  }
 }
 
 function makeEmptyManifest(id, ownerId) {
@@ -1331,12 +1209,16 @@ function makeEmptyManifest(id, ownerId) {
     theme: "",
     style: "read", // read | color
     child: { name: "", age: 6, gender: "neutral" },
-    photo: { ok: false, file: "", mime: "", editBase: "" },
-    mask: { ok: false, file: "", editBase: "" },
+
+    // arquivos locais e storage keys
+    photo: { ok: false, file: "", mime: "", editBase: "", storageKey: "", editBaseKey: "" },
+    mask: { ok: false, file: "", editBase: "", storageKey: "", editBaseKey: "" },
+
     pages: [],
     images: [],
-    cover: { ok: false, file: "", url: "" },
+    cover: { ok: false, file: "", url: "", storageKey: "" },
     pdf: "",
+    pdfKey: "",
     updatedAt: nowISO(),
   };
 }
@@ -1352,42 +1234,6 @@ const jobs = new Map(); // key "userId:bookId" -> { running: bool }
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-
-// ------------------------------
-// books module (/books)
-// ------------------------------
-try {
-  const mountBooks = require(path.join(__dirname, "books"));
-  mountBooks(app, { OUT_DIR, USERS_DIR, requireAuth });
-  console.log("✅ /books ativo: módulo books/ carregado com sucesso.");
-} catch (e) {
-  console.warn("❌ módulo books/ NÃO carregou. /books desativado.");
-  console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "books", "index.js"));
-}
-
-try {
-  const mountGeneratePage = require(path.join(__dirname, "generate.page.js"));
-  mountGeneratePage(app, { requireAuth });
-  console.log("✅ /generate ativo: generate.page.js carregado com sucesso.");
-} catch (e) {
-  console.warn("❌ generate.page.js NÃO carregou. /generate desativado.");
-  console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "generate.page.js"));
-}
-
-// ------------------------------
-// admin module (/admin)
-// ------------------------------
-try {
-  const mountAdminPage = require(path.join(__dirname, "admin.page.js"));
-  mountAdminPage(app, { OUT_DIR, BOOKS_DIR, USERS_FILE, requireAuth });
-  console.log("✅ /admin ativo: admin.page.js carregado com sucesso.");
-} catch (e) {
-  console.warn("❌ admin.page.js NÃO carregou. /admin desativado.");
-  console.warn("   Motivo:", String(e?.message || e));
-  console.warn("   Caminho esperado:", path.join(__dirname, "admin.page.js"));
-}
 
 // ------------------------------
 // LOGIN UI
@@ -1672,7 +1518,7 @@ app.get("/sales", (req, res) => {
 });
 
 // ------------------------------
-// UI / COMO FUNCIONA (corrigido)
+// UI / COMO FUNCIONA
 // ------------------------------
 app.get("/como-funciona", (req, res) => {
   if (existsSyncSafe(HOW_IT_WORKS_HTML)) return res.sendFile(HOW_IT_WORKS_HTML);
@@ -1734,7 +1580,6 @@ app.get("/exemplos", (req, res) => {
 
 // ------------------------------
 // UI / GERADOR (Steps 0–2) — "/" e "/create"
-// (seu HTML completo estava no trecho que você colou; mantém igual)
 // ------------------------------
 function renderGeneratorHtml(req, res) {
   const imageInfo =
@@ -1742,24 +1587,827 @@ function renderGeneratorHtml(req, res) {
       ? `Replicate: <span class="mono">${escapeHtml(REPLICATE_MODEL)}</span>`
       : `OpenAI (fallback): <span class="mono">${escapeHtml(IMAGE_MODEL)}</span>`;
 
-  // ✅ Para encurtar este arquivo, eu manteria o HTML original aqui,
-  // mas você pediu “código completo sem omitir partes”.
-  // Então: cola abaixo exatamente o seu HTML original do /create.
-  // (Eu mantive o mesmo conteúdo que você enviou — sem mudanças.)
-  // ----------------------------------------------------------------
-  // ATENÇÃO: Este bloco é grande; é exatamente o que você mandou.
-  // ----------------------------------------------------------------
-
-  // >>>>>>>>>>>> COLEI AQUI O MESMO HTML QUE VOCÊ ENVIOU (SEM ALTERAR) <<<<<<<<<<<<
-  // Para caber no limite, ele está idêntico ao seu trecho acima.
-  // Se você quiser, eu também consigo separar esse HTML para arquivo externo depois.
   res.type("html").send(`<!doctype html>
-${"<!-- (HTML do /create permanece igual ao que você enviou acima) -->"}
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Meu Livro Mágico — Criar</title>
+<style>
+  :root{
+    --bg1:#ede9fe;
+    --bg2:#ffffff;
+    --bg3:#fdf2f8;
+    --card:#ffffff;
+    --text:#111827;
+    --muted:#6b7280;
+    --border:#e5e7eb;
+    --shadow: 0 20px 50px rgba(0,0,0,.10);
+    --shadow2: 0 10px 24px rgba(0,0,0,.08);
+    --violet:#7c3aed;
+    --pink:#db2777;
+    --disabled:#e5e7eb;
+    --disabledText:#9ca3af;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    color:var(--text);
+    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    min-height:100vh;
+    padding-bottom:110px;
+  }
+  .container{max-width: 980px; margin:0 auto; padding: 24px 16px;}
+  .topRow{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin-bottom: 16px;
+  }
+  .topActions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
+  .pill{
+    background: rgba(124,58,237,.10);
+    color: #4c1d95;
+    border:1px solid rgba(124,58,237,.16);
+    padding:6px 10px;
+    border-radius:999px;
+    font-weight:900;
+    text-decoration:none;
+  }
+  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
+
+  .stepper{display:flex; align-items:center; justify-content:center; gap: 10px; flex-wrap:wrap; margin: 10px 0 22px;}
+  .stepItem{ display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .stepDot{
+    width:40px; height:40px; border-radius:999px;
+    display:grid; place-items:center;
+    font-weight:1000; font-size:14px;
+    transition: transform .2s ease;
+    border: 1px solid rgba(0,0,0,.06);
+  }
+  .stepDot.done{ background: linear-gradient(135deg,#34d399,#10b981); color:#fff; border-color:transparent;}
+  .stepDot.active{ background: linear-gradient(135deg,var(--violet),var(--pink)); color:#fff; border-color:transparent; box-shadow: 0 10px 24px rgba(124,58,237,.25); transform: scale(1.08); }
+  .stepDot.todo{ background:#e5e7eb; color:#9ca3af; }
+  .stepLabel{ font-size:12px; font-weight:900; color:#9ca3af; display:none; }
+  @media (min-width: 640px){ .stepLabel{ display:block; } }
+  .stepLabel.active{ color: var(--violet); }
+  .stepLine{width: 56px; height: 6px; border-radius:999px; background:#e5e7eb;}
+  @media (min-width: 768px){ .stepLine{ width: 90px; } }
+  .stepLine.done{ background: linear-gradient(90deg,#34d399,#10b981); }
+
+  .card{
+    background: var(--card);
+    border:1px solid var(--border);
+    border-radius: 26px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .head{text-align:center; padding: 14px 10px 6px;}
+  .head h1{ margin:0; font-size: 26px; font-weight:1000; }
+  .head p{ margin:8px 0 0; color: var(--muted); font-weight:800; }
+
+  .panel{ margin-top: 12px; display:none; animation: fadeIn .18s ease; }
+  .panel.active{ display:block; }
+  @keyframes fadeIn{ from{opacity:0; transform: translateX(10px)} to{opacity:1; transform: translateX(0)} }
+
+  .drop{
+    border:2px dashed rgba(124,58,237,.35);
+    border-radius: 18px;
+    padding: 26px 16px;
+    text-align:center;
+    cursor:pointer;
+    background: rgba(124,58,237,.04);
+    box-shadow: var(--shadow2);
+  }
+  .drop.drag{ border-color: rgba(219,39,119,.55); background: rgba(219,39,119,.04); }
+  .drop .big{ font-size: 40px; }
+  .drop .t{ font-weight:1000; font-size:18px; margin-top:10px; }
+  .drop .s{ color: var(--muted); font-weight:800; margin-top:6px; }
+
+  .twoCol{
+    margin-top: 16px;
+    display:grid;
+    grid-template-columns: 180px 1fr;
+    gap: 14px;
+    align-items:center;
+  }
+  @media (max-width: 640px){ .twoCol{ grid-template-columns:1fr; } }
+
+  .previewWrap{ display:grid; place-items:center; }
+  .previewImg{
+    width:160px; height:160px; border-radius:999px;
+    object-fit:cover;
+    border: 6px solid rgba(250,204,21,.65);
+    box-shadow: var(--shadow2);
+    display:none;
+    background:#fff;
+  }
+  .previewEmpty{
+    width:160px; height:160px; border-radius:999px;
+    background: rgba(0,0,0,.04);
+    display:grid; place-items:center;
+    font-size: 42px;
+  }
+
+  .hint{
+    margin-top:10px;
+    padding:12px;
+    border-radius: 14px;
+    background: rgba(219,39,119,.06);
+    border: 1px solid rgba(219,39,119,.14);
+    color:#7f1d1d;
+    font-weight:900;
+    white-space:pre-wrap;
+    display:none;
+  }
+
+  .field{ margin-top: 14px; }
+  .label{ font-weight:1000; margin-bottom:8px; }
+  .input,.select{
+    width:100%;
+    border:1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px 14px;
+    font-size: 16px;
+    font-weight:900;
+    outline:none;
+    background:#fff;
+  }
+  .input:focus,.select:focus{ border-color: rgba(124,58,237,.4); box-shadow: 0 0 0 4px rgba(124,58,237,.12); }
+
+  .rangeMeta{display:flex; justify-content:space-between; color: var(--muted); font-weight:900; margin-top: 8px; font-size: 12px;}
+
+  .grid3{display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px;}
+  @media (max-width: 900px){ .grid3{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px){ .grid3{ grid-template-columns: 1fr; } }
+
+  .pick{
+    border:1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+    background:#fff;
+    cursor:pointer;
+    box-shadow: var(--shadow2);
+    text-align:left;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  }
+  .pick:active{ transform: translateY(1px); }
+  .pick.active{
+    border-color: rgba(124,58,237,.45);
+    box-shadow: 0 16px 40px rgba(124,58,237,.18);
+    outline: 3px solid rgba(124,58,237,.16);
+  }
+  .pick .ico{ font-size: 34px; }
+  .pick .tt{ margin-top: 10px; font-weight:1000; font-size: 18px; }
+  .pick .dd{ margin-top: 6px; color: var(--muted); font-weight:800; }
+
+  .footer{
+    position: fixed;
+    left:0; right:0; bottom:0;
+    background: rgba(255,255,255,.82);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(0,0,0,.06);
+    padding: 14px 16px;
+  }
+  .footerInner{
+    max-width: 980px; margin:0 auto;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  .btn{
+    border:0; cursor:pointer;
+    border-radius: 999px;
+    padding: 12px 18px;
+    font-weight:1000;
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    user-select:none;
+  }
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet), var(--pink));
+    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+  }
+  .btnPrimary:disabled{
+    background: var(--disabled);
+    color: var(--disabledText);
+    box-shadow:none;
+    cursor:not-allowed;
+  }
+</style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="topRow">
+      <div class="topActions">
+        <a class="pill" href="/sales">🛒 Pagina Inicial</a>
+        <a class="pill" href="/books">📚 Meus Livros</a>
+        <a class="pill" href="/como-funciona">❓ Como funciona</a>
+        <button class="pill" id="btnReset" style="cursor:pointer">♻️ Reiniciar</button>
+      </div>
+    </div>
+
+    <div style="text-align:center;font-weight:900;color:#6b7280;margin:10px 0 18px;">${imageInfo}</div>
+
+    <div class="stepper" id="stepper"></div>
+
+    <div class="card">
+      <div class="head">
+        <h1 id="stepTitle">Foto Mágica</h1>
+        <p id="stepSub">Envie uma foto da criança</p>
+      </div>
+
+      <div class="panel active" id="panel0">
+        <div class="drop" id="drop">
+          <div class="big">📸</div>
+          <div class="t">Clique ou arraste uma foto aqui</div>
+          <div class="s">JPG/PNG até 10MB</div>
+          <input type="file" accept="image/*" id="file" style="display:none"/>
+        </div>
+
+        <div class="twoCol">
+          <div class="previewWrap">
+            <img id="photoPreview" class="previewImg" alt="preview"/>
+            <div id="photoEmpty" class="previewEmpty">🙂</div>
+          </div>
+          <div>
+            <div class="label">Dicas</div>
+            <ul style="margin:0; padding-left:18px; line-height:1.7; font-weight:900; color:#374151;">
+              <li>Rosto bem iluminado</li>
+              <li>Evite fundo muito poluído</li>
+              <li>Evite óculos escuros</li>
+              <li>✅ Texto vai dentro do PNG</li>
+            </ul>
+            <div id="hintPhoto" class="hint"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel1">
+        <div class="field">
+          <div class="label">Nome</div>
+          <input class="input" id="childName" placeholder="Ex: João, Maria..." />
+        </div>
+
+        <div class="field">
+          <div class="label">Idade: <span id="ageLabel">6</span> anos</div>
+          <div class="rangeRow">
+            <input type="range" min="2" max="12" value="6" id="childAge" style="width:100%"/>
+            <div class="rangeMeta"><span>2</span><span>12</span></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="label">Gênero do texto</div>
+          <select class="select" id="childGender">
+            <option value="neutral">Neutro 🌟</option>
+            <option value="boy">Menino 👦</option>
+            <option value="girl">Menina 👧</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel" id="panel2">
+        <div class="field">
+          <div class="label">Tema</div>
+          <div class="grid3">
+            <button class="pick" data-theme="space"><div class="ico">🚀</div><div class="tt">Viagem Espacial</div><div class="dd">Explore planetas e mistérios.</div></button>
+            <button class="pick" data-theme="dragon"><div class="ico">🐉</div><div class="tt">Reino dos Dragões</div><div class="dd">Mundo medieval mágico.</div></button>
+            <button class="pick" data-theme="ocean"><div class="ico">🧜‍♀️</div><div class="tt">Fundo do Mar</div><div class="dd">Tesouros e amigos marinhos.</div></button>
+            <button class="pick" data-theme="jungle"><div class="ico">🦁</div><div class="tt">Safari na Selva</div><div class="dd">Aventura com animais.</div></button>
+            <button class="pick" data-theme="superhero"><div class="ico">🦸</div><div class="tt">Super Herói</div><div class="dd">Salvar o dia com poderes.</div></button>
+            <button class="pick" data-theme="dinosaur"><div class="ico">🦕</div><div class="tt">Dinossauros</div><div class="dd">Uma jornada jurássica.</div></button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="label">Estilo do livro</div>
+          <div class="grid3">
+            <button class="pick styleBtn" data-style="read">
+              <div class="ico">📖</div><div class="tt">Livro para leitura</div><div class="dd">Ilustrações coloridas (semi-realista).</div>
+            </button>
+            <button class="pick styleBtn" data-style="color">
+              <div class="ico">🖍️</div><div class="tt">Leitura + colorir</div><div class="dd">Preto e branco (contornos).</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label style="display:flex; gap:10px; align-items:flex-start; cursor:pointer;">
+            <input type="checkbox" id="consent"/>
+            <div>
+              <div style="font-weight:1000">Autorização</div>
+              <div style="color:var(--muted); font-weight:900; margin-top:4px;">
+                Confirmo que tenho autorização para usar a foto da criança para gerar este livro.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div id="hintGen" class="hint"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="footerInner">
+      <button class="btn" id="btnBack" style="background:transparent;color:#6b7280;font-weight:1000;">← Voltar</button>
+      <button class="btn btnPrimary" id="btnNext">Próximo →</button>
+    </div>
+  </div>
+
+<script>
+  const steps = [
+    { id: "photo",   title: "Foto Mágica",        sub: "Envie uma foto da criança" },
+    { id: "profile", title: "Quem é o Herói?",    sub: "Conte-nos sobre a criança" },
+    { id: "theme",   title: "Escolha a Aventura", sub: "Selecione o tema e estilo" }
+  ];
+
+  const state = {
+    currentStep: Number(localStorage.getItem("currentStep") || "0"),
+    bookId: localStorage.getItem("bookId") || "",
+    photo: localStorage.getItem("photo") || "",
+    mask: localStorage.getItem("mask") || "",
+    theme: localStorage.getItem("theme") || "",
+    style: localStorage.getItem("style") || "read",
+    childName: localStorage.getItem("childName") || "",
+    childAge: Number(localStorage.getItem("childAge") || "6"),
+    childGender: localStorage.getItem("childGender") || "neutral",
+    consent: localStorage.getItem("consent") === "1",
+  };
+
+  const $ = (id) => document.getElementById(id);
+
+  function setHint(el, msg) {
+    el.textContent = msg || "";
+    el.style.display = msg ? "block" : "none";
+  }
+
+  function showPhoto(dataUrl) {
+    const img = $("photoPreview");
+    const empty = $("photoEmpty");
+    if (dataUrl) {
+      img.src = dataUrl;
+      img.style.display = "block";
+      empty.style.display = "none";
+    } else {
+      img.style.display = "none";
+      empty.style.display = "grid";
+    }
+  }
+
+  function buildStepper() {
+    const root = $("stepper");
+    root.innerHTML = "";
+
+    for (let i = 0; i < steps.length; i++) {
+      const item = document.createElement("div");
+      item.className = "stepItem";
+
+      const dot = document.createElement("div");
+      dot.className = "stepDot " + (i < state.currentStep ? "done" : i === state.currentStep ? "active" : "todo");
+      dot.textContent = i < state.currentStep ? "✓" : String(i + 1);
+
+      const lbl = document.createElement("div");
+      lbl.className = "stepLabel " + (i === state.currentStep ? "active" : "");
+      lbl.textContent = steps[i].title;
+
+      item.appendChild(dot);
+      item.appendChild(lbl);
+      root.appendChild(item);
+
+      if (i !== steps.length - 1) {
+        const line = document.createElement("div");
+        line.className = "stepLine " + (i < state.currentStep ? "done" : "");
+        root.appendChild(line);
+      }
+    }
+  }
+
+  function canProceedStep(step) {
+    if (step === 0) return !!state.photo;
+    if (step === 1) return !!(state.childName && state.childName.trim().length >= 2 && state.childAge);
+    if (step === 2) return !!(state.theme && state.style && state.consent);
+    return false;
+  }
+
+  function setStepUI() {
+    localStorage.setItem("currentStep", String(state.currentStep));
+    buildStepper();
+
+    $("stepTitle").textContent = steps[state.currentStep].title;
+    $("stepSub").textContent = steps[state.currentStep].sub;
+
+    for (let i = 0; i < steps.length; i++) {
+      $("panel" + i).classList.toggle("active", i === state.currentStep);
+    }
+
+    $("btnBack").disabled = state.currentStep === 0;
+
+    const next = $("btnNext");
+    next.textContent = (state.currentStep === 2) ? "✨ Criar Livro Mágico" : "Próximo →";
+    next.disabled = !canProceedStep(state.currentStep);
+  }
+
+  function selectTheme(themeKey) {
+    state.theme = themeKey || "";
+    localStorage.setItem("theme", state.theme);
+    document.querySelectorAll("[data-theme]").forEach(b => {
+      const active = b.getAttribute("data-theme") === state.theme;
+      b.classList.toggle("active", active);
+    });
+    setStepUI();
+  }
+
+  function selectStyle(styleKey) {
+    state.style = styleKey || "read";
+    localStorage.setItem("style", state.style);
+    document.querySelectorAll(".styleBtn").forEach(b => {
+      const active = b.getAttribute("data-style") === state.style;
+      b.classList.toggle("active", active);
+    });
+    setStepUI();
+  }
+
+  async function ensureBook() {
+    if (state.bookId) {
+      try {
+        const rr = await fetch("/api/status/" + encodeURIComponent(state.bookId), { method: "GET" });
+        if (rr.ok) {
+          const jj = await rr.json().catch(()=> ({}));
+          if (jj && jj.ok) return state.bookId;
+        }
+        state.bookId = "";
+        localStorage.removeItem("bookId");
+      } catch {
+        state.bookId = "";
+        localStorage.removeItem("bookId");
+      }
+    }
+
+    const r = await fetch("/api/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok || !j.id) throw new Error(j.error || "Falha ao criar book");
+
+    state.bookId = j.id;
+    localStorage.setItem("bookId", state.bookId);
+    return state.bookId;
+  }
+
+  async function apiUploadPhotoAndMask() {
+    if (!state.photo) throw new Error("Sem foto");
+    if (!state.mask) throw new Error("Sem mask");
+
+    await ensureBook();
+    if (!state.bookId) throw new Error("Sem bookId");
+
+    const r = await fetch("/api/uploadPhoto", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ id: state.bookId, photo: state.photo, mask: state.mask })
+    });
+
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao enviar foto/mask");
+    return true;
+  }
+
+  function canGenerateWhy() {
+    if (!state.photo) return "Envie a foto primeiro.";
+    if (!state.mask) return "Mask não gerou. Reenvie a foto.";
+    if (!state.childName || state.childName.trim().length < 2) return "Digite o nome (mínimo 2 letras).";
+    if (!state.consent) return "Marque a autorização para continuar.";
+    if (!state.theme) return "Selecione um tema.";
+    if (!state.style) return "Selecione o estilo do livro.";
+    return "";
+  }
+
+  async function goGenerate() {
+    setHint($("hintGen"), "");
+    const why = canGenerateWhy();
+    if (why) { setHint($("hintGen"), why); return; }
+
+    await ensureBook();
+    await apiUploadPhotoAndMask();
+
+    // inicia geração (server background)
+    const r = await fetch("/api/generate", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        id: state.bookId,
+        childName: state.childName.trim(),
+        childAge: state.childAge,
+        childGender: state.childGender,
+        theme: state.theme,
+        style: state.style
+      })
+    });
+    const j = await r.json().catch(()=> ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao iniciar geração");
+
+    window.location.href = "/generate?id=" + encodeURIComponent(state.bookId);
+  }
+
+  // Upload
+  const drop = $("drop");
+  const file = $("file");
+
+  drop.addEventListener("click", () => file.click());
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault(); drop.classList.remove("drag");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+  file.addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
+  });
+
+  async function handleFile(f) {
+    const hintPhoto = $("hintPhoto");
+    if (!f.type || !f.type.startsWith("image/")) return setHint(hintPhoto, "Envie apenas imagens (JPG/PNG).");
+    if (f.size > 10 * 1024 * 1024) return setHint(hintPhoto, "Imagem muito grande. Máximo 10MB.");
+    setHint(hintPhoto, "");
+
+    const imgUrl = URL.createObjectURL(f);
+    const img = new Image();
+
+    img.onload = async () => {
+      try {
+        const max = 1024;
+        let w = img.width, h = img.height;
+        const scale = Math.min(1, max / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const photoPng = canvas.toDataURL("image/png");
+
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const maskPng = maskCanvas.toDataURL("image/png");
+
+        URL.revokeObjectURL(imgUrl);
+
+        state.photo = photoPng;
+        state.mask = maskPng;
+        localStorage.setItem("photo", photoPng);
+        localStorage.setItem("mask", maskPng);
+        showPhoto(photoPng);
+
+        await ensureBook();
+        await apiUploadPhotoAndMask();
+
+        setStepUI();
+      } catch (err) {
+        setHint(hintPhoto, String(err.message || err || "Erro ao processar/enviar foto"));
+      }
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(imgUrl);
+      setHint($("hintPhoto"), "Falha ao abrir a imagem.");
+    };
+
+    img.src = imgUrl;
+  }
+
+  // picks
+  document.querySelectorAll("[data-theme]").forEach(btn => {
+    btn.addEventListener("click", () => selectTheme(btn.getAttribute("data-theme")));
+  });
+  document.querySelectorAll(".styleBtn").forEach(btn => {
+    btn.addEventListener("click", () => selectStyle(btn.getAttribute("data-style")));
+  });
+
+  // inputs
+  $("childName").addEventListener("input", (e) => {
+    state.childName = e.target.value;
+    localStorage.setItem("childName", state.childName);
+    setStepUI();
+  });
+  $("childAge").addEventListener("input", (e) => {
+    state.childAge = Number(e.target.value || "6");
+    $("ageLabel").textContent = String(state.childAge);
+    localStorage.setItem("childAge", String(state.childAge));
+    setStepUI();
+  });
+  $("childGender").addEventListener("change", (e) => {
+    state.childGender = e.target.value;
+    localStorage.setItem("childGender", state.childGender);
+  });
+  $("consent").addEventListener("change", (e) => {
+    state.consent = !!e.target.checked;
+    localStorage.setItem("consent", state.consent ? "1" : "0");
+    setStepUI();
+  });
+
+  // nav buttons
+  $("btnBack").addEventListener("click", () => {
+    if (state.currentStep <= 0) return;
+    state.currentStep -= 1;
+    setStepUI();
+  });
+
+  $("btnNext").addEventListener("click", async () => {
+    if (state.currentStep === 0) {
+      if (!canProceedStep(0)) return;
+      state.currentStep = 1;
+      setStepUI();
+      return;
+    }
+    if (state.currentStep === 1) {
+      if (!canProceedStep(1)) return;
+      state.currentStep = 2;
+      setStepUI();
+      return;
+    }
+    if (state.currentStep === 2) {
+      if (!canProceedStep(2)) return;
+      try {
+        await goGenerate();
+      } catch (e) {
+        setHint($("hintGen"), String(e.message || e));
+      }
+    }
+  });
+
+  $("btnReset").addEventListener("click", () => {
+    localStorage.clear();
+    location.reload();
+  });
+
+  // init
+  (function init(){
+    showPhoto(state.photo);
+    $("childName").value = state.childName;
+    $("childAge").value = String(state.childAge);
+    $("ageLabel").textContent = String(state.childAge);
+    $("childGender").value = state.childGender;
+    $("consent").checked = state.consent;
+
+    if (state.theme) selectTheme(state.theme);
+    selectStyle(state.style || "read");
+
+    if (state.currentStep < 0 || state.currentStep > 2) state.currentStep = 0;
+    setStepUI();
+  })();
+</script>
+</body>
 </html>`);
 }
 
 app.get("/", requireAuth, renderGeneratorHtml);
 app.get("/create", requireAuth, renderGeneratorHtml);
+
+// ------------------------------
+// UI / GERANDO... (Step 4) — /generate
+// ------------------------------
+app.get("/generate", requireAuth, async (req, res) => {
+  const bookId = String(req.query?.id || "").trim();
+
+  res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Gerando… — Meu Livro Mágico</title>
+<style>
+  :root{--bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;--text:#111827;--muted:#6b7280;--violet:#7c3aed;--pink:#db2777;--border:#e5e7eb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));min-height:100vh;color:var(--text)}
+  .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
+  .card{background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+  h1{margin:0;font-size:22px;font-weight:1000}
+  .muted{color:var(--muted);font-weight:900}
+  .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:12px}
+  .bar > div{height:100%;width:0%;background:linear-gradient(90deg,var(--violet),var(--pink));transition:width .2s ease}
+  .log{margin-top:12px;padding:12px;border-radius:14px;background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.14);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}
+  .imgs{margin-top:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  @media(max-width:860px){.imgs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:520px){.imgs{grid-template-columns:1fr}}
+  .imgCard{border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}
+  .imgCard img{width:100%;display:block}
+  .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  a.btn{display:inline-flex;align-items:center;gap:10px;padding:12px 14px;border-radius:999px;text-decoration:none;font-weight:1000}
+  a.primary{background:linear-gradient(90deg,var(--violet),var(--pink));color:#fff}
+  a.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <div>
+        <h1>⏳ Gerando seu livro…</h1>
+        <div class="muted" id="sub">Preparando…</div>
+      </div>
+      <div class="muted" id="meta">—</div>
+    </div>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="log" id="log">Iniciando…</div>
+
+    <div class="imgs" id="imgs"></div>
+
+    <div class="btns">
+      <a class="btn ghost" href="/create">← Voltar</a>
+      <a class="btn ghost" href="/books">📚 Meus Livros</a>
+      <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  const bookId = ${JSON.stringify(bookId || "")};
+
+  const $ = (id) => document.getElementById(id);
+  function setLog(s){ $("log").textContent = String(s||""); }
+  function setSub(s){ $("sub").textContent = String(s||""); }
+  function setMeta(s){ $("meta").textContent = String(s||""); }
+  function setBar(p){ $("barFill").style.width = Math.max(0, Math.min(100, p)) + "%"; }
+
+  function renderImages(coverUrl, images){
+    const root = $("imgs");
+    root.innerHTML = "";
+    const items = [];
+    if (coverUrl) items.push({ label: "Capa", url: coverUrl });
+    (images||[]).forEach(it => { if (it && it.url) items.push({ label: "Pág. " + it.page, url: it.url }); });
+    for (const it of items){
+      const div = document.createElement("div");
+      div.className = "imgCard";
+      div.innerHTML = '<img alt="' + it.label + '" src="' + it.url + '"/>';
+      root.appendChild(div);
+    }
+  }
+
+  async function poll(){
+    if (!bookId){
+      setLog("Sem id. Volte ao /create e gere novamente.");
+      return;
+    }
+
+    try{
+      const r = await fetch("/api/status/" + encodeURIComponent(bookId));
+      const j = await r.json().catch(()=> ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
+
+      setMeta("status=" + j.status + " • step=" + j.step);
+      setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
+      renderImages(j.coverUrl, j.images);
+
+      // progresso simples: story/cover/images/pdf/done
+      let p = 5;
+      if (String(j.step||"").startsWith("story")) p = 20;
+      if (String(j.step||"") === "cover") p = 35;
+      if (String(j.step||"").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1]||"0") * 6);
+      if (String(j.step||"").includes("images_done")) p = 85;
+      if (String(j.step||"") === "pdf") p = 92;
+      if (String(j.step||"") === "done" || j.status === "done") p = 100;
+      setBar(p);
+
+      if (j.status === "done" && j.pdf){
+        setSub("✅ Pronto!");
+        const pdfBtn = $("pdfBtn");
+        pdfBtn.style.display = "inline-flex";
+        pdfBtn.href = j.pdf;
+        setLog("Finalizado. Você já pode baixar o PDF.");
+        return;
+      }
+
+      if (j.status === "failed"){
+        setSub("❌ Falhou");
+        setLog(j.error || "Falhou");
+        return;
+      }
+
+      setLog("Aguardando…");
+      setTimeout(poll, 1500);
+    }catch(e){
+      setSub("Erro");
+      setLog(String(e.message || e));
+      setTimeout(poll, 2500);
+    }
+  }
+
+  poll();
+</script>
+</body>
+</html>`);
+});
 
 // ------------------------------
 // API
@@ -1813,13 +2461,16 @@ app.post("/api/uploadPhoto", async (req, res) => {
     const bookDir = bookDirOf(userId, id);
     await ensureDir(bookDir);
 
-    const originalPath = path.join(bookDir, "photo." + ext);
+    const originalName = "photo." + ext;
+    const originalPath = path.join(bookDir, originalName);
     await fsp.writeFile(originalPath, buf);
 
-    const photoPngPath = path.join(bookDir, "photo.png");
+    const photoPngName = "photo.png";
+    const photoPngPath = path.join(bookDir, photoPngName);
     await sharp(buf).png().toFile(photoPngPath);
 
-    const maskPngPath = path.join(bookDir, "mask.png");
+    const maskPngName = "mask.png";
+    const maskPngPath = path.join(bookDir, maskPngName);
     await sharp(maskBuf).ensureAlpha().png().toFile(maskPngPath);
 
     const photoMeta = await sharp(photoPngPath).metadata();
@@ -1831,18 +2482,13 @@ app.post("/api/uploadPhoto", async (req, res) => {
     const w = Math.max(1, Math.round(w0 * scale));
     const h = Math.max(1, Math.round(h0 * scale));
 
-    const editBasePath = path.join(bookDir, "edit_base.png");
-    await sharp(photoPngPath)
-      .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
-      .png()
-      .toFile(editBasePath);
+    const editBaseName = "edit_base.png";
+    const editBasePath = path.join(bookDir, editBaseName);
+    await sharp(photoPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).png().toFile(editBasePath);
 
-    const maskBasePath = path.join(bookDir, "mask_base.png");
-    await sharp(maskPngPath)
-      .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
-      .ensureAlpha()
-      .png()
-      .toFile(maskBasePath);
+    const maskBaseName = "mask_base.png";
+    const maskBasePath = path.join(bookDir, maskBaseName);
+    await sharp(maskPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskBasePath);
 
     const mi = await sharp(editBasePath).metadata();
     const mm = await sharp(maskBasePath).metadata();
@@ -1850,8 +2496,26 @@ app.post("/api/uploadPhoto", async (req, res) => {
       throw new Error(`Falha ao alinhar base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
     }
 
-    m.photo = { ok: true, file: path.basename(originalPath), mime, editBase: "edit_base.png" };
-    m.mask = { ok: true, file: "mask.png", editBase: "mask_base.png" };
+    // Supabase upload (opcional)
+    let photoKey = "";
+    let editBaseKey = "";
+    let maskKey = "";
+    let maskBaseKey = "";
+
+    if (sbEnabled()) {
+      photoKey = sbKeyFor(userId, id, originalName);
+      editBaseKey = sbKeyFor(userId, id, editBaseName);
+      maskKey = sbKeyFor(userId, id, maskPngName);
+      maskBaseKey = sbKeyFor(userId, id, maskBaseName);
+
+      await sbUploadBuffer(photoKey, buf, mime);
+      await sbUploadBuffer(editBaseKey, await fsp.readFile(editBasePath), "image/png");
+      await sbUploadBuffer(maskKey, await fsp.readFile(maskPngPath), "image/png");
+      await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
+    }
+
+    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey };
+    m.mask = { ok: true, file: maskPngName, editBase: maskBaseName, storageKey: maskKey, editBaseKey: maskBaseKey };
     m.updatedAt = nowISO();
     await saveManifest(userId, id, m);
 
@@ -1931,8 +2595,8 @@ app.post("/api/generate", requireAuth, async (req, res) => {
     await saveManifest(userId, id, m);
 
     jobs.set(jobKey, { running: true });
-    runGeneration(userId, id).catch(() => {});
 
+    runGeneration(userId, id).catch(() => {});
     return res.json({ ok: true, id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -1940,7 +2604,7 @@ app.post("/api/generate", requireAuth, async (req, res) => {
 });
 
 // ------------------------------
-// Geração SEQUENCIAL (a lógica “boa” + Replicate blindado)
+// Geração SEQUENCIAL (com blindagem do job)
 // ------------------------------
 async function runGeneration(userId, bookId) {
   const jobKey = `${userId}:${bookId}`;
@@ -1974,9 +2638,12 @@ async function runGeneration(userId, bookId) {
   try {
     await ensureDir(bookDir);
 
-    // ✅ PONTO-CHAVE: SEMPRE usa edit_base.png como referência
     const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
     const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+
+    // ✅ Vercel-safe: se não existir no disco, tenta restaurar do Supabase Storage
+    await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.editBaseKey || "");
+    await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.editBaseKey || "");
 
     if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
     if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
@@ -2009,10 +2676,12 @@ async function runGeneration(userId, bookId) {
       size: "1024x1024",
     });
 
-    const coverBase = path.join(bookDir, "cover.png");
+    const coverBaseName = "cover.png";
+    const coverBase = path.join(bookDir, coverBaseName);
     await fsp.writeFile(coverBase, coverBuf);
 
-    const coverFinal = path.join(bookDir, "cover_final.png");
+    const coverFinalName = "cover_final.png";
+    const coverFinal = path.join(bookDir, coverFinalName);
     await stampCoverTextOnImage({
       inputPath: coverBase,
       outputPath: coverFinal,
@@ -2020,12 +2689,20 @@ async function runGeneration(userId, bookId) {
       subtitle: `A aventura de ${m.child?.name || "Criança"} • ${themeLabel(m.theme)}`,
     });
 
+    // upload capa (opcional)
+    let coverKey = "";
+    if (sbEnabled()) {
+      coverKey = sbKeyFor(userId, bookId, coverFinalName);
+      await sbUploadBuffer(coverKey, await fsp.readFile(coverFinal), "image/png");
+    }
+
     m = await loadManifest(userId, bookId);
     if (m) {
       m.cover = {
         ok: true,
-        file: path.basename(coverFinal),
-        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(path.basename(coverFinal))}`,
+        file: coverFinalName,
+        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(coverFinalName)}`,
+        storageKey: coverKey,
       };
       m.updatedAt = nowISO();
       await saveManifest(userId, bookId, m);
@@ -2050,10 +2727,12 @@ async function runGeneration(userId, bookId) {
         size: "1024x1024",
       });
 
-      const basePath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}.png`);
+      const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
+      const basePath = path.join(bookDir, baseName);
       await fsp.writeFile(basePath, imgBuf);
 
-      const finalPath = path.join(bookDir, `page_${String(p.page).padStart(2, "0")}_final.png`);
+      const finalName = `page_${String(p.page).padStart(2, "0")}_final.png`;
+      const finalPath = path.join(bookDir, finalName);
       await stampStoryTextOnImage({
         inputPath: basePath,
         outputPath: finalPath,
@@ -2061,11 +2740,20 @@ async function runGeneration(userId, bookId) {
         text: p.text,
       });
 
+      // upload página (opcional)
+      let pageKey = "";
+      if (sbEnabled()) {
+        pageKey = sbKeyFor(userId, bookId, finalName);
+        await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+      }
+
       images.push({
         page: p.page,
         path: finalPath,
+        file: finalName,
         prompt,
-        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(path.basename(finalPath))}`,
+        url: `/api/image/${encodeURIComponent(bookId)}/${encodeURIComponent(finalName)}`,
+        storageKey: pageKey,
       });
 
       m = await loadManifest(userId, bookId);
@@ -2083,12 +2771,20 @@ async function runGeneration(userId, bookId) {
     const coverPath = path.join(bookDir, "cover_final.png");
     const pageImagePaths = images.map((it) => it.path);
 
-    await makePdfImagesOnly({
+    const pdfPath = await makePdfImagesOnly({
       bookId,
       coverPath,
       pageImagePaths,
       outputDir: bookDir,
     });
+
+    // upload PDF (opcional)
+    let pdfKey = "";
+    if (sbEnabled()) {
+      const pdfName = `book-${bookId}.pdf`;
+      pdfKey = sbKeyFor(userId, bookId, pdfName);
+      await sbUploadBuffer(pdfKey, await fsp.readFile(pdfPath), "application/pdf");
+    }
 
     // 5) Final
     m = await loadManifest(userId, bookId);
@@ -2098,6 +2794,7 @@ async function runGeneration(userId, bookId) {
     m.step = "done";
     m.error = "";
     m.pdf = `/download/${encodeURIComponent(bookId)}`;
+    m.pdfKey = pdfKey;
     m.updatedAt = nowISO();
     await saveManifest(userId, bookId, m);
   } catch (e) {
@@ -2109,6 +2806,7 @@ async function runGeneration(userId, bookId) {
 
 // ------------------------------
 // Servir imagens do livro: /api/image/:id/:file (ÚNICA rota)
+// - Vercel-safe: se não existir no disco, tenta baixar do Storage
 // ------------------------------
 app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
   try {
@@ -2128,10 +2826,18 @@ app.get("/api/image/:id/:file", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
 
     const fp = path.join(bookDirOf(userId, id), file);
+
+    // tenta restaurar do storage
+    if (!existsSyncSafe(fp) && sbEnabled()) {
+      const key = sbKeyFor(userId, id, file);
+      await ensureFileFromStorageIfMissing(fp, key);
+    }
+
     if (!existsSyncSafe(fp)) return res.status(404).send("not found");
 
     res.setHeader("Cache-Control", "no-store");
-    res.type("png").send(fs.readFileSync(fp));
+    res.type(path.extname(fp).toLowerCase() === ".jpg" ? "jpg" : path.extname(fp).toLowerCase() === ".pdf" ? "pdf" : "png");
+    res.send(fs.readFileSync(fp));
   } catch (e) {
     res.status(500).send(String(e?.message || e || "Erro"));
   }
@@ -2153,7 +2859,15 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) return res.status(403).send("forbidden");
     if (m.status !== "done") return res.status(409).send("PDF ainda não está pronto");
 
-    const pdfPath = path.join(bookDirOf(userId, id), `book-${id}.pdf`);
+    const pdfName = `book-${id}.pdf`;
+    const pdfPath = path.join(bookDirOf(userId, id), pdfName);
+
+    // Vercel-safe restore
+    if (!existsSyncSafe(pdfPath) && sbEnabled()) {
+      const key = m.pdfKey || sbKeyFor(userId, id, pdfName);
+      await ensureFileFromStorageIfMissing(pdfPath, key);
+    }
+
     if (!existsSyncSafe(pdfPath)) return res.status(404).send("pdf não encontrado");
 
     res.setHeader("Content-Type", "application/pdf");
@@ -2165,6 +2879,85 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 });
 
 // ------------------------------
+// Placeholder /books (simples) — você pode plugar seu módulo atual depois
+// ------------------------------
+app.get("/books", requireAuth, async (req, res) => {
+  const userId = String(req.user?.id || "");
+  const list = [];
+  try {
+    await ensureDir(BOOKS_DIR);
+    const dirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
+    for (const d of dirs) {
+      const p = path.join(BOOKS_DIR, d, "book.json");
+      if (!existsSyncSafe(p)) continue;
+      const m = await readJson(p).catch(() => null);
+      if (!m) continue;
+      if (!canAccessBook(userId, m, req.user)) continue;
+      list.push(m);
+    }
+  } catch {}
+
+  list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+
+  res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Meus Livros</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827}
+  .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
+  .card{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px}
+  h1{margin:0 0 12px;font-weight:1000}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .item{border:1px solid rgba(0,0,0,.08);border-radius:18px;padding:12px}
+  .muted{color:#6b7280;font-weight:900}
+  a.btn{display:inline-flex;gap:10px;align-items:center;padding:10px 12px;border-radius:999px;text-decoration:none;font-weight:1000;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff}
+  a.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h1>📚 Meus Livros</h1>
+      <div class="row">
+        <a class="btn ghost" href="/create">+ Criar</a>
+        <a class="btn ghost" href="/sales">Vendas</a>
+      </div>
+    </div>
+    <div class="grid">
+      ${list
+        .map((m) => {
+          const cover = m.cover?.url ? `<img src="${m.cover.url}" style="width:100%;border-radius:14px;display:block"/>` : "";
+          const title = escapeHtml(m.child?.name ? `Aventura de ${m.child.name}` : "Livro");
+          const st = escapeHtml(m.status || "created");
+          const up = escapeHtml(m.updatedAt || "");
+          const open = `/generate?id=${encodeURIComponent(m.id)}`;
+          const pdf = m.pdf ? `<a class="btn" href="${m.pdf}">⬇️ PDF</a>` : "";
+          return `<div class="item">
+            ${cover}
+            <div style="margin-top:10px;font-weight:1000">${title}</div>
+            <div class="muted">status=${st}</div>
+            <div class="muted" style="font-size:12px">${up}</div>
+            <div class="row">
+              <a class="btn ghost" href="${open}">👀 Abrir</a>
+              ${pdf}
+            </div>
+          </div>`;
+        })
+        .join("")}
+    </div>
+    ${list.length ? "" : `<div class="muted">Nenhum livro ainda. Clique em "Criar".</div>`}
+  </div>
+</div>
+</body>
+</html>`);
+});
+
+// ------------------------------
 // Start
 // ------------------------------
 (async () => {
@@ -2173,11 +2966,13 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 
   app.listen(PORT, () => {
     console.log("===============================================");
-    console.log(`📚 Meu Livro Mágico — SEQUENCIAL (FIX REFERENCE)`);
+    console.log(`📚 Meu Livro Mágico — SEQUENCIAL`);
     console.log(`✅ http://localhost:${PORT}`);
     console.log(`🛒 Página de Vendas: http://localhost:${PORT}/sales`);
     console.log(`✨ Gerador:          http://localhost:${PORT}/create`);
-    console.log(`⏳ Step 4 Gerando:   http://localhost:${PORT}/generate`);
+    console.log(`⏳ Gerando:          http://localhost:${PORT}/generate`);
+    console.log("-----------------------------------------------");
+    console.log("ℹ️  BASE DIR:", OUT_DIR, IS_VERCEL ? "(Vercel:/tmp)" : "(local)");
     console.log("-----------------------------------------------");
 
     if (!OPENAI_API_KEY) {
@@ -2193,27 +2988,22 @@ app.get("/download/:id", requireAuth, async (req, res) => {
       console.log("ℹ️  IMAGE_PROVIDER: Replicate");
       console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
       if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
-      console.log(
-        "ℹ️  RESOLUTION:",
-        REPLICATE_RESOLUTION,
-        "| ASPECT:",
-        REPLICATE_ASPECT_RATIO,
-        "| FORMAT:",
-        REPLICATE_OUTPUT_FORMAT,
-        "| SAFETY:",
-        REPLICATE_SAFETY
-      );
-      console.log("ℹ️  Extra (se suportado pelo schema):",
-        "seed=", REPLICATE_SEED,
-        "guidance=", REPLICATE_GUIDANCE,
-        "strength=", REPLICATE_STRENGTH
-      );
+      console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
+      console.log("✅ Referência: envia image_input + aliases (image/input_image) para garantir que o modelo use a foto.");
     } else {
       console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
       console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
+    }
+
+    if (sbEnabled()) {
+      console.log("✅ Supabase Storage ativo:", SUPABASE_URL);
+      console.log("ℹ️  Bucket:", SUPABASE_STORAGE_BUCKET);
+    } else {
+      console.log("ℹ️  Supabase Storage desativado.");
     }
 
     console.log("✅ Estilos: read (leitura) | color (leitura + colorir)");
     console.log("===============================================");
   });
 })();
+module.exports = app;
