@@ -3225,14 +3225,22 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 // ------------------------------
 // Placeholder /books (simples)
 // ------------------------------
+// ------------------------------
+// /books — lista livros do usuário (admin vê tudo)
+// BOOKS_DIR/<ownerId>/<bookId>/book.json
+// ------------------------------
+app.get("/books", requireAuth, async (req, res) => {
+  const userId = String(req.user?.id || "");
+  const list = [];
+
   try {
     await ensureDir(BOOKS_DIR);
 
-    // BOOKS_DIR/<ownerId>/<bookId>/book.json
     const ownerDirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
 
     for (const ownerId of ownerDirs) {
       const ownerPath = path.join(BOOKS_DIR, ownerId);
+
       let bookDirs = [];
       try {
         const st = await fsp.stat(ownerPath);
