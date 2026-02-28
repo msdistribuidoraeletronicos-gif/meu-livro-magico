@@ -82,7 +82,7 @@ const IMAGE_MODEL = String(process.env.IMAGE_MODEL || "dall-e-2").trim() || "dal
 
 // Replicate (imagem principal)
 const REPLICATE_API_TOKEN = String(process.env.REPLICATE_API_TOKEN || "").trim();
-const REPLICATE_MODEL = String(process.env.REPLICATE_MODEL || "google/nano-banana-pro").trim();
+const REPLICATE_MODEL = "bytedance/seedream-4";
 const REPLICATE_VERSION = String(process.env.REPLICATE_VERSION || "").trim(); // opcional
 
 const REPLICATE_RESOLUTION = String(process.env.REPLICATE_RESOLUTION || "2K").trim();
@@ -620,42 +620,30 @@ function splitReplicateModel(model) {
 }
 
 async function replicateGetLatestVersionId(model) {
-  if (REPLICATE_VERSION) return REPLICATE_VERSION;
-
-  const key = String(model || "").trim();
-  if (!key) throw new Error("REPLICATE_MODEL vazio.");
-  if (replicateVersionCache.has(key)) return replicateVersionCache.get(key);
-
-  const parsed = splitReplicateModel(key);
-  if (!parsed) {
-    throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name" (ex: google/nano-banana-pro) ou configure REPLICATE_VERSION.`);
+  // 🔒 Se versão fixa estiver definida, usa ela
+  if (REPLICATE_VERSION) {
+    return REPLICATE_VERSION;
   }
 
-    let info = null;
-  try {
-    info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
-      method: "GET",
-      timeoutMs: 60000,
-      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-    });
-  } catch (e) {
-    const msg = String(e?.message || e || "");
-    // Quando o model não existe ou você não tem acesso, Replicate retorna 404 "Model not found"
-    if (msg.includes("HTTP 404") && msg.toLowerCase().includes("model not found")) {
-      throw new Error(
-        `REPLICATE_MODEL inválido/sem acesso: "${key}". ` +
-        `Ajuste REPLICATE_MODEL (owner/name) nas ENV da Vercel ou defina REPLICATE_VERSION fixa.`
-      );
-    }
-    throw e;
-  }
-  const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
+  const parsed = parseReplicateModel(model);
+  const key = `${parsed.owner}/${parsed.name}`;
+
+  const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
+    method: "GET",
+    timeoutMs: 60000,
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+  });
+
+  const versionId =
+    info?.latest_version?.id ||
+    info?.latest_version?.version ||
+    info?.latest_version;
+
   if (!versionId) {
-    throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente no .env.local.`);
+    throw new Error(`Não consegui obter latest_version do modelo "${key}".`);
   }
 
-  replicateVersionCache.set(key, String(versionId));
-  return String(versionId);
+  return versionId;
 }
 const replicateSchemaCache = new Map(); // key: versionId -> schema.inputs
 
@@ -815,7 +803,7 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
 
     const refDataUrl = bufferToDataUrlPng(imgBuf);
     const maskDataUrl = effectiveMask ? bufferToDataUrlPng(effectiveMask) : null;
-    const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "google/nano-banana-pro");
+    const createdVersion = await replicateGetLatestVersionId(REPLICATE_MODEL || "bytedance/seedream-4");
     const inputSchema = await replicateGetVersionSchema(createdVersion);
 
     // chaves mais comuns que os modelos usam
