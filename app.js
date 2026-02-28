@@ -2282,49 +2282,25 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 // ------------------------------
 // Start
 // ------------------------------
-(async () => {
+// Inicialização única (segura para serverless)
+let initialized = false;
+
+async function initApp() {
+  if (initialized) return;
   await ensureDir(OUT_DIR);
   await ensureDir(BOOKS_DIR);
+  initialized = true;
+}
 
-  app.listen(PORT, () => {
-    console.log("===============================================");
-    console.log(`📚 Meu Livro Mágico — SEQUENCIAL`);
-    console.log(`✅ http://localhost:${PORT}`);
-    console.log(`🛒 Página de Vendas: http://localhost:${PORT}/sales`);
-    console.log(`✨ Gerador:          http://localhost:${PORT}/create`);
-    console.log(`⏳ Step 4 Gerando:   http://localhost:${PORT}/generate`);
-    console.log("-----------------------------------------------");
+app.use(async (req, res, next) => {
+  try {
+    await initApp();
+    next();
+  } catch (err) {
+    console.error("Init error:", err);
+    res.status(500).send("Init failed");
+  }
+});
 
-    if (!OPENAI_API_KEY) {
-      console.log("❌ OPENAI_API_KEY NÃO configurada (texto não vai gerar).");
-      console.log("   ➜ Crie .env.local com: OPENAI_API_KEY=sua_chave");
-    } else {
-      console.log("✅ OPENAI_API_KEY OK");
-      console.log("ℹ️  TEXT_MODEL:", TEXT_MODEL);
-    }
-
-    if (REPLICATE_API_TOKEN) {
-      console.log("✅ REPLICATE_API_TOKEN OK");
-      console.log("ℹ️  IMAGE_PROVIDER: Replicate");
-      console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
-      if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
-      if (REPLICATE_IMAGE_FIELD) console.log("ℹ️  REPLICATE_IMAGE_FIELD (forçado):", REPLICATE_IMAGE_FIELD);
-      console.log(
-        "ℹ️  RESOLUTION:",
-        REPLICATE_RESOLUTION,
-        "| ASPECT:",
-        REPLICATE_ASPECT_RATIO,
-        "| FORMAT:",
-        REPLICATE_OUTPUT_FORMAT,
-        "| SAFETY:",
-        REPLICATE_SAFETY
-      );
-    } else {
-      console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
-      console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
-    }
-
-    console.log("✅ Estilos: read (leitura) | color (leitura + colorir)");
-    console.log("===============================================");
-  });
-})();
+// EXPORT PARA VERCEL
+module.exports = app;
