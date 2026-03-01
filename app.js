@@ -1120,6 +1120,7 @@ function wrapLines(text, maxCharsPerLine) {
 }
 
 // ✅ carrega fontes 1x (cache)
+// ✅ carrega fontes 1x (cache) — agora suporta /fonts e /fonts/fonts
 async function loadFontsOnce() {
   if (_fontRegular && _fontBold) return { regular: _fontRegular, bold: _fontBold };
 
@@ -1131,15 +1132,32 @@ async function loadFontsOnce() {
     }
   }
 
-  const fontDir = path.join(__dirname, "fonts");
-  const regPath = path.join(fontDir, "DejaVuSans.ttf");
-  const boldPath = path.join(fontDir, "DejaVuSans-Bold.ttf");
+  // ✅ tenta vários locais (porque no Vercel __dirname costuma ser /var/task)
+  const candidates = [
+    path.join(__dirname, "fonts"),              // /var/task/fonts
+    path.join(__dirname, "fonts", "fonts"),     // /var/task/fonts/fonts  (seu caso)
+    path.join(process.cwd(), "fonts"),          // cwd/fonts
+    path.join(process.cwd(), "fonts", "fonts"), // cwd/fonts/fonts
+  ];
 
-  if (!fs.existsSync(regPath)) {
-    throw new Error(`Fonte não encontrada: ${regPath} (crie /fonts e adicione DejaVuSans.ttf)`);
+  let regPath = "";
+  let boldPath = "";
+  for (const dir of candidates) {
+    const rp = path.join(dir, "DejaVuSans.ttf");
+    const bp = path.join(dir, "DejaVuSans-Bold.ttf");
+    if (fs.existsSync(rp) && fs.existsSync(bp)) {
+      regPath = rp;
+      boldPath = bp;
+      break;
+    }
   }
-  if (!fs.existsSync(boldPath)) {
-    throw new Error(`Fonte não encontrada: ${boldPath} (adicione DejaVuSans-Bold.ttf)`);
+
+  if (!regPath || !boldPath) {
+    // mensagem bem explícita pra você ver onde ele procurou
+    throw new Error(
+      `Fonte não encontrada. Procurei em:\n- ${candidates.join("\n- ")}\n` +
+      `Esperado: DejaVuSans.ttf e DejaVuSans-Bold.ttf`
+    );
   }
 
   _fontRegular = await new Promise((resolve, reject) => {
