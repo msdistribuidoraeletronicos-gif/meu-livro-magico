@@ -547,7 +547,25 @@ async function sendResetEmail(toEmail, resetUrl) {
       )
     );
   });
+// Paliativo: se algum lugar fizer POST por engano, redireciona pro GET
+app.post("/parceiros/perfil/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  return res.redirect(`/parceiros/perfil/${encodeURIComponent(id)}`);
+});
+// =========================
+// PALIATIVO: evitar "Cannot POST /parceiros/perfil/..."
+// Alguns navegadores/forms podem tentar POST por engano.
+// Redireciona para o GET equivalente.
+// =========================
+app.post("/parceiros/perfil/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(id)}`);
+});
 
+// (extra) se algum POST vier sem :id, manda pra central
+app.post("/parceiros/perfil", (req, res) => {
+  return res.redirect(303, "/parceiros");
+});
   // =========================
   // POST /parceiros/login
   // =========================
