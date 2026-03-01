@@ -120,7 +120,119 @@ const EDIT_MAX_SIDE = 1024;
 
 // Provider de imagem ativo
 const IMAGE_PROVIDER = REPLICATE_API_TOKEN ? "replicate" : "openai";
+// ------------------------------
+// PARCEIROS (fabricação) + ROTEAMENTO POR CIDADE
+// - Se existir parceiro na mesma cidade do pedido -> escolhe ele
+// - Se não existir -> escolhe o primeiro da lista
+// ------------------------------
 
+// ✅ Você pode manter hardcoded (simples) OU carregar de env PARTNERS_JSON
+// Formato sugerido:
+// [
+//   {"id":"p1","name":"Fábrica Aquidauana","city":"Aquidauana","type":"manufacturing"},
+//   {"id":"p2","name":"Fábrica Anastácio","city":"Anastácio","type":"manufacturing"}
+// ]
+function loadPartnersList() {
+  const raw = String(process.env.PARTNERS_JSON || "").trim();
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+    } catch {}
+  }
+
+  // ✅ fallback (edite aqui)
+  return [
+    { id: "p1", name: "Parceiro 01", city: "Aquidauana", type: "manufacturing" },
+    { id: "p2", name: "Parceiro 02", city: "Anastácio", type: "manufacturing" },
+  ];
+}
+
+const PARTNERS = loadPartnersList();
+
+// 🔐 token simples para parceiros consumirem API (opcional)
+const PARTNER_API_TOKEN = String(process.env.PARTNER_API_TOKEN || "").trim();
+
+function normCity(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/\s+/g, " ");
+}
+
+function chooseManufacturingPartnerByCity(city) {
+  const list = Array.isArray(PARTNERS) ? PARTNERS.filter(p => String(p?.type || "manufacturing") === "manufacturing") : [];
+  if (!list.length) return null;
+
+  const target = normCity(city);
+  if (target) {
+    const same = list.find(p => normCity(p.city) === target);
+    if (same) return same;
+  }
+  return list[0]; // fallback: primeiro parceiro
+}
+
+function ensureOrderFields(m) {
+  if (!m.order) m.order = { city: "", createdAt: "" };
+  if (typeof m.order.city !== "string") m.order.city = "";
+  if (typeof m.order.createdAt !== "string") m.order.createdAt = "";
+  return m;
+}
+
+function ensurePartnerFields(m) {
+  if (!m.partner) {
+    m.partner = {
+      id: "",
+      name: "",
+      city: "",
+      type: "manufacturing",
+      assignedAt: "",
+      rule: "", // "city_match" | "fallback_first"
+    };
+  }
+  return m;
+}
+
+function assignPartnerIfMissing(m) {
+  m = ensureOrderFields(m);
+  m = ensurePartnerFields(m);
+
+  // já tem parceiro
+  if (m.partner?.id) return m;
+
+  const p = chooseManufacturingPartnerByCity(m.order?.city || "");
+  if (!p) return m;
+
+  const matched = normCity(p.city) && normCity(p.city) === normCity(m.order?.city || "");
+
+  m.partner = {
+    id: String(p.id || ""),
+    name: String(p.name || ""),
+    city: String(p.city || ""),
+    type: String(p.type || "manufacturing"),
+    assignedAt: nowISO(),
+    rule: matched ? "city_match" : "fallback_first",
+  };
+
+  return m;
+}
+
+function requirePartnerToken(req, res) {
+  // Se você não configurar PARTNER_API_TOKEN, libera sem token (não recomendado)
+  if (!PARTNER_API_TOKEN) return true;
+
+  const header = String(req.headers["authorization"] || "");
+  const q = String(req.query?.token || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : q.trim();
+
+  if (!token || token !== PARTNER_API_TOKEN) {
+    res.status(401).json({ ok: false, error: "invalid_partner_token" });
+    return false;
+  }
+  return true;
+}
 // Páginas opcionais (arquivos)
 const LANDING_HTML = path.join(__dirname, "landing.html");
 const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
@@ -192,7 +304,14 @@ async function readJson(file) {
   const raw = await fsp.readFile(file, "utf-8");
   return JSON.parse(raw);
 }
-
+async function readJsonSafe(file, fallback = null) {
+  try {
+    const raw = await fsp.readFile(file, "utf-8");
+    return JSON.parse(raw);
+  } catch (e) {
+    return fallback;
+  }
+}
 function existsSyncSafe(p) {
   try {
     return fs.existsSync(p);
@@ -1505,6 +1624,22 @@ function makeEmptyManifest(id, ownerId) {
     style: "read", // read | color
     child: { name: "", age: 6, gender: "neutral" },
 
+    // ✅ NOVO: dados do pedido (cidade)
+    order: {
+      city: "",        // <- cidade do pedido
+      createdAt: nowISO()
+    },
+
+    // ✅ NOVO: parceiro atribuído (fabricação)
+    partner: {
+      id: "",
+      name: "",
+      city: "",
+      type: "manufacturing",
+      assignedAt: "",
+      rule: "" // "city_match" | "fallback_first"
+    },
+
     // arquivos locais e storage keys
     photo: { ok: false, file: "", mime: "", editBase: "", storageKey: "", editBaseKey: "" },
     mask: { ok: false, file: "", editBase: "", storageKey: "", editBaseKey: "" },
@@ -1516,7 +1651,7 @@ function makeEmptyManifest(id, ownerId) {
     pdf: "",
     pdfKey: "",
 
-    // NOVO: retry/cooldown (não quebra nada se faltar)
+    // retry/cooldown
     retry: { count: 0, lastAt: "", nextTryAt: 0 },
 
     updatedAt: nowISO(),
@@ -1557,6 +1692,155 @@ const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
 require("./partners.page.js")(app, { /* requireAuth opcional */ });
+// ------------------------------
+// API PARCEIROS
+// - parceiros consultam pedidos atribuídos a eles
+// - admin pode listar tudo
+// ------------------------------
+
+// lista parceiros cadastrados (público ou com token — você escolhe)
+app.get("/api/partners", async (req, res) => {
+  try {
+    // se quiser exigir token aqui também:
+    // if (!requirePartnerToken(req, res)) return;
+
+    const list = (Array.isArray(PARTNERS) ? PARTNERS : []).map(p => ({
+      id: String(p.id || ""),
+      name: String(p.name || ""),
+      city: String(p.city || ""),
+      type: String(p.type || "manufacturing"),
+    }));
+    return res.json({ ok: true, partners: list });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
+
+// parceiro pega sua fila (por partnerId) — exige token se PARTNER_API_TOKEN estiver setado
+app.get("/api/partner/orders", async (req, res) => {
+  try {
+    if (!requirePartnerToken(req, res)) return;
+
+    const partnerId = String(req.query?.partnerId || "").trim();
+    if (!partnerId) return res.status(400).json({ ok: false, error: "partnerId_required" });
+
+    await ensureDir(BOOKS_DIR);
+    const owners = await fsp.readdir(BOOKS_DIR).catch(() => []);
+    const out = [];
+
+    for (const ownerId of owners) {
+      const ownerDir = path.join(BOOKS_DIR, String(ownerId));
+      const st = await fsp.stat(ownerDir).catch(() => null);
+      if (!st || !st.isDirectory()) continue;
+
+      const bookIds = await fsp.readdir(ownerDir).catch(() => []);
+      for (const bookId of bookIds) {
+        const p = manifestPathOf(ownerId, bookId);
+        const m = await readJsonSafe(p, null);
+        if (!m) continue;
+
+        // só livros prontos
+        if (String(m.status) !== "done") continue;
+
+        // garante campos
+        ensureOrderFields(m);
+        ensurePartnerFields(m);
+
+        if (String(m.partner?.id || "") !== partnerId) continue;
+
+        // monta payload
+        out.push({
+          id: String(m.id || bookId),
+          ownerId: String(m.ownerId || ownerId),
+          city: String(m.order?.city || ""),
+          partner: m.partner,
+          child: m.child || {},
+          theme: String(m.theme || ""),
+          style: String(m.style || "read"),
+          pdf: String(m.pdf || ""),
+          coverUrl: (m.cover?.ok && m.cover?.url) ? m.cover.url : "",
+          updatedAt: String(m.updatedAt || ""),
+          createdAt: String(m.createdAt || ""),
+        });
+      }
+    }
+
+    out.sort((a,b) => String(b.updatedAt||"").localeCompare(String(a.updatedAt||"")));
+    return res.json({ ok: true, orders: out });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
+
+// admin: lista todos os livros + parceiro + cidade (pra sua página /partners)
+app.get("/api/admin/partner-orders", requireAuth, async (req, res) => {
+  try {
+    if (!isAdminUser(req.user)) return res.status(403).json({ ok: false, error: "admin_only" });
+
+    await ensureDir(BOOKS_DIR);
+    const owners = await fsp.readdir(BOOKS_DIR).catch(() => []);
+    const out = [];
+
+    for (const ownerId of owners) {
+      const ownerDir = path.join(BOOKS_DIR, String(ownerId));
+      const st = await fsp.stat(ownerDir).catch(() => null);
+      if (!st || !st.isDirectory()) continue;
+
+      const bookIds = await fsp.readdir(ownerDir).catch(() => []);
+      for (const bookId of bookIds) {
+        const p = manifestPathOf(ownerId, bookId);
+        const m = await readJsonSafe(p, null);
+        if (!m) continue;
+
+        ensureOrderFields(m);
+        ensurePartnerFields(m);
+
+        // se já está done, garante parceiro atribuído (útil pra livros antigos)
+        if (String(m.status) === "done" && !m.partner?.id) {
+          const mm = assignPartnerIfMissing(m);
+          mm.updatedAt = nowISO();
+          await saveManifest(String(mm.ownerId || ownerId), String(mm.id || bookId), mm).catch(()=>{});
+          // usa mm na resposta
+          out.push({
+            id: String(mm.id || bookId),
+            ownerId: String(mm.ownerId || ownerId),
+            status: String(mm.status || ""),
+            city: String(mm.order?.city || ""),
+            partner: mm.partner,
+            child: mm.child || {},
+            theme: String(mm.theme || ""),
+            style: String(mm.style || "read"),
+            pdf: String(mm.pdf || ""),
+            coverUrl: (mm.cover?.ok && mm.cover?.url) ? mm.cover.url : "",
+            updatedAt: String(mm.updatedAt || ""),
+            createdAt: String(mm.createdAt || ""),
+          });
+          continue;
+        }
+
+        out.push({
+          id: String(m.id || bookId),
+          ownerId: String(m.ownerId || ownerId),
+          status: String(m.status || ""),
+          city: String(m.order?.city || ""),
+          partner: m.partner,
+          child: m.child || {},
+          theme: String(m.theme || ""),
+          style: String(m.style || "read"),
+          pdf: String(m.pdf || ""),
+          coverUrl: (m.cover?.ok && m.cover?.url) ? m.cover.url : "",
+          updatedAt: String(m.updatedAt || ""),
+          createdAt: String(m.createdAt || ""),
+        });
+      }
+    }
+
+    out.sort((a,b) => String(b.updatedAt||"").localeCompare(String(a.updatedAt||"")));
+    return res.json({ ok: true, orders: out, partners: PARTNERS });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
 // ------------------------------
 // LOGIN UI
 // ------------------------------
@@ -2431,7 +2715,8 @@ function renderGeneratorHtml(req, res) {
         childAge: state.childAge,
         childGender: state.childGender,
         theme: state.theme,
-        style: state.style
+        style: state.style,
+        city: state.city || ""
       })
     });
     const j = await r.json().catch(()=> ({}));
@@ -2939,7 +3224,7 @@ app.post("/api/generate", requireAuth, async (req, res) => {
     const childGender = String(req.body?.childGender || m.child?.gender || "neutral");
     const theme = String(req.body?.theme || m.theme || "space");
     const style = String(req.body?.style || m.style || "read");
-
+    const city = String(req.body?.city || m.order?.city || "").trim();
     // validação mínima
     if (!childName || childName.length < 2) return res.status(400).json({ ok: false, error: "childName inválido" });
     if (!theme) return res.status(400).json({ ok: false, error: "theme inválido" });
@@ -3404,6 +3689,8 @@ if (String(m.step || "").startsWith("image_")) {
         m.error = "";
         m.pdf = `/download/${encodeURIComponent(id)}`;
         m.updatedAt = nowISO();
+         m = ensureOrderFields(m);
+      m = assignPartnerIfMissing(m);
         await saveManifest(userId, id, m);
         return res.json({ ok: true, step: "done" });
       }
