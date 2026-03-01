@@ -2702,16 +2702,16 @@ app.get("/generate", requireAuth, async (req, res) => {
     setBar(p);
 
     if (j.status === "done" && j.pdf){
-  setSub("✅ Pronto! Redirecionando para Meus Livros…");
+  setSub("✅ Pronto! Abrindo o preview…");
   const pdfBtn = $("pdfBtn");
   pdfBtn.style.display = "inline-flex";
   pdfBtn.href = j.pdf;
-  setLog("Finalizado. Abrindo seus livros…");
+  setLog("Finalizado. Abrindo preview do livro…");
 
-  // ✅ pequeno delay pra UI atualizar e o usuário sentir que terminou
+  // ✅ abre o preview automaticamente
   setTimeout(() => {
-    window.location.href = "/books?open=" + encodeURIComponent(bookId);
-  }, 900);
+    window.location.href = "/preview?id=" + encodeURIComponent(bookId);
+  }, 650);
 
   return;
 }
@@ -3560,7 +3560,160 @@ app.get("/download/:id", requireAuth, async (req, res) => {
     res.status(500).send(String(e?.message || e || "Erro"));
   }
 });
+// ------------------------------
+// /preview — apresenta o livro pronto (capa + páginas)
+// - se existir preview.html ao lado do app.js, usa ele
+// - senão, usa um viewer embutido (fallback)
+// ------------------------------
+const PREVIEW_HTML = path.join(__dirname, "preview.html"); // opcional
 
+app.get("/preview", requireAuth, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || "");
+    if (!userId) return res.redirect("/login?next=" + encodeURIComponent(req.originalUrl || "/books"));
+
+    const id = String(req.query?.id || "").trim();
+    if (!id) return res.status(400).type("html").send("<h1>ID ausente</h1><p>Use /preview?id=...</p>");
+
+    const m = await loadManifestAsViewer(userId, id, req.user);
+    if (!m) return res.status(404).type("html").send("<h1>Livro não encontrado</h1>");
+    if (!canAccessBook(userId, m, req.user)) return res.status(403).type("html").send("<h1>Forbidden</h1>");
+
+    // ✅ se você tiver um preview.html pronto, ele ganha prioridade
+    // (mas ele precisa lidar com o id via querystring na sua própria lógica)
+    if (existsSyncSafe(PREVIEW_HTML)) return res.sendFile(PREVIEW_HTML);
+
+    const title = escapeHtml(m.child?.name ? `A aventura de ${m.child.name}` : "Meu Livro Mágico");
+    const coverUrl = m.cover?.ok && m.cover?.url ? m.cover.url : "";
+    const pdfUrl = m.pdf ? m.pdf : "";
+    const images = Array.isArray(m.images) ? m.images.slice().sort((a, b) => Number(a.page) - Number(b.page)) : [];
+
+    // Monta lista "páginas" (capa + pages)
+    const items = [];
+    if (coverUrl) items.push({ label: "Capa", url: coverUrl });
+    for (const it of images) {
+      if (it?.url) items.push({ label: `Página ${it.page}`, url: it.url });
+    }
+
+    // Se não terminou, manda pra geração
+    if (m.status !== "done") {
+      return res.redirect("/generate?id=" + encodeURIComponent(id));
+    }
+
+    res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Preview — ${title}</title>
+<style>
+  :root{
+    --bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;
+    --text:#111827;--muted:#6b7280;--border:#e5e7eb;
+    --violet:#7c3aed;--pink:#db2777;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));color:var(--text)}
+  .wrap{max-width:1100px;margin:0 auto;padding:22px 14px}
+  .top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .title{font-size:20px;font-weight:1000}
+  .muted{color:var(--muted);font-weight:900}
+  .btns{display:flex;gap:10px;flex-wrap:wrap}
+  a.btn{
+    display:inline-flex;align-items:center;gap:10px;
+    padding:10px 12px;border-radius:999px;text-decoration:none;
+    font-weight:1000;border:1px solid rgba(0,0,0,.08);color:#374151;background:rgba(255,255,255,.65)
+  }
+  a.primary{border:0;color:#fff;background:linear-gradient(90deg,var(--violet),var(--pink))}
+  .grid{display:grid;grid-template-columns: 1fr 360px;gap:12px}
+  @media(max-width:980px){.grid{grid-template-columns:1fr}}
+  .viewer{background:#fff;border:1px solid var(--border);border-radius:18px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:12px}
+  .stage{border:1px solid rgba(0,0,0,.08);border-radius:14px;overflow:hidden;background:#fff}
+  .stage img{width:100%;display:block}
+  .nav{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:10px}
+  .nav button{
+    border:0;cursor:pointer;border-radius:999px;padding:10px 12px;font-weight:1000;
+    background:rgba(124,58,237,.10);color:#4c1d95;border:1px solid rgba(124,58,237,.16)
+  }
+  .nav button:disabled{opacity:.45;cursor:not-allowed}
+  .thumbs{background:#fff;border:1px solid var(--border);border-radius:18px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:12px}
+  .thumbGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .thumb{border:1px solid rgba(0,0,0,.08);border-radius:14px;overflow:hidden;cursor:pointer;background:#fff}
+  .thumb img{width:100%;display:block}
+  .thumb .lbl{padding:8px 10px;font-weight:1000;color:#374151}
+  .thumb.active{outline:4px solid rgba(124,58,237,.18);border-color:rgba(124,58,237,.35)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="title">👀 Preview do Livro</div>
+      <div class="muted">${title}</div>
+    </div>
+    <div class="btns">
+      <a class="btn" href="/books?open=${encodeURIComponent(id)}">📚 Meus Livros</a>
+      <a class="btn" href="/create">➕ Criar outro</a>
+      ${pdfUrl ? `<a class="btn primary" href="${escapeHtml(pdfUrl)}">⬇️ Baixar PDF</a>` : ``}
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="viewer">
+      <div class="stage"><img id="bigImg" alt="preview" /></div>
+      <div class="nav">
+        <button id="prevBtn">← Anterior</button>
+        <div class="muted" id="pos">—</div>
+        <button id="nextBtn">Próxima →</button>
+      </div>
+    </div>
+
+    <div class="thumbs">
+      <div class="muted" style="margin-bottom:10px">Páginas</div>
+      <div class="thumbGrid" id="thumbGrid"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const items = ${JSON.stringify(items)};
+  const $ = (id) => document.getElementById(id);
+
+  let idx = 0;
+
+  function renderThumbs(){
+    const root = $("thumbGrid");
+    root.innerHTML = "";
+    items.forEach((it, i) => {
+      const d = document.createElement("div");
+      d.className = "thumb" + (i === idx ? " active" : "");
+      d.innerHTML = '<img src="' + it.url + '" alt="' + it.label + '"/><div class="lbl">' + it.label + '</div>';
+      d.onclick = () => { idx = i; render(); };
+      root.appendChild(d);
+    });
+  }
+
+  function render(){
+    const it = items[idx];
+    $("bigImg").src = it ? it.url : "";
+    $("pos").textContent = it ? (it.label + " • " + (idx+1) + "/" + items.length) : "—";
+    $("prevBtn").disabled = idx <= 0;
+    $("nextBtn").disabled = idx >= items.length - 1;
+    renderThumbs();
+  }
+
+  $("prevBtn").onclick = () => { if (idx > 0) { idx--; render(); } };
+  $("nextBtn").onclick = () => { if (idx < items.length - 1) { idx++; render(); } };
+
+  // inicia na capa
+  render();
+</script>
+</body>
+</html>`);
+  } catch (e) {
+    res.status(500).type("html").send(`<h1>Erro no preview</h1><pre>${escapeHtml(String(e?.message || e || "Erro"))}</pre>`);
+  }
+});
 // ------------------------------
 // Placeholder /books (simples)
 // ------------------------------
@@ -3568,9 +3721,27 @@ app.get("/download/:id", requireAuth, async (req, res) => {
 // /books — lista livros do usuário (admin vê tudo)
 // BOOKS_DIR/<ownerId>/<bookId>/book.json
 // ------------------------------
+// ------------------------------
+// /books — lista livros do usuário (admin vê tudo)
+// BOOKS_DIR/<ownerId>/<bookId>/book.json
+// ✅ Agora:
+// - se /books?open=<id> e estiver pronto -> redireciona para /preview?id=<id>
+// - botão "Abrir": done -> /preview | senão -> /generate
+// ------------------------------
 app.get("/books", requireAuth, async (req, res) => {
   const userId = String(req.user?.id || "");
   const list = [];
+
+  // ✅ se pediram open, tenta ir direto pro preview (quando já estiver pronto)
+  const openId = String(req.query?.open || "").trim();
+  if (openId) {
+    try {
+      const mm = await loadManifestAsViewer(userId, openId, req.user);
+      if (mm && canAccessBook(userId, mm, req.user) && String(mm.status) === "done") {
+        return res.redirect("/preview?id=" + encodeURIComponent(openId));
+      }
+    } catch {}
+  }
 
   try {
     await ensureDir(BOOKS_DIR);
@@ -3642,7 +3813,10 @@ app.get("/books", requireAuth, async (req, res) => {
           const title = escapeHtml(m.child?.name ? `Aventura de ${m.child.name}` : "Livro");
           const st = escapeHtml(m.status || "created");
           const up = escapeHtml(m.updatedAt || "");
-          const open = `/generate?id=${encodeURIComponent(m.id)}`;
+          const isDone = String(m.status || "") === "done";
+          const open = isDone
+            ? `/preview?id=${encodeURIComponent(m.id)}`
+            : `/generate?id=${encodeURIComponent(m.id)}`;
           const pdf = m.pdf ? `<a class="btn" href="${m.pdf}">⬇️ PDF</a>` : "";
           return `<div class="item" id="book-${escapeHtml(m.id)}">
             ${cover}
@@ -3676,7 +3850,6 @@ app.get("/books", requireAuth, async (req, res) => {
 </body>
 </html>`);
 });
-
 // ------------------------------
 // Start
 // ------------------------------
