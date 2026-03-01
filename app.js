@@ -1057,7 +1057,7 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const rx = Math.round(Math.min(W, H) * 0.03);
 
   const bandX = pad;
-  const bandY = pad; // card no topo
+  const bandY = pad;
   const bandW = W - pad * 2;
 
   const innerPadX = Math.round(bandW * 0.045);
@@ -1075,7 +1075,6 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const topPadY = Math.round(bandH * 0.18);
   const botPadY = Math.round(bandH * 0.16);
   const usableH = Math.max(1, bandH - topPadY - botPadY);
-
   const usableW = Math.max(1, bandW - innerPadX * 2);
 
   function estimateCharsPerLine(fontPx) {
@@ -1102,7 +1101,6 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
 
   let pack = buildLines(titleSize, textSize);
   let guard = 0;
-
   while (pack.usedH > usableH && guard < 80) {
     guard++;
     if (textSize > TEXT_MIN) textSize -= 1;
@@ -1111,22 +1109,20 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     pack = buildLines(titleSize, textSize);
   }
 
-  // y inicial dentro do card (topo)
   let y = bandY + topPadY;
 
-  // ✅ desenha linhas com Y absoluto (sem dy)
+  const fontStack = "DejaVu Sans, Arial, Helvetica, sans-serif";
+
   const titleSvg = pack.titleLines.length
-    ? `
-      <g>
-        ${pack.titleLines
-          .map((ln, i) => {
-            const yy = y + i * pack.lineGapTitle;
-            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${titleSize}"
-                          font-weight="900" fill="#0f172a">${escapeXml(ln)}</text>`;
-          })
-          .join("\n")}
-      </g>
-    `
+    ? pack.titleLines.map((ln, i) => {
+        const yy = y + i * pack.lineGapTitle;
+        return `<text x="${textX}" y="${yy}"
+          font-family="${fontStack}"
+          font-size="${titleSize}"
+          font-weight="800"
+          fill="#0f172a"
+          xml:space="preserve">${escapeXml(ln)}</text>`;
+      }).join("\n")
     : "";
 
   if (pack.titleLines.length) {
@@ -1134,44 +1130,34 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   }
 
   const bodySvg = pack.bodyLines.length
-    ? `
-      <g>
-        ${pack.bodyLines
-          .map((ln, i) => {
-            const yy = y + i * pack.lineGapBody;
-            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${textSize}"
-                          font-weight="800" fill="#0f172a">${escapeXml(ln)}</text>`;
-          })
-          .join("\n")}
-      </g>
-    `
+    ? pack.bodyLines.map((ln, i) => {
+        const yy = y + i * pack.lineGapBody;
+        return `<text x="${textX}" y="${yy}"
+          font-family="${fontStack}"
+          font-size="${textSize}"
+          font-weight="700"
+          fill="#0f172a"
+          xml:space="preserve">${escapeXml(ln)}</text>`;
+      }).join("\n")
     : "";
 
+  // ✅ sombra sem filter (mais compatível em Vercel)
+  const shadowDy = Math.round(H * 0.010);
+  const shadowBlur = 0; // sem blur (compatível); se quiser “blur fake”, aumente opacidade e dx/dy
+  const shadowOpacity = 0.18;
+
   const svg = `
-  <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.25"/>
-      </filter>
-    </defs>
-
+  <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
+          rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
-          rx="${rx}" ry="${rx}"
-          fill="#FFFFFF" fill-opacity="0.88"
-          filter="url(#shadow)"/>
-
+          rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.90"/>
     ${titleSvg}
     ${bodySvg}
   </svg>`;
 
   await sharp(inputPath)
-    .composite([
-      {
-        input: Buffer.from(svg),
-        top: 0,
-        left: 0,
-      },
-    ])
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .png()
     .toFile(outputPath);
 
@@ -1208,63 +1194,47 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   const lineGapTitle = Math.round(titleSize * 1.15);
   const lineGapSub   = Math.round(subSize * 1.25);
 
-  const titleSvg = titleLines.length
-    ? `
-      <g>
-        ${titleLines
-          .map((ln, i) => {
-            const yy = y + i * lineGapTitle;
-            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${titleSize}"
-                          font-weight="900" fill="#0f172a">${escapeXml(ln)}</text>`;
-          })
-          .join("\n")}
-      </g>
-    `
-    : "";
+  const fontStack = "DejaVu Sans, Arial, Helvetica, sans-serif";
+
+  const titleSvg = titleLines.map((ln, i) => {
+    const yy = y + i * lineGapTitle;
+    return `<text x="${textX}" y="${yy}"
+      font-family="${fontStack}"
+      font-size="${titleSize}"
+      font-weight="800"
+      fill="#0f172a"
+      xml:space="preserve">${escapeXml(ln)}</text>`;
+  }).join("\n");
 
   if (titleLines.length) {
     y += titleLines.length * lineGapTitle + Math.round(subSize * 0.35);
   }
 
-  const subSvg = subLines.length
-    ? `
-      <g>
-        ${subLines
-          .map((ln, i) => {
-            const yy = y + i * lineGapSub;
-            return `<text x="${textX}" y="${yy}" font-family="sans-serif" font-size="${subSize}"
-                          font-weight="800" fill="#0f172a">${escapeXml(ln)}</text>`;
-          })
-          .join("\n")}
-      </g>
-    `
-    : "";
+  const subSvg = subLines.map((ln, i) => {
+    const yy = y + i * lineGapSub;
+    return `<text x="${textX}" y="${yy}"
+      font-family="${fontStack}"
+      font-size="${subSize}"
+      font-weight="700"
+      fill="#0f172a"
+      xml:space="preserve">${escapeXml(ln)}</text>`;
+  }).join("\n");
+
+  const shadowDy = Math.round(H * 0.010);
+  const shadowOpacity = 0.18;
 
   const svg = `
-  <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>
-      </filter>
-    </defs>
-
+  <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
+          rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
-          rx="${rx}" ry="${rx}"
-          fill="#FFFFFF" fill-opacity="0.86"
-          filter="url(#shadow)"/>
-
+          rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.88"/>
     ${titleSvg}
     ${subSvg}
   </svg>`;
 
   await sharp(inputPath)
-    .composite([
-      {
-        input: Buffer.from(svg),
-        top: 0,
-        left: 0,
-      },
-    ])
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .png()
     .toFile(outputPath);
 
