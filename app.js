@@ -1698,7 +1698,8 @@ function releaseLock(userId, bookId) {
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-require("./partners.page.js")(app, { /* requireAuth opcional */ });
+require("./partners.fabricacao.page.js")(app);
+require("./partners.venda.page.js")(app);
 // ------------------------------
 // API PARCEIROS
 // - parceiros consultam pedidos atribuídos a eles
