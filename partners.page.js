@@ -887,10 +887,26 @@ app.post("/parceiros/esqueci", async (req, res) => {
         throw new Error("Não foi possível salvar a nova senha.");
       }
 
-      if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
-      setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+    // Se não existir segredo em produção, NÃO falha a redefinição.
+// Apenas pede para o usuário fazer login (sem auto-login por cookie).
+if (!COOKIE_SECRET && !isDev) {
+  return res.type("html").send(
+    layout(
+      "Senha redefinida",
+      `
+      <div class="card">
+        <div class="h1">Senha redefinida ✅</div>
+        <p class="p">Sua senha foi atualizada com sucesso. Agora faça login para entrar no painel.</p>
+        <div style="height:14px"></div>
+        <a class="btn btnPrimary" href="/parceiros/login">Ir para Login</a>
+      </div>
+      `
+    )
+  );
+}
 
-      return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
+setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
     } catch (e) {
       const msg = e?.message || String(e);
       console.error("[partners] redefinir erro:", msg);
