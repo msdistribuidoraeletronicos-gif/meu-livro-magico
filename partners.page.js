@@ -268,14 +268,17 @@ function clearCookie(req, res, name) {
     return id;
   }
 
-  function requirePartnerAuthForId(req, res, partnerId) {
-    const loggedId = getPartnerIdFromCookie(req);
-    if (loggedId && String(loggedId) === String(partnerId)) return true;
-    const next = encodeURIComponent(String(partnerId));
-    res.redirect(`/parceiros/login?next=${next}`);
-    return false;
-  }
+function requirePartnerAuthForId(req, res, partnerId) {
+  const loggedId = getPartnerIdFromCookie(req);
 
+  if (loggedId && String(loggedId) === String(partnerId)) return true;
+
+  // ✅ 303 evita problemas de POST->GET e caches intermediários
+  const next = encodeURIComponent(String(partnerId));
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(303, `/parceiros/login?next=${next}`);
+  return false;
+}
   // =========================
   // Reset token (Esqueci senha)
   // =========================
@@ -668,7 +671,8 @@ app.post("/parceiros/perfil", (req, res) => {
 setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 
       const targetId = next || p.id;
-      return res.redirect(`/parceiros/perfil/${encodeURIComponent(targetId)}`);
+      res.setHeader("Cache-Control", "no-store");
+return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(targetId)}`);
     } catch (e) {
       const msg = e?.message || String(e);
       console.error("[partners] login erro:", msg);
@@ -952,7 +956,8 @@ if (!COOKIE_SECRET && !isDev) {
 }
 
 setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
-return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
+res.setHeader("Cache-Control", "no-store");
+return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(p.id)}`);
     } catch (e) {
       const msg = e?.message || String(e);
       console.error("[partners] redefinir erro:", msg);
@@ -1165,7 +1170,8 @@ return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
       if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
       setCookie(req, res, COOKIE_NAME, makeCookieValue(data.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 
-      return res.redirect(`/parceiros/perfil/${encodeURIComponent(data.id)}`);
+     res.setHeader("Cache-Control", "no-store");
+return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(data.id)}`);
     } catch (e) {
       const msg = e?.message || String(e);
       console.error("[partners] cadastro erro:", msg);
@@ -1192,9 +1198,22 @@ return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
   // =========================
   app.get("/parceiros/perfil/:id", async (req, res) => {
     try {
+        res.setHeader("Cache-Control", "no-store");
       const id = String(req.params.id || "").trim();
       if (!id) return res.redirect("/parceiros");
-
+if (req.query.debug === "1") {
+  const cookies = parseCookies(req);
+  return res.type("html").send(`
+    <pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;padding:16px">
+host: ${esc(req.get("host"))}
+x-forwarded-proto: ${esc(req.headers["x-forwarded-proto"] || "")}
+cookie header: ${esc(req.headers.cookie || "")}
+mlm_partner cookie: ${esc(cookies[COOKIE_NAME] || "")}
+COOKIE_SECRET set: ${COOKIE_SECRET ? "YES" : "NO"}
+parsed partner id: ${esc(getPartnerIdFromCookie(req) || "")}
+    </pre>
+  `);
+}
       if (!requirePartnerAuthForId(req, res, id)) return;
 
       const { data: p, error: pErr } = await supabase.from("partners").select("*").eq("id", id).single();
