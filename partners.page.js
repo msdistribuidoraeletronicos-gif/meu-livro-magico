@@ -221,23 +221,41 @@ async function sendResetEmail(toEmail, resetUrl) {
     return out;
   }
 
-  function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
-    const parts = [
-      `${name}=${encodeURIComponent(value)}`,
-      `Path=/`,
-      `Max-Age=${Math.max(0, Number(maxAgeSec) || 0)}`,
-      `HttpOnly`,
-      `SameSite=Lax`,
-    ];
-    if (!isDev) parts.push("Secure");
-    res.setHeader("Set-Cookie", parts.join("; "));
-  }
+ function isHttpsRequest(req) {
+  const xfProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (xfProto) return xfProto === "https";
+  // fallback
+  return !!req.secure;
+}
 
-  function clearCookie(res, name) {
-    const parts = [`${name}=`, `Path=/`, `Max-Age=0`, `HttpOnly`, `SameSite=Lax`];
-    if (!isDev) parts.push("Secure");
-    res.setHeader("Set-Cookie", parts.join("; "));
-  }
+function setCookie(req, res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=/`,
+    `Max-Age=${Math.max(0, Number(maxAgeSec) || 0)}`,
+    `HttpOnly`,
+    `SameSite=Lax`,
+  ];
+
+  // ✅ Só põe Secure se for HTTPS de verdade (Vercel usa proxy)
+  if (!isDev && isHttpsRequest(req)) parts.push("Secure");
+
+  // ✅ Não sobrescreve outros Set-Cookie (se existirem)
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) res.setHeader("Set-Cookie", parts.join("; "));
+  else if (Array.isArray(prev)) res.setHeader("Set-Cookie", [...prev, parts.join("; ")]);
+  else res.setHeader("Set-Cookie", [prev, parts.join("; ")]);
+}
+
+function clearCookie(req, res, name) {
+  const parts = [`${name}=`, `Path=/`, `Max-Age=0`, `HttpOnly`, `SameSite=Lax`];
+  if (!isDev && isHttpsRequest(req)) parts.push("Secure");
+
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) res.setHeader("Set-Cookie", parts.join("; "));
+  else if (Array.isArray(prev)) res.setHeader("Set-Cookie", [...prev, parts.join("; ")]);
+  else res.setHeader("Set-Cookie", [prev, parts.join("; ")]);
+}
 
   function getPartnerIdFromCookie(req) {
     const cookies = parseCookies(req);
@@ -647,7 +665,7 @@ app.post("/parceiros/perfil", (req, res) => {
 
       if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
 
-      setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 
       const targetId = next || p.id;
       return res.redirect(`/parceiros/perfil/${encodeURIComponent(targetId)}`);
@@ -676,7 +694,7 @@ app.post("/parceiros/perfil", (req, res) => {
   // GET /parceiros/sair (Logout)
   // =========================
   app.get("/parceiros/sair", (req, res) => {
-    clearCookie(res, COOKIE_NAME);
+    clearCookie(req, res, COOKIE_NAME);
     res.type("html").send(
       layout(
         "Saiu",
@@ -933,7 +951,7 @@ if (!COOKIE_SECRET && !isDev) {
   );
 }
 
-setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
     } catch (e) {
       const msg = e?.message || String(e);
@@ -1145,7 +1163,7 @@ return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
       }
 
       if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
-      setCookie(res, COOKIE_NAME, makeCookieValue(data.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+      setCookie(req, res, COOKIE_NAME, makeCookieValue(data.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 
       return res.redirect(`/parceiros/perfil/${encodeURIComponent(data.id)}`);
     } catch (e) {
