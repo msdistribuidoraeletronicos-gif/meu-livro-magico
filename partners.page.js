@@ -35,14 +35,14 @@ module.exports = function mountPartnersPage(app, opts = {}) {
 
   // ✅ Anti-loop de trailing slash:
   // Se a Vercel (ou config) adicionar "/" no final, a gente remove 1 vez e pronto.
-  app.use((req, res, next) => {
-    // mantém "/" raiz
+  /** 
+   app.use((req, res, next) => {
     if (req.path.length > 1 && req.path.endsWith("/")) {
       const qs = req.url.slice(req.path.length); // preserva "?..."
       return res.redirect(308, req.path.slice(0, -1) + qs);
     }
     next();
-  });
+  });*/
 const isDev = process.env.NODE_ENV !== "production";
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
