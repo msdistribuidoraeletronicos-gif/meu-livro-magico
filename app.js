@@ -1010,54 +1010,6 @@ function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey
   ].join("\n");
 }
 
-// ------------------------------
-// Texto DENTRO do PNG (Sharp + SVG overlay)
-// ------------------------------
-function escapeXml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function wrapLines(text, maxCharsPerLine) {
-  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
-  const lines = [];
-  let cur = "";
-
-  for (const w of words) {
-    const next = cur ? cur + " " + w : w;
-    if (next.length <= maxCharsPerLine) {
-      cur = next;
-    } else {
-      if (cur) lines.push(cur);
-      if (w.length > maxCharsPerLine) {
-        lines.push(w.slice(0, maxCharsPerLine));
-        cur = w.slice(maxCharsPerLine);
-      } else {
-        cur = w;
-      }
-    }
-  }
-  if (cur) lines.push(cur);
-  return lines;
-}
-
-// ------------------------------
-// Texto DENTRO do PNG (Sharp + SVG overlay)
-// ✅ FIX: embute fonte no SVG (evita sumir texto no Vercel)
-// ------------------------------
-function escapeXml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
 // ✅ Embute fonte no SVG para o texto NÃO sumir
 function buildEmbeddedFontCss() {
   try {
@@ -1125,6 +1077,93 @@ function wrapLines(text, maxCharsPerLine) {
   if (cur) lines.push(cur);
   return lines;
 }
+// ------------------------------
+// Texto DENTRO do PNG (Sharp + SVG overlay)
+// ✅ FIX DEFINITIVO (Vercel): texto vira PATH (sem <text>), não depende de fonte do sistema
+// Requer: npm i opentype.js
+// Fontes: /fonts/DejaVuSans.ttf e /fonts/DejaVuSans-Bold.ttf
+// ------------------------------
+let _opentype = null;
+let _fontRegular = null;
+let _fontBold = null;
+
+function escapeXml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function wrapLines(text, maxCharsPerLine) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = "";
+
+  for (const w of words) {
+    const next = cur ? cur + " " + w : w;
+    if (next.length <= maxCharsPerLine) {
+      cur = next;
+    } else {
+      if (cur) lines.push(cur);
+      if (w.length > maxCharsPerLine) {
+        lines.push(w.slice(0, maxCharsPerLine));
+        cur = w.slice(maxCharsPerLine);
+      } else {
+        cur = w;
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+// ✅ carrega fontes 1x (cache)
+async function loadFontsOnce() {
+  if (_fontRegular && _fontBold) return { regular: _fontRegular, bold: _fontBold };
+
+  if (!_opentype) {
+    try {
+      _opentype = require("opentype.js");
+    } catch (e) {
+      throw new Error("Falta dependência opentype.js. Rode: npm i opentype.js");
+    }
+  }
+
+  const fontDir = path.join(__dirname, "fonts");
+  const regPath = path.join(fontDir, "DejaVuSans.ttf");
+  const boldPath = path.join(fontDir, "DejaVuSans-Bold.ttf");
+
+  if (!fs.existsSync(regPath)) {
+    throw new Error(`Fonte não encontrada: ${regPath} (crie /fonts e adicione DejaVuSans.ttf)`);
+  }
+  if (!fs.existsSync(boldPath)) {
+    throw new Error(`Fonte não encontrada: ${boldPath} (adicione DejaVuSans-Bold.ttf)`);
+  }
+
+  _fontRegular = await new Promise((resolve, reject) => {
+    _opentype.load(regPath, (err, font) => (err ? reject(err) : resolve(font)));
+  });
+
+  _fontBold = await new Promise((resolve, reject) => {
+    _opentype.load(boldPath, (err, font) => (err ? reject(err) : resolve(font)));
+  });
+
+  return { regular: _fontRegular, bold: _fontBold };
+}
+
+// ✅ gera PATH SVG para uma linha (não usa <text>)
+function makeTextPath({ font, text, x, yBaseline, fontSize, fill }) {
+  const t = String(text || "");
+  if (!t.trim()) return "";
+
+  // yBaseline: posição na linha (baseline)
+  const path = font.getPath(t, x, yBaseline, fontSize);
+  const d = path.toPathData(2);
+
+  return `<path d="${d}" fill="${fill}"/>`;
+}
 
 async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const img = sharp(inputPath);
@@ -1190,51 +1229,58 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     pack = buildLines(titleSize, textSize);
   }
 
-  let y = bandY + topPadY;
+  // ✅ fontes (bold para tudo – fica bem legível)
+  const { bold } = await loadFontsOnce();
 
-  // ✅ CSS com fonte embutida
-  const fontCss = buildEmbeddedFontCss();
+  // y aqui é "topo" do bloco de texto. Mas opentype usa baseline,
+  // então a baseline é y + fontSize (aprox).
+  let yTop = bandY + topPadY;
+  const fill = "#0f172a";
 
-  const titleSvg = pack.titleLines.length
-    ? pack.titleLines.map((ln, i) => {
-        const yy = y + i * pack.lineGapTitle;
-        return `<text x="${textX}" y="${yy}"
-          font-size="${titleSize}"
-          font-weight="700"
-          fill="#0f172a"
-          xml:space="preserve">${escapeXml(ln)}</text>`;
-      }).join("\n")
-    : "";
+  // gera paths
+  let paths = "";
 
   if (pack.titleLines.length) {
-    y += pack.titleLines.length * pack.lineGapTitle + pack.spacer;
+    for (let i = 0; i < pack.titleLines.length; i++) {
+      const yLineTop = yTop + i * pack.lineGapTitle;
+      const yBaseline = yLineTop + titleSize; // baseline aprox
+      paths += makeTextPath({
+        font: bold,
+        text: pack.titleLines[i],
+        x: textX,
+        yBaseline,
+        fontSize: titleSize,
+        fill,
+      }) + "\n";
+    }
+    yTop += pack.titleLines.length * pack.lineGapTitle + pack.spacer;
   }
 
-  const bodySvg = pack.bodyLines.length
-    ? pack.bodyLines.map((ln, i) => {
-        const yy = y + i * pack.lineGapBody;
-        return `<text x="${textX}" y="${yy}"
-          font-size="${textSize}"
-          font-weight="700"
-          fill="#0f172a"
-          xml:space="preserve">${escapeXml(ln)}</text>`;
-      }).join("\n")
-    : "";
+  if (pack.bodyLines.length) {
+    for (let i = 0; i < pack.bodyLines.length; i++) {
+      const yLineTop = yTop + i * pack.lineGapBody;
+      const yBaseline = yLineTop + textSize;
+      paths += makeTextPath({
+        font: bold,
+        text: pack.bodyLines[i],
+        x: textX,
+        yBaseline,
+        fontSize: textSize,
+        fill,
+      }) + "\n";
+    }
+  }
 
   const shadowDy = Math.round(H * 0.010);
   const shadowOpacity = 0.18;
 
   const svg = `
   <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-    <style>${fontCss}</style>
-
     <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.90"/>
-
-    ${titleSvg}
-    ${bodySvg}
+    ${paths}
   </svg>`;
 
   await sharp(inputPath)
@@ -1269,49 +1315,56 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
 
   const textX = bandX + Math.round(bandW * 0.06);
   const topPadY = Math.round(bandH * 0.22);
-  let y = bandY + topPadY;
+  let yTop = bandY + topPadY;
 
   const lineGapTitle = Math.round(titleSize * 1.15);
   const lineGapSub   = Math.round(subSize * 1.25);
 
-  const fontCss = buildEmbeddedFontCss();
+  const { bold } = await loadFontsOnce();
+  const fill = "#0f172a";
 
-  const titleSvg = titleLines.map((ln, i) => {
-    const yy = y + i * lineGapTitle;
-    return `<text x="${textX}" y="${yy}"
-      font-size="${titleSize}"
-      font-weight="700"
-      fill="#0f172a"
-      xml:space="preserve">${escapeXml(ln)}</text>`;
-  }).join("\n");
+  let paths = "";
 
-  if (titleLines.length) {
-    y += titleLines.length * lineGapTitle + Math.round(subSize * 0.35);
+  for (let i = 0; i < titleLines.length; i++) {
+    const yLineTop = yTop + i * lineGapTitle;
+    const yBaseline = yLineTop + titleSize;
+    paths += makeTextPath({
+      font: bold,
+      text: titleLines[i],
+      x: textX,
+      yBaseline,
+      fontSize: titleSize,
+      fill,
+    }) + "\n";
   }
 
-  const subSvg = subLines.map((ln, i) => {
-    const yy = y + i * lineGapSub;
-    return `<text x="${textX}" y="${yy}"
-      font-size="${subSize}"
-      font-weight="700"
-      fill="#0f172a"
-      xml:space="preserve">${escapeXml(ln)}</text>`;
-  }).join("\n");
+  if (titleLines.length) {
+    yTop += titleLines.length * lineGapTitle + Math.round(subSize * 0.35);
+  }
+
+  for (let i = 0; i < subLines.length; i++) {
+    const yLineTop = yTop + i * lineGapSub;
+    const yBaseline = yLineTop + subSize;
+    paths += makeTextPath({
+      font: bold,
+      text: subLines[i],
+      x: textX,
+      yBaseline,
+      fontSize: subSize,
+      fill,
+    }) + "\n";
+  }
 
   const shadowDy = Math.round(H * 0.010);
   const shadowOpacity = 0.18;
 
   const svg = `
   <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-    <style>${fontCss}</style>
-
     <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.88"/>
-
-    ${titleSvg}
-    ${subSvg}
+    ${paths}
   </svg>`;
 
   await sharp(inputPath)
@@ -1321,7 +1374,6 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
 
   return outputPath;
 }
-
 // ------------------------------
 // PDF: só imagens (capa + páginas já com texto dentro)
 // ------------------------------
