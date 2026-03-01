@@ -4,6 +4,13 @@
  *  - GET  /parceiros
  *  - GET  /parceiros/cadastro?tipo=fabricacao|venda
  *  - POST /parceiros/cadastro
+ *  - GET  /parceiros/login
+ *  - POST /parceiros/login
+ *  - GET  /parceiros/sair
+ *  - GET  /parceiros/esqueci
+ *  - POST /parceiros/esqueci
+ *  - GET  /parceiros/redefinir?token=...
+ *  - POST /parceiros/redefinir
  *  - GET  /parceiros/perfil/:id
  *
  * Persistência: Supabase (tables: public.partners, public.partner_orders)
@@ -11,16 +18,18 @@
  * ENV necessário (backend):
  *  - SUPABASE_URL
  *  - SUPABASE_SERVICE_ROLE_KEY   (⚠️ somente no servidor)
+ *  - PARTNER_COOKIE_SECRET       (assinar cookie; obrigatório em produção)
  */
 
 "use strict";
 
 const express = require("express");
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
 
 module.exports = function mountPartnersPage(app, opts = {}) {
   app.use(express.urlencoded({ extended: true }));
-
+const isDev = process.env.NODE_ENV !== "production";
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -36,8 +45,73 @@ module.exports = function mountPartnersPage(app, opts = {}) {
     auth: { persistSession: false },
   });
 
-  const isDev = process.env.NODE_ENV !== "production";
+// ===== Email (Gmail SMTP via Nodemailer) =====
+// ===== Email (Brevo API) =====
+const SibApiV3Sdk = require("sib-api-v3-sdk");
 
+const BREVO_API_KEY = String(process.env.BREVO_API_KEY || "").trim();
+const PARTNER_RESET_FROM = String(process.env.PARTNER_RESET_FROM || "").trim();
+const PARTNER_RESET_FROM_NAME = String(
+  process.env.PARTNER_RESET_FROM_NAME || "Meu Livro Mágico"
+).trim();
+
+let brevoClient = null;
+
+if (BREVO_API_KEY) {
+  const client = SibApiV3Sdk.ApiClient.instance;
+  const apiKey = client.authentications["api-key"];
+  apiKey.apiKey = BREVO_API_KEY;
+
+  brevoClient = new SibApiV3Sdk.TransactionalEmailsApi();
+}
+
+async function sendResetEmail(toEmail, resetUrl) {
+  if (!brevoClient) {
+    const msg = "Brevo não configurado. Defina BREVO_API_KEY.";
+    console.warn("[partners] " + msg);
+    return { ok: false, error: msg };
+  }
+
+  const html = `
+    <div style="font-family:Arial,sans-serif; line-height:1.6;">
+      <h2>Redefinir sua senha</h2>
+      <p>Clique no botão abaixo para criar uma nova senha:</p>
+      <p>
+        <a href="${resetUrl}"
+           style="display:inline-block;padding:12px 16px;border-radius:10px;
+                  background:#7c3aed;color:#fff;text-decoration:none;font-weight:700;">
+          Redefinir senha
+        </a>
+      </p>
+      <p>Ou copie o link:</p>
+      <p>${resetUrl}</p>
+      <p>Esse link expira em 30 minutos.</p>
+    </div>
+  `;
+
+  try {
+    const response = await brevoClient.sendTransacEmail({
+      sender: {
+        email: PARTNER_RESET_FROM,
+        name: PARTNER_RESET_FROM_NAME,
+      },
+      to: [{ email: toEmail }],
+      subject: "Redefinição de senha — Parceiros (Meu Livro Mágico)",
+      htmlContent: html,
+    });
+
+    console.log("[partners] email enviado (Brevo):", response.messageId);
+
+    return { ok: true, id: response.messageId };
+  } catch (err) {
+    const msg = err?.response?.body?.message || err?.message || String(err);
+    console.error("[partners] brevo error:", msg);
+    return { ok: false, error: msg };
+  }
+}
+  // =========================
+  // Helpers
+  // =========================
   function esc(s) {
     return String(s ?? "")
       .replaceAll("&", "&amp;")
@@ -62,7 +136,164 @@ module.exports = function mountPartnersPage(app, opts = {}) {
     return st || "-";
   }
 
-  function layout(title, innerHtml) {
+  // =========================
+  // Password hashing (PBKDF2)
+  // =========================
+  // Formato: pbkdf2$sha256$210000$saltBase64$hashBase64
+  const PBKDF2_ITER = 210000;
+  const PBKDF2_KEYLEN = 32;
+  const PBKDF2_DIGEST = "sha256";
+
+  function hashPassword(plain) {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.pbkdf2Sync(String(plain), salt, PBKDF2_ITER, PBKDF2_KEYLEN, PBKDF2_DIGEST);
+    return `pbkdf2$${PBKDF2_DIGEST}$${PBKDF2_ITER}$${salt.toString("base64")}$${hash.toString("base64")}`;
+  }
+
+  function safeEqualBuf(a, b) {
+    const ab = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+  }
+
+  function verifyPassword(plain, stored) {
+    try {
+      const parts = String(stored || "").split("$");
+      if (parts.length !== 5) return false;
+      const [kind, digest, iterStr, saltB64, hashB64] = parts;
+      if (kind !== "pbkdf2") return false;
+
+      const iter = Number(iterStr);
+      if (!Number.isFinite(iter) || iter < 10000) return false;
+
+      const salt = Buffer.from(saltB64, "base64");
+      const expected = Buffer.from(hashB64, "base64");
+
+      const got = crypto.pbkdf2Sync(String(plain), salt, iter, expected.length, digest);
+      return safeEqualBuf(got, expected);
+    } catch {
+      return false;
+    }
+  }
+
+  // =========================
+  // Cookie session (simples, assinado)
+  // =========================
+  const COOKIE_NAME = "mlm_partner";
+  const COOKIE_SECRET = process.env.PARTNER_COOKIE_SECRET || (isDev ? "dev-secret-change-me" : "");
+
+  function hmacId(id) {
+    if (!COOKIE_SECRET) return "";
+    return crypto.createHmac("sha256", COOKIE_SECRET).update(String(id)).digest("hex");
+  }
+
+  function makeCookieValue(id) {
+    const sig = hmacId(id);
+    return `${id}.${sig}`;
+  }
+
+  function parseCookies(req) {
+    const raw = req.headers.cookie || "";
+    const out = {};
+    raw.split(";").forEach((p) => {
+      const idx = p.indexOf("=");
+      if (idx === -1) return;
+      const k = p.slice(0, idx).trim();
+      const v = p.slice(idx + 1).trim();
+      if (!k) return;
+      out[k] = decodeURIComponent(v);
+    });
+    return out;
+  }
+
+  function setCookie(res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
+    const parts = [
+      `${name}=${encodeURIComponent(value)}`,
+      `Path=/`,
+      `Max-Age=${Math.max(0, Number(maxAgeSec) || 0)}`,
+      `HttpOnly`,
+      `SameSite=Lax`,
+    ];
+    if (!isDev) parts.push("Secure");
+    res.setHeader("Set-Cookie", parts.join("; "));
+  }
+
+  function clearCookie(res, name) {
+    const parts = [`${name}=`, `Path=/`, `Max-Age=0`, `HttpOnly`, `SameSite=Lax`];
+    if (!isDev) parts.push("Secure");
+    res.setHeader("Set-Cookie", parts.join("; "));
+  }
+
+  function getPartnerIdFromCookie(req) {
+    const cookies = parseCookies(req);
+    const v = cookies[COOKIE_NAME];
+    if (!v) return null;
+    const [id, sig] = String(v).split(".");
+    if (!id || !sig) return null;
+    if (!COOKIE_SECRET) return null;
+    if (hmacId(id) !== sig) return null;
+    return id;
+  }
+
+  function requirePartnerAuthForId(req, res, partnerId) {
+    const loggedId = getPartnerIdFromCookie(req);
+    if (loggedId && String(loggedId) === String(partnerId)) return true;
+    const next = encodeURIComponent(String(partnerId));
+    res.redirect(`/parceiros/login?next=${next}`);
+    return false;
+  }
+
+  // =========================
+  // Reset token (Esqueci senha)
+  // =========================
+  function sha256Hex(s) {
+    return crypto.createHash("sha256").update(String(s)).digest("hex");
+  }
+
+  function genResetToken() {
+    // token forte (URL-safe)
+    const raw = crypto.randomBytes(32).toString("base64url");
+    return raw;
+  }
+
+  function normalizePhoneBR(whats) {
+    // tenta extrair só dígitos e montar no padrão 55DDDNXXXXXXXX
+    const digits = String(whats || "").replace(/\D+/g, "");
+    if (!digits) return "";
+    // se já começa com 55 e tem tamanho adequado, retorna
+    if (digits.startsWith("55") && digits.length >= 12) return digits;
+    // se tem 10 ou 11 dígitos (DDD + número), prefixa 55
+    if (digits.length === 10 || digits.length === 11) return "55" + digits;
+    // fallback
+    return digits;
+  }
+
+ function getBaseUrl(req) {
+  // Preferível: base fixa em produção (evita host errado atrás de proxy)
+  const fixed = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (fixed) return fixed.replace(/\/+$/, "");
+
+  const xfProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const proto = xfProto || req.protocol || "https";
+
+  const xfHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = xfHost || req.get("host") || "seusite.com";
+
+  return `${proto}://${host}`;
+}
+
+  // =========================
+  // Layout
+  // =========================
+  function layout(title, innerHtml, navRightHtml) {
+    const right = navRightHtml
+      ? navRightHtml
+      : `
+        <a class="btn btnOutline" href="/sales">⬅️ Voltar</a>
+        <a class="btn btnPrimary" href="/parceiros">Central</a>
+      `;
+
     return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -121,6 +352,15 @@ module.exports = function mountPartnersPage(app, opts = {}) {
       box-shadow: 0 12px 26px rgba(17,24,39,.06);
     }
     .btnOutline:hover{ background: rgba(245,243,255,.95); border-color: rgba(196,181,253,.95); }
+
+    .btnDanger{
+      color: rgba(127,29,29,.95);
+      background: rgba(254,226,226,.65);
+      border: 2px solid rgba(220,38,38,.20);
+      box-shadow: 0 12px 26px rgba(17,24,39,.06);
+    }
+    .btnDanger:hover{ background: rgba(254,202,202,.75); border-color: rgba(220,38,38,.28); }
+
     .card{
       background:#fff;
       border: 1px solid rgba(17,24,39,.06);
@@ -196,6 +436,14 @@ module.exports = function mountPartnersPage(app, opts = {}) {
       color: rgba(127,29,29,.95);
       white-space:pre-wrap;
     }
+    .ok{
+      margin-top:12px; padding:12px; border-radius:14px;
+      border: 1px solid rgba(16,185,129,.25);
+      background: rgba(209,250,229,.55);
+      font-weight:800;
+      color: rgba(6,95,70,.95);
+      white-space:pre-wrap;
+    }
   </style>
 </head>
 <body>
@@ -206,8 +454,7 @@ module.exports = function mountPartnersPage(app, opts = {}) {
         <div>Parceiros • Meu Livro Mágico</div>
       </div>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <a class="btn btnOutline" href="/sales">⬅️ Voltar</a>
-        <a class="btn btnPrimary" href="/parceiros">Central</a>
+        ${right}
       </div>
     </div>
 
@@ -221,7 +468,9 @@ module.exports = function mountPartnersPage(app, opts = {}) {
 </html>`;
   }
 
-  // GET /parceiros
+  // =========================
+  // GET /parceiros  (Seja Parceiro) — botão "Login"
+  // =========================
   app.get("/parceiros", (req, res) => {
     res.type("html").send(
       layout(
@@ -246,12 +495,425 @@ module.exports = function mountPartnersPage(app, opts = {}) {
           </div>
         </div>
       </div>
+    `,
+        `
+        <a class="btn btnOutline" href="/sales">⬅️ Voltar</a>
+        <a class="btn btnPrimary" href="/parceiros/login">🔐 Login</a>
+      `
+      )
+    );
+  });
+
+  // =========================
+  // GET /parceiros/login
+  // =========================
+  app.get("/parceiros/login", (req, res) => {
+    const next = String(req.query.next || "").trim(); // id do parceiro
+    res.type("html").send(
+      layout(
+        "Login — Parceiros",
+        `
+      <div class="card">
+        <div class="h1">Login do Parceiro 🔐</div>
+        <p class="p">Entre com seu <b>e-mail</b> e <b>senha</b> para acessar seu painel.</p>
+        <div style="height:14px"></div>
+
+        <form method="POST" action="/parceiros/login">
+          <input type="hidden" name="next" value="${esc(next)}"/>
+
+          <div class="formRow">
+            <div>
+              <label>E-mail</label>
+              <input type="email" name="email" placeholder="seuemail@exemplo.com" required/>
+            </div>
+            <div>
+              <label>Senha</label>
+              <input type="password" name="senha" placeholder="Sua senha" required/>
+            </div>
+          </div>
+
+          <div style="height:16px"></div>
+
+          <button class="btn btnPrimary" type="submit">Entrar</button>
+          <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
+        </form>
+
+        <div style="height:12px"></div>
+        <div class="muted">
+          <a href="/parceiros/esqueci" style="text-decoration:underline; font-weight:900;">Esqueci minha senha</a>
+        </div>
+      </div>
     `
       )
     );
   });
 
+  // =========================
+  // POST /parceiros/login
+  // =========================
+  app.post("/parceiros/login", async (req, res) => {
+    try {
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const senha = String(req.body.senha || "");
+      const next = String(req.body.next || "").trim();
+
+      if (!email || !senha) throw new Error("Informe e-mail e senha.");
+
+      const { data: p, error } = await supabase
+        .from("partners")
+        .select("id,email,password_hash,negocio")
+        .eq("email", email)
+        .single();
+
+      if (error || !p) {
+        return res.status(401).type("html").send(
+          layout(
+            "Login",
+            `
+            <div class="card">
+              <div class="h1">Não encontrado</div>
+              <p class="p">Não achamos parceiro com esse e-mail.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/login">Tentar novamente</a>
+              <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
+            </div>
+          `
+          )
+        );
+      }
+
+      if (!p.password_hash) {
+        return res.status(401).type("html").send(
+          layout(
+            "Login",
+            `
+            <div class="card">
+              <div class="h1">Senha não configurada</div>
+              <p class="p">Esse parceiro ainda não tem senha cadastrada.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/esqueci">Criar nova senha</a>
+              <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
+            </div>
+          `
+          )
+        );
+      }
+
+      const ok = verifyPassword(senha, p.password_hash);
+      if (!ok) {
+        return res.status(401).type("html").send(
+          layout(
+            "Login",
+            `
+            <div class="card">
+              <div class="h1">Senha inválida</div>
+              <p class="p">Confira sua senha e tente novamente.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/login">Tentar novamente</a>
+              <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
+            </div>
+          `
+          )
+        );
+      }
+
+      if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
+
+      setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+
+      const targetId = next || p.id;
+      return res.redirect(`/parceiros/perfil/${encodeURIComponent(targetId)}`);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.error("[partners] login erro:", msg);
+
+      res.status(500).type("html").send(
+        layout(
+          "Erro",
+          `
+          <div class="card">
+            <div class="h1">Ops…</div>
+            <p class="p">Não foi possível fazer login agora. Tente novamente.</p>
+            ${isDev ? `<div class="err">DEV ERROR:\n${esc(msg)}</div>` : ``}
+            <div style="height:14px"></div>
+            <a class="btn btnPrimary" href="/parceiros/login">Voltar para Login</a>
+          </div>
+        `
+        )
+      );
+    }
+  });
+
+  // =========================
+  // GET /parceiros/sair (Logout)
+  // =========================
+  app.get("/parceiros/sair", (req, res) => {
+    clearCookie(res, COOKIE_NAME);
+    res.type("html").send(
+      layout(
+        "Saiu",
+        `
+        <div class="card">
+          <div class="h1">Você saiu ✅</div>
+          <p class="p">Sua sessão foi encerrada com segurança.</p>
+          <div style="height:14px"></div>
+          <a class="btn btnPrimary" href="/parceiros/login">Fazer login</a>
+          <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
+        </div>
+      `
+      )
+    );
+  });
+
+  // =========================
+  // GET /parceiros/esqueci
+  // =========================
+  app.get("/parceiros/esqueci", (req, res) => {
+    res.type("html").send(
+      layout(
+        "Esqueci minha senha",
+        `
+      <div class="card">
+        <div class="h1">Esqueci minha senha 🔁</div>
+        <p class="p">Informe seu e-mail. Vamos gerar um <b>link de redefinição</b>.</p>
+        <div style="height:14px"></div>
+
+        <form method="POST" action="/parceiros/esqueci">
+          <div class="formRow">
+            <div>
+              <label>E-mail</label>
+              <input type="email" name="email" placeholder="seuemail@exemplo.com" required/>
+            </div>
+            <div style="display:flex; align-items:end; gap:10px;">
+              <button class="btn btnPrimary" type="submit">Gerar link</button>
+              <a class="btn btnOutline" href="/parceiros/login">Voltar</a>
+            </div>
+          </div>
+        </form>
+
+        <div style="height:12px"></div>
+        <div class="muted">Dica: o link expira em 30 minutos.</div>
+      </div>
+    `
+      )
+    );
+  });
+
+app.post("/parceiros/esqueci", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email) throw new Error("Informe um e-mail.");
+
+    // Busca parceiro
+    const { data: p, error } = await supabase
+      .from("partners")
+      .select("id,email")
+      .eq("email", email)
+      .single();
+
+    // ✅ Sempre responde igual (segurança)
+    // Só gera token e tenta enviar se achou parceiro
+    if (!error && p?.id) {
+      const token = genResetToken();
+      const tokenHash = sha256Hex(token);
+      const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+      const up = await supabase
+        .from("partners")
+        .update({ reset_token_hash: tokenHash, reset_token_expires: expires })
+        .eq("id", p.id);
+
+      if (up.error) {
+        console.error("[partners] reset token update error:", up.error);
+        // não expõe pro usuário
+      } else {
+        const resetUrl = `${getBaseUrl(req)}/parceiros/redefinir?token=${encodeURIComponent(token)}`;
+
+        // tenta enviar e-mail (não expõe erro na UI)
+        const mail = await sendResetEmail(email, resetUrl);
+        if (!mail?.ok) {
+          console.error("[partners] sendResetEmail failed:", mail?.error || mail);
+        }
+      }
+    }
+
+    // ✅ UI limpa (sem diagnósticos, sem WhatsApp)
+    return res.type("html").send(
+      layout(
+        "Recuperação de senha",
+        `
+        <div class="card">
+          <div class="h1">Pronto ✅</div>
+          <p class="p">
+            Enviamos um <b>link de recuperação de senha</b> para sua caixa de entrada.
+          </p>
+          <div style="height:10px"></div>
+          <div class="muted">Verifique também o <b>spam/lixo eletrônico</b>. O link expira em 30 minutos.</div>
+
+          <div style="height:16px"></div>
+          <a class="btn btnPrimary" href="/parceiros/login">Voltar para Login</a>
+        </div>
+        `
+      )
+    );
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("[partners] esqueci erro:", msg);
+
+    return res.status(500).type("html").send(
+      layout(
+        "Erro",
+        `
+        <div class="card">
+          <div class="h1">Ops…</div>
+          <p class="p">Não foi possível processar a recuperação agora. Tente novamente.</p>
+          <div style="height:14px"></div>
+          <a class="btn btnPrimary" href="/parceiros/esqueci">Tentar novamente</a>
+        </div>
+        `
+      )
+    );
+  }
+});
+
+  // =========================
+  // GET /parceiros/redefinir?token=...
+  // =========================
+  app.get("/parceiros/redefinir", (req, res) => {
+    const token = String(req.query.token || "").trim();
+    if (!token) return res.redirect("/parceiros/esqueci");
+
+    res.type("html").send(
+      layout(
+        "Redefinir senha",
+        `
+      <div class="card">
+        <div class="h1">Redefinir senha 🔐</div>
+        <p class="p">Crie uma nova senha para acessar seu painel.</p>
+
+        <div style="height:14px"></div>
+
+        <form method="POST" action="/parceiros/redefinir">
+          <input type="hidden" name="token" value="${esc(token)}"/>
+
+          <div class="formRow">
+            <div>
+              <label>Nova senha</label>
+              <input type="password" name="senha" placeholder="Nova senha" required/>
+              <div class="muted" style="margin-top:6px;">Mínimo recomendado: 6+ caracteres.</div>
+            </div>
+            <div>
+              <label>Confirmar nova senha</label>
+              <input type="password" name="senha2" placeholder="Repita a nova senha" required/>
+            </div>
+          </div>
+
+          <div style="height:16px"></div>
+
+          <button class="btn btnPrimary" type="submit">Salvar nova senha</button>
+          <a class="btn btnOutline" href="/parceiros/login" style="margin-left:10px;">Voltar</a>
+        </form>
+      </div>
+    `
+      )
+    );
+  });
+
+  // =========================
+  // POST /parceiros/redefinir
+  // =========================
+  app.post("/parceiros/redefinir", async (req, res) => {
+    try {
+      const token = String(req.body.token || "").trim();
+      const senha = String(req.body.senha || "");
+      const senha2 = String(req.body.senha2 || "");
+
+      if (!token) throw new Error("Token inválido.");
+      if (!senha || senha.length < 6) throw new Error("A senha precisa ter pelo menos 6 caracteres.");
+      if (senha !== senha2) throw new Error("As senhas não conferem.");
+
+      const tokenHash = sha256Hex(token);
+
+      const { data: p, error } = await supabase
+        .from("partners")
+        .select("id,reset_token_hash,reset_token_expires")
+        .eq("reset_token_hash", tokenHash)
+        .single();
+
+      if (error || !p) {
+        return res.status(400).type("html").send(
+          layout(
+            "Link inválido",
+            `
+            <div class="card">
+              <div class="h1">Link inválido</div>
+              <p class="p">Esse link não é válido ou já foi usado.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
+            </div>
+          `
+          )
+        );
+      }
+
+      const exp = p.reset_token_expires ? new Date(p.reset_token_expires).getTime() : 0;
+      if (!exp || Date.now() > exp) {
+        return res.status(400).type("html").send(
+          layout(
+            "Link expirado",
+            `
+            <div class="card">
+              <div class="h1">Link expirado ⏳</div>
+              <p class="p">Esse link expirou. Gere um novo link para redefinir sua senha.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
+            </div>
+          `
+          )
+        );
+      }
+
+      const upd = await supabase
+        .from("partners")
+        .update({
+          password_hash: hashPassword(senha),
+          reset_token_hash: null,
+          reset_token_expires: null,
+        })
+        .eq("id", p.id);
+
+      if (upd.error) {
+        console.error("[partners] redefinir update error:", upd.error);
+        throw new Error("Não foi possível salvar a nova senha.");
+      }
+
+      if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
+      setCookie(res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+
+      return res.redirect(`/parceiros/perfil/${encodeURIComponent(p.id)}`);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.error("[partners] redefinir erro:", msg);
+      res.status(500).type("html").send(
+        layout(
+          "Erro",
+          `
+          <div class="card">
+            <div class="h1">Ops…</div>
+            <p class="p">Não foi possível redefinir sua senha agora. Tente novamente.</p>
+            ${isDev ? `<div class="err">DEV ERROR:\n${esc(msg)}</div>` : ``}
+            <div style="height:14px"></div>
+            <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
+          </div>
+        `
+        )
+      );
+    }
+  });
+
+  // =========================
   // GET /parceiros/cadastro?tipo=...
+  // =========================
   app.get("/parceiros/cadastro", (req, res) => {
     const tipo = String(req.query.tipo || "").toLowerCase();
     const isFab = tipo === "fabricacao";
@@ -334,6 +996,20 @@ module.exports = function mountPartnersPage(app, opts = {}) {
 
           <div style="height:12px"></div>
 
+          <div class="formRow">
+            <div>
+              <label>Senha (para acessar seu painel)</label>
+              <input type="password" name="senha" placeholder="Crie uma senha" required/>
+              <div class="muted" style="margin-top:6px;">Guarde essa senha. Você vai usar no Login.</div>
+            </div>
+            <div>
+              <label>Confirmar senha</label>
+              <input type="password" name="senha2" placeholder="Repita a senha" required/>
+            </div>
+          </div>
+
+          <div style="height:12px"></div>
+
           <div>
             <label>Observações</label>
             <textarea name="obs" placeholder="Horário, referências, etc."></textarea>
@@ -350,7 +1026,9 @@ module.exports = function mountPartnersPage(app, opts = {}) {
     );
   });
 
+  // =========================
   // POST /parceiros/cadastro
+  // =========================
   app.post("/parceiros/cadastro", async (req, res) => {
     try {
       const tipo = String(req.body.tipo || "").toLowerCase();
@@ -361,12 +1039,41 @@ module.exports = function mountPartnersPage(app, opts = {}) {
       const responsavel = String(req.body.responsavel || "").trim();
       const negocio = String(req.body.negocio || "").trim();
       const whatsapp = String(req.body.whatsapp || "").trim();
-      const email = String(req.body.email || "").trim();
+      const email = String(req.body.email || "").trim().toLowerCase();
       const cidade = String(req.body.cidade || "").trim();
       const endereco = String(req.body.endereco || "").trim();
       const cep = String(req.body.cep || "").trim();
       const obs = String(req.body.obs || "").trim();
       const segmento = isFab ? String(req.body.segmento || "").trim() : String(req.body.segmento_texto || "").trim();
+
+      const senha = String(req.body.senha || "");
+      const senha2 = String(req.body.senha2 || "");
+      if (!senha || senha.length < 6) throw new Error("A senha precisa ter pelo menos 6 caracteres.");
+      if (senha !== senha2) throw new Error("As senhas não conferem.");
+
+      const { data: exists, error: exErr } = await supabase
+        .from("partners")
+        .select("id")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (exErr) console.error("[partners] check email error:", exErr);
+      if (exists?.id) {
+        return res.status(409).type("html").send(
+          layout(
+            "E-mail já cadastrado",
+            `
+            <div class="card">
+              <div class="h1">E-mail já cadastrado</div>
+              <p class="p">Esse e-mail já tem um parceiro registrado. Faça login para acessar.</p>
+              <div style="height:14px"></div>
+              <a class="btn btnPrimary" href="/parceiros/login">Ir para Login</a>
+              <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
+            </div>
+          `
+          )
+        );
+      }
 
       const parceiroRow = {
         tipo,
@@ -380,6 +1087,8 @@ module.exports = function mountPartnersPage(app, opts = {}) {
         cep,
         obs: obs || null,
 
+        password_hash: hashPassword(senha),
+
         comissao_venda_percent: isVenda ? 10 : 0,
         fabricacao_por_pedido: isFab ? 20 : 0,
         entrega_por_pedido: isFab ? 8 : 0,
@@ -390,6 +1099,9 @@ module.exports = function mountPartnersPage(app, opts = {}) {
         console.error("[partners] INSERT partners error:", error);
         throw error;
       }
+
+      if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
+      setCookie(res, COOKIE_NAME, makeCookieValue(data.id), { maxAgeSec: 60 * 60 * 24 * 30 });
 
       return res.redirect(`/parceiros/perfil/${encodeURIComponent(data.id)}`);
     } catch (e) {
@@ -413,11 +1125,15 @@ module.exports = function mountPartnersPage(app, opts = {}) {
     }
   });
 
-  // GET /parceiros/perfil/:id
+  // =========================
+  // GET /parceiros/perfil/:id (PROTEGIDO) + botão Sair
+  // =========================
   app.get("/parceiros/perfil/:id", async (req, res) => {
     try {
       const id = String(req.params.id || "").trim();
       if (!id) return res.redirect("/parceiros");
+
+      if (!requirePartnerAuthForId(req, res, id)) return;
 
       const { data: p, error: pErr } = await supabase.from("partners").select("*").eq("id", id).single();
       if (pErr || !p) return res.redirect("/parceiros");
@@ -614,7 +1330,11 @@ module.exports = function mountPartnersPage(app, opts = {}) {
           </div>
         </div>
       </div>
-    `
+    `,
+          `
+        <a class="btn btnOutline" href="/parceiros">🏠 Início</a>
+        <a class="btn btnDanger" href="/parceiros/sair">🚪 Sair</a>
+      `
         )
       );
     } catch (e) {

@@ -34,6 +34,8 @@ const express = require("express");
 const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
 const mountBooksRoutes = require("./books/routes.js");
+require("dotenv").config({ path: ".env.local" });
+require("dotenv").config(); // fallback para .env
 
 // ⚠️ NÃO monte partners aqui, porque o `app` ainda não existe.
 // (vamos montar depois de `const app = express();`)
@@ -1053,8 +1055,8 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, chi
       "- Livro para colorir (coloring book).",
       "- Preto e branco, contornos fortes e limpos, linhas mais grossas.",
       "- Sem cores, sem gradientes, sem sombras, sem textura realista.",
-      "- Fundo branco (ou bem claro) e poucos detalhes no fundo.",
-      "",
+      "- Fundo branco e poucos detalhes no fundo.",
+      "Regra: nao coloque cor, deixe a imagem toda em preto e branco.",
       `TEMA (descrição): ${th}`,
       `TEXTO DA PÁGINA: "${txt}"`,
     ].join("\n");
