@@ -282,19 +282,23 @@ async function sendResetEmail(toEmail, resetUrl) {
     // fallback
     return digits;
   }
-
- function getBaseUrl(req) {
-  // Preferível: base fixa em produção (evita host errado atrás de proxy)
+function getBaseUrl(req) {
+  // 1) Preferível: base fixa (produção)
   const fixed = String(process.env.PUBLIC_BASE_URL || "").trim();
   if (fixed) return fixed.replace(/\/+$/, "");
 
+  // 2) Fallback: Vercel URL (ótimo para Preview/Prod se não setou PUBLIC_BASE_URL)
+  const vercelUrl = String(process.env.VERCEL_URL || "").trim();
+  if (vercelUrl) return `https://${vercelUrl}`.replace(/\/+$/, "");
+
+  // 3) Último fallback: headers do proxy
   const xfProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
   const proto = xfProto || req.protocol || "https";
 
   const xfHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
   const host = xfHost || req.get("host") || "seusite.com";
 
-  return `${proto}://${host}`;
+  return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
   // =========================
