@@ -2965,22 +2965,107 @@ app.post("/api/generate", requireAuth, async (req, res) => {
 // ------------------------------
 // Engine: valida precondições e resolve paths
 // ------------------------------
+// ------------------------------
+// Engine: valida precondições e resolve paths
+// ✅ FIX: se edit_base/mask_base sumirem (Vercel /tmp), reconstrói a base a partir de photo.png/mask.png
+// ------------------------------
 async function ensureBasesOrThrow(userId, id, m) {
   const bookDir = bookDirOf(userId, id);
   await ensureDir(bookDir);
 
-  const imagePngPath = path.join(bookDir, m.photo?.editBase || "edit_base.png");
-  const maskPngPath = path.join(bookDir, m.mask?.editBase || "mask_base.png");
+  // nomes padrão
+  const editBaseName = String(m.photo?.editBase || "edit_base.png");
+  const maskBaseName = String(m.mask?.editBase || "mask_base.png");
 
-  await ensureFileFromStorageIfMissing(imagePngPath, m.photo?.editBaseKey || "");
-  await ensureFileFromStorageIfMissing(maskPngPath, m.mask?.editBaseKey || "");
+  const imagePngPath = path.join(bookDir, editBaseName);
+  const maskPngPath = path.join(bookDir, maskBaseName);
 
+  // 1) tenta restaurar do Storage (se tiver keys)
+  await ensureFileFromStorageIfMissing(imagePngPath, String(m.photo?.editBaseKey || ""));
+  await ensureFileFromStorageIfMissing(maskPngPath, String(m.mask?.editBaseKey || ""));
+
+  // 2) se ainda não existe, tenta RECONSTRUIR a base a partir de photo.png/mask.png
+  if (!existsSyncSafe(imagePngPath) || !existsSyncSafe(maskPngPath)) {
+    const photoPngName = "photo.png"; // você sempre gera isso no upload
+    const maskPngName = "mask.png";   // você sempre gera isso no upload
+
+    const photoPngPath = path.join(bookDir, photoPngName);
+    const maskFullPath = path.join(bookDir, maskPngName);
+
+    // tenta baixar photo.png/mask.png do Storage (se existirem)
+    // fallback para original (photo.<ext>) se necessário
+    if (!existsSyncSafe(photoPngPath)) {
+      const k1 = sbKeyForOwner(m, id, photoPngName) || sbKeyFor(userId, id, photoPngName);
+      await ensureFileFromStorageIfMissing(photoPngPath, k1);
+
+      // se não tem photo.png no storage, tenta baixar o original (photo.jpg/png/etc)
+      if (!existsSyncSafe(photoPngPath) && m.photo?.file) {
+        const origName = String(m.photo.file);
+        const origPath = path.join(bookDir, origName);
+        const kOrig = String(m.photo.storageKey || sbKeyForOwner(m, id, origName) || sbKeyFor(userId, id, origName));
+        await ensureFileFromStorageIfMissing(origPath, kOrig);
+
+        if (existsSyncSafe(origPath)) {
+          // converte original -> photo.png
+          await sharp(origPath).png().toFile(photoPngPath);
+        }
+      }
+    }
+
+    if (!existsSyncSafe(maskFullPath)) {
+      const k2 = sbKeyForOwner(m, id, maskPngName) || sbKeyFor(userId, id, maskPngName);
+      await ensureFileFromStorageIfMissing(maskFullPath, k2);
+    }
+
+    // se ainda não existe mask.png, cria transparente no tamanho de photo.png
+    if (!existsSyncSafe(maskFullPath) && existsSyncSafe(photoPngPath)) {
+      const meta = await sharp(photoPngPath).metadata();
+      const ww = meta?.width || 1024;
+      const hh = meta?.height || 1024;
+      const transparent = await sharp({
+        create: { width: ww, height: hh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+      }).png().toBuffer();
+      await fsp.writeFile(maskFullPath, transparent);
+    }
+
+    // agora reconstrói edit_base + mask_base (resize para EDIT_MAX_SIDE)
+    if (existsSyncSafe(photoPngPath) && existsSyncSafe(maskFullPath)) {
+      const meta = await sharp(photoPngPath).metadata();
+      const w0 = meta?.width || 0;
+      const h0 = meta?.height || 0;
+
+      if (w0 && h0) {
+        const scale = Math.min(1, EDIT_MAX_SIDE / Math.max(w0, h0));
+        const w = Math.max(1, Math.round(w0 * scale));
+        const h = Math.max(1, Math.round(h0 * scale));
+
+        await sharp(photoPngPath)
+          .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+          .png()
+          .toFile(imagePngPath);
+
+        await sharp(maskFullPath)
+          .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+          .ensureAlpha()
+          .png()
+          .toFile(maskPngPath);
+
+        // valida alinhamento
+        const mi = await sharp(imagePngPath).metadata();
+        const mm = await sharp(maskPngPath).metadata();
+        if ((mi?.width || 0) !== (mm?.width || 0) || (mi?.height || 0) !== (mm?.height || 0)) {
+          throw new Error(`Falha ao reconstruir base: image=${mi?.width}x${mi?.height}, mask=${mm?.width}x${mm?.height}`);
+        }
+      }
+    }
+  }
+
+  // 3) valida final (agora tem que existir)
   if (!existsSyncSafe(imagePngPath)) throw new Error("edit_base.png não encontrada. Reenvie a foto.");
   if (!existsSyncSafe(maskPngPath)) throw new Error("mask_base.png não encontrada. Reenvie a foto.");
 
   return { bookDir, imagePngPath, maskPngPath };
 }
-
 function ensureRetryFields(m) {
   if (!m.retry) m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
   if (!Number.isFinite(m.retry.count)) m.retry.count = 0;
