@@ -1497,7 +1497,12 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
       fill,
     }) + "\n";
   }
+const app = express();
 
+// ✅ essencial na Vercel (proxy)
+app.set("trust proxy", 1);
+
+app.use(express.json({ limit: JSON_LIMIT }));
   const shadowDy = Math.round(H * 0.010);
   const shadowOpacity = 0.18;
 
@@ -4091,48 +4096,14 @@ console.log("✅ Rotas /books e /api/books montadas (app.js).");
 (async () => {
   await ensureDir(OUT_DIR);
   await ensureDir(BOOKS_DIR);
-mountBooksRoutes(app, { OUT_DIR, USERS_DIR, requireAuth });
-  app.listen(PORT, () => {
-    console.log("===============================================");
-    console.log(`📚 Meu Livro Mágico — SEQUENCIAL (REFEITO)`);
-    console.log(`✅ http://localhost:${PORT}`);
-    console.log(`🛒 Página de Vendas: http://localhost:${PORT}/sales`);
-    console.log(`✨ Gerador:          http://localhost:${PORT}/create`);
-    console.log(`⏳ Gerando:          http://localhost:${PORT}/generate`);
-    console.log("-----------------------------------------------");
-    console.log("ℹ️  BASE DIR:", OUT_DIR, IS_VERCEL ? "(Vercel:/tmp)" : "(local)");
-    console.log("-----------------------------------------------");
 
-    if (!OPENAI_API_KEY) {
-      console.log("❌ OPENAI_API_KEY NÃO configurada (texto não vai gerar).");
-      console.log("   ➜ Crie .env.local com: OPENAI_API_KEY=sua_chave");
-    } else {
-      console.log("✅ OPENAI_API_KEY OK");
-      console.log("ℹ️  TEXT_MODEL:", TEXT_MODEL);
-    }
+  mountBooksRoutes(app, { OUT_DIR, USERS_DIR, requireAuth });
 
-    if (REPLICATE_API_TOKEN) {
-      console.log("✅ REPLICATE_API_TOKEN OK");
-      console.log("ℹ️  IMAGE_PROVIDER: Replicate");
-      console.log("ℹ️  REPLICATE_MODEL:", REPLICATE_MODEL);
-      if (REPLICATE_VERSION) console.log("ℹ️  REPLICATE_VERSION (fixa):", REPLICATE_VERSION);
-      console.log("ℹ️  RESOLUTION:", REPLICATE_RESOLUTION, "| ASPECT:", REPLICATE_ASPECT_RATIO, "| FORMAT:", REPLICATE_OUTPUT_FORMAT, "| SAFETY:", REPLICATE_SAFETY);
-     console.log("✅ Referência: envia image_input (máscara vazia é ignorada automaticamente).");
-    } else {
-      console.log("⚠️  REPLICATE_API_TOKEN NÃO configurado -> usando fallback OpenAI Images.");
-      console.log("ℹ️  IMAGE_MODEL:", IMAGE_MODEL);
-    }
-
-    if (sbEnabled()) {
-      console.log("✅ Supabase Storage ativo:", SUPABASE_URL);
-      console.log("ℹ️  Bucket:", SUPABASE_STORAGE_BUCKET);
-    } else {
-      console.log("ℹ️  Supabase Storage desativado.");
-    }
-
-    console.log("✅ Estilos: read (leitura) | color (leitura + colorir)");
-    console.log("===============================================");
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+      console.log(`✅ http://localhost:${PORT}`);
+    });
+  }
 })();
 
 module.exports = app;
