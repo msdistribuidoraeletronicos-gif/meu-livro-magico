@@ -34,6 +34,9 @@ const express = require("express");
 const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
 const mountBooksRoutes = require("./books/routes.js");
+
+// ⚠️ NÃO monte partners aqui, porque o `app` ainda não existe.
+// (vamos montar depois de `const app = express();`)
 // ------------------------------
 // dotenv: .env.local (prioridade) e .env (fallback)
 // ------------------------------
@@ -1553,7 +1556,7 @@ function releaseLock(userId, bookId) {
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-
+require("./partners.page.js")(app, { /* requireAuth opcional */ });
 // ------------------------------
 // LOGIN UI
 // ------------------------------
