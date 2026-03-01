@@ -1045,6 +1045,87 @@ function wrapLines(text, maxCharsPerLine) {
   return lines;
 }
 
+// ------------------------------
+// Texto DENTRO do PNG (Sharp + SVG overlay)
+// ✅ FIX: embute fonte no SVG (evita sumir texto no Vercel)
+// ------------------------------
+function escapeXml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// ✅ Embute fonte no SVG para o texto NÃO sumir
+function buildEmbeddedFontCss() {
+  try {
+    const fontDir = path.join(__dirname, "fonts");
+    const regularPath = path.join(fontDir, "DejaVuSans.ttf");
+    const boldPath = path.join(fontDir, "DejaVuSans-Bold.ttf");
+
+    const parts = [];
+
+    if (fs.existsSync(regularPath)) {
+      const b64 = fs.readFileSync(regularPath).toString("base64");
+      parts.push(`
+@font-face{
+  font-family: "MLMFont";
+  src: url("data:font/ttf;base64,${b64}") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+}`);
+    }
+
+    if (fs.existsSync(boldPath)) {
+      const b64b = fs.readFileSync(boldPath).toString("base64");
+      parts.push(`
+@font-face{
+  font-family: "MLMFont";
+  src: url("data:font/ttf;base64,${b64b}") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+}`);
+    }
+
+    // Se não achou nenhuma fonte, usa fallback genérico
+    const fontFamily = parts.length ? `"MLMFont", Arial, Helvetica, sans-serif` : `Arial, Helvetica, sans-serif`;
+
+    const base = `
+svg { shape-rendering: geometricPrecision; text-rendering: geometricPrecision; }
+text { font-family: ${fontFamily}; dominant-baseline: hanging; }
+`;
+
+    return `<![CDATA[\n${parts.join("\n")}\n${base}\n]]>`;
+  } catch {
+    return `<![CDATA[\ntext{font-family:Arial,Helvetica,sans-serif;dominant-baseline:hanging;}\n]]>`;
+  }
+}
+
+function wrapLines(text, maxCharsPerLine) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = "";
+
+  for (const w of words) {
+    const next = cur ? cur + " " + w : w;
+    if (next.length <= maxCharsPerLine) {
+      cur = next;
+    } else {
+      if (cur) lines.push(cur);
+      if (w.length > maxCharsPerLine) {
+        lines.push(w.slice(0, maxCharsPerLine));
+        cur = w.slice(maxCharsPerLine);
+      } else {
+        cur = w;
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
   const img = sharp(inputPath);
   const meta = await img.metadata();
@@ -1111,15 +1192,15 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
 
   let y = bandY + topPadY;
 
-  const fontStack = "DejaVu Sans, Arial, Helvetica, sans-serif";
+  // ✅ CSS com fonte embutida
+  const fontCss = buildEmbeddedFontCss();
 
   const titleSvg = pack.titleLines.length
     ? pack.titleLines.map((ln, i) => {
         const yy = y + i * pack.lineGapTitle;
         return `<text x="${textX}" y="${yy}"
-          font-family="${fontStack}"
           font-size="${titleSize}"
-          font-weight="800"
+          font-weight="700"
           fill="#0f172a"
           xml:space="preserve">${escapeXml(ln)}</text>`;
       }).join("\n")
@@ -1133,7 +1214,6 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     ? pack.bodyLines.map((ln, i) => {
         const yy = y + i * pack.lineGapBody;
         return `<text x="${textX}" y="${yy}"
-          font-family="${fontStack}"
           font-size="${textSize}"
           font-weight="700"
           fill="#0f172a"
@@ -1141,17 +1221,18 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
       }).join("\n")
     : "";
 
-  // ✅ sombra sem filter (mais compatível em Vercel)
   const shadowDy = Math.round(H * 0.010);
-  const shadowBlur = 0; // sem blur (compatível); se quiser “blur fake”, aumente opacidade e dx/dy
   const shadowOpacity = 0.18;
 
   const svg = `
   <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <style>${fontCss}</style>
+
     <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.90"/>
+
     ${titleSvg}
     ${bodySvg}
   </svg>`;
@@ -1187,21 +1268,19 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   const bandW = W - pad * 2;
 
   const textX = bandX + Math.round(bandW * 0.06);
-
   const topPadY = Math.round(bandH * 0.22);
   let y = bandY + topPadY;
 
   const lineGapTitle = Math.round(titleSize * 1.15);
   const lineGapSub   = Math.round(subSize * 1.25);
 
-  const fontStack = "DejaVu Sans, Arial, Helvetica, sans-serif";
+  const fontCss = buildEmbeddedFontCss();
 
   const titleSvg = titleLines.map((ln, i) => {
     const yy = y + i * lineGapTitle;
     return `<text x="${textX}" y="${yy}"
-      font-family="${fontStack}"
       font-size="${titleSize}"
-      font-weight="800"
+      font-weight="700"
       fill="#0f172a"
       xml:space="preserve">${escapeXml(ln)}</text>`;
   }).join("\n");
@@ -1213,7 +1292,6 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   const subSvg = subLines.map((ln, i) => {
     const yy = y + i * lineGapSub;
     return `<text x="${textX}" y="${yy}"
-      font-family="${fontStack}"
       font-size="${subSize}"
       font-weight="700"
       fill="#0f172a"
@@ -1225,10 +1303,13 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
 
   const svg = `
   <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <style>${fontCss}</style>
+
     <rect x="${bandX}" y="${bandY + shadowDy}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#000000" fill-opacity="${shadowOpacity}"/>
     <rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}"
           rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.88"/>
+
     ${titleSvg}
     ${subSvg}
   </svg>`;
