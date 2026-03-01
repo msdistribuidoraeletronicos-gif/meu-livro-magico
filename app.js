@@ -33,7 +33,7 @@ const { pbkdf2Sync, timingSafeEqual } = require("crypto");
 const express = require("express");
 const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
-
+const mountBooksRoutes = require("./books/routes.js");
 // ------------------------------
 // dotenv: .env.local (prioridade) e .env (fallback)
 // ------------------------------
@@ -103,7 +103,8 @@ const LOCAL_BASE = IS_VERCEL ? path.join("/tmp", "mlm-output") : path.join(__dir
 
 // ✅ mantém users.json aqui
 const OUT_DIR = LOCAL_BASE;
-const USERS_FILE = path.join(OUT_DIR, "users.json");
+const USERS_DIR = OUT_DIR; // ✅ <-- FIX: pasta onde fica users.json
+const USERS_FILE = path.join(USERS_DIR, "users.json");
 
 // ✅ livros ficam aqui
 const BOOKS_DIR = path.join(OUT_DIR, "books");
@@ -3715,148 +3716,90 @@ app.get("/preview", requireAuth, async (req, res) => {
   }
 });
 // ------------------------------
-// Placeholder /books (simples)
+// /books + /api/books (GALERIA REAL)
+// Usa sua estrutura atual:
+//   BOOKS_DIR/<ownerId>/<bookId>/book.json
+// e reaproveita loadManifestAsViewer/canAccessBook/isAdminUser
 // ------------------------------
-// ------------------------------
-// /books — lista livros do usuário (admin vê tudo)
-// BOOKS_DIR/<ownerId>/<bookId>/book.json
-// ------------------------------
-// ------------------------------
-// /books — lista livros do usuário (admin vê tudo)
-// BOOKS_DIR/<ownerId>/<bookId>/book.json
-// ✅ Agora:
-// - se /books?open=<id> e estiver pronto -> redireciona para /preview?id=<id>
-// - botão "Abrir": done -> /preview | senão -> /generate
-// ------------------------------
-app.get("/books", requireAuth, async (req, res) => {
-  const userId = String(req.user?.id || "");
-  const list = [];
 
-  // ✅ se pediram open, tenta ir direto pro preview (quando já estiver pronto)
-  const openId = String(req.query?.open || "").trim();
-  if (openId) {
-    try {
-      const mm = await loadManifestAsViewer(userId, openId, req.user);
-      if (mm && canAccessBook(userId, mm, req.user) && String(mm.status) === "done") {
-        return res.redirect("/preview?id=" + encodeURIComponent(openId));
+// lista livros do viewer (admin vê todos)
+async function listBooksForViewer(viewerUser) {
+  const viewerUserId = String(viewerUser?.id || "");
+  const admin = isAdminUser(viewerUser);
+
+  // garante BOOKS_DIR
+  await ensureDir(BOOKS_DIR);
+
+  const owners = admin
+    ? await fsp.readdir(BOOKS_DIR).catch(() => [])
+    : [viewerUserId];
+
+  const books = [];
+
+  for (const ownerId of owners) {
+    if (!ownerId) continue;
+
+    const ownerDir = path.join(BOOKS_DIR, String(ownerId));
+    const st = await fsp.stat(ownerDir).catch(() => null);
+    if (!st || !st.isDirectory()) continue;
+
+    const bookIds = await fsp.readdir(ownerDir).catch(() => []);
+    for (const bookId of bookIds) {
+      if (!bookId) continue;
+
+      const mPath = manifestPathOf(ownerId, bookId);
+      const m = await readJsonSafe(mPath, null);
+      if (!m) continue;
+
+      // segurança extra (mesmo admin)
+      if (!admin && String(m.ownerId || "") !== String(viewerUserId)) continue;
+
+      const dirId = String(bookId);
+
+      // coverUrl compatível com seu /api/image/:id/:file
+      let coverUrl = "";
+      if (m.cover?.ok && m.cover?.file) {
+        coverUrl = m.cover?.url || `/api/image/${encodeURIComponent(dirId)}/${encodeURIComponent(m.cover.file)}`;
       }
-    } catch {}
+
+      books.push({
+        // ids
+        id: String(m.id || dirId),
+        dirId,
+
+        // dono
+        ownerId: String(m.ownerId || ownerId),
+
+        // meta
+        status: String(m.status || "created"),
+        step: String(m.step || ""),
+        error: String(m.error || ""),
+        theme: String(m.theme || ""),
+        style: String(m.style || "read"),
+        child: m.child && typeof m.child === "object" ? m.child : { name: "", age: 0, gender: "neutral" },
+
+        // links
+        coverUrl,
+        hasPdf: !!m.pdf,
+        pdfUrl: String(m.pdf || ""),
+
+        // datas
+        createdAt: String(m.createdAt || ""),
+        updatedAt: String(m.updatedAt || ""),
+      });
+    }
   }
 
-  try {
-    await ensureDir(BOOKS_DIR);
+  // mais recente primeiro
+  books.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  return { books, isAdmin: admin };
+}
 
-    const ownerDirs = await fsp.readdir(BOOKS_DIR).catch(() => []);
-
-    for (const ownerId of ownerDirs) {
-      const ownerPath = path.join(BOOKS_DIR, ownerId);
-
-      let bookDirs = [];
-      try {
-        const st = await fsp.stat(ownerPath);
-        if (!st.isDirectory()) continue;
-        bookDirs = await fsp.readdir(ownerPath).catch(() => []);
-      } catch {
-        continue;
-      }
-
-      for (const bookId of bookDirs) {
-        const p = path.join(ownerPath, bookId, "book.json");
-        if (!existsSyncSafe(p)) continue;
-
-        const m = await readJson(p).catch(() => null);
-        if (!m) continue;
-
-        // ✅ respeita permissão (admin vê tudo)
-        if (!canAccessBook(userId, m, req.user)) continue;
-
-        list.push(m);
-      }
-    }
-  } catch {}
-
-  list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-
-  res.type("html").send(`<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Meus Livros</title>
-<style>
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827}
-  .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
-  .card{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px}
-  h1{margin:0 0 12px;font-weight:1000}
-  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-  @media(max-width:720px){.grid{grid-template-columns:1fr}}
-  .item{border:1px solid rgba(0,0,0,.08);border-radius:18px;padding:12px}
-  .muted{color:#6b7280;font-weight:900}
-  a.btn{display:inline-flex;gap:10px;align-items:center;padding:10px 12px;border-radius:999px;text-decoration:none;font-weight:1000;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff}
-  a.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <h1>📚 Meus Livros</h1>
-      <div class="row">
-        <a class="btn ghost" href="/create">+ Criar</a>
-        <a class="btn ghost" href="/sales">Vendas</a>
-      </div>
-    </div>
-    <div class="grid">
-      ${list
-        .map((m) => {
-          const cover = m.cover?.url ? `<img src="${m.cover.url}" style="width:100%;border-radius:14px;display:block"/>` : "";
-          const title = escapeHtml(m.child?.name ? `Aventura de ${m.child.name}` : "Livro");
-          const st = escapeHtml(m.status || "created");
-          const up = escapeHtml(m.updatedAt || "");
-          const isDone = String(m.status || "") === "done";
-          const open = isDone
-            ? `/preview?id=${encodeURIComponent(m.id)}`
-            : `/generate?id=${encodeURIComponent(m.id)}`;
-          const pdf = m.pdf ? `<a class="btn" href="${m.pdf}">⬇️ PDF</a>` : "";
-          return `<div class="item" id="book-${escapeHtml(m.id)}">
-            ${cover}
-            <div style="margin-top:10px;font-weight:1000">${title}</div>
-            <div class="muted">status=${st}</div>
-            <div class="muted" style="font-size:12px">${up}</div>
-            <div class="row">
-              <a class="btn ghost" href="${open}">👀 Abrir</a>
-              ${pdf}
-            </div>
-          </div>`;
-        })
-        .join("")}
-    </div>
-    ${list.length ? "" : `<div class="muted">Nenhum livro ainda. Clique em "Criar".</div>`}
-  </div>
-</div>
-<script>
-  (function(){
-    const q = new URLSearchParams(location.search);
-    const open = q.get("open");
-    if (!open) return;
-    const el = document.getElementById("book-" + open);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.style.outline = "4px solid rgba(124,58,237,.20)";
-    el.style.boxShadow = "0 20px 50px rgba(124,58,237,.20)";
-    el.style.borderColor = "rgba(124,58,237,.35)";
-  })();
-</script>
-</body>
-</html>`);
-});
-// ------------------------------
-// Start
-// ------------------------------
+console.log("✅ Rotas /books e /api/books montadas (app.js).");
 (async () => {
   await ensureDir(OUT_DIR);
   await ensureDir(BOOKS_DIR);
-
+mountBooksRoutes(app, { OUT_DIR, USERS_DIR, requireAuth });
   app.listen(PORT, () => {
     console.log("===============================================");
     console.log(`📚 Meu Livro Mágico — SEQUENCIAL (REFEITO)`);
