@@ -11,9 +11,11 @@
  * - passos não duplicam (se arquivo já existe, pula)
  * - mask vazia não é enviada pro provider (evita modelo "ignorar referência")
  *
+ * ✅ SISTEMA DE PARCEIROS (tracking via cookie + API de pedidos)
+ *
  * Requisitos:
  *  - Node 18+ (fetch global)
- *  - npm i express pdfkit dotenv sharp
+ *  - npm i express pdfkit dotenv sharp cookie-parser
  *  - (opcional) npm i @supabase/supabase-js  -> se quiser Storage no Supabase
  *
  * Rodar:
@@ -33,6 +35,7 @@ const { pbkdf2Sync, timingSafeEqual } = require("crypto");
 const express = require("express");
 const PDFDocument = require("pdfkit");
 const sharp = require("sharp");
+const cookieParser = require("cookie-parser"); // ✅ ADICIONADO
 const mountBooksRoutes = require("./books/routes.js");
 require("dotenv").config({ path: ".env.local" });
 require("dotenv").config(); // fallback para .env
@@ -1497,12 +1500,6 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
       fill,
     }) + "\n";
   }
-const app = express();
-
-// ✅ essencial na Vercel (proxy)
-app.set("trust proxy", 1);
-
-app.use(express.json({ limit: JSON_LIMIT }));
   const shadowDy = Math.round(H * 0.010);
   const shadowOpacity = 0.18;
 
@@ -1698,8 +1695,36 @@ function releaseLock(userId, bookId) {
 const app = express();
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
-require("./partners.fabricacao.page.js")(app);
-require("./partners.venda.page.js")(app);
+// ✅ ADICIONADO: cookie-parser e middleware de tracking de parceiro
+app.use(cookieParser());
+
+app.use((req, res, next) => {
+  // Se vier ?ref=... na query, define o cookie
+  if (req.query.ref) {
+    res.cookie('partner_ref', req.query.ref, {
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dias
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
+    res.locals.partnerRef = req.query.ref;
+  } else {
+    // Lê do cookie se existir
+    const ref = req.cookies?.partner_ref;
+    res.locals.partnerRef = ref || null;
+  }
+  next();
+});
+
+// ============================================================
+// ✅ MONTAGEM DOS MÓDULOS DE PARCEIROS (ORDEM CORRETA)
+// ============================================================
+require("./partners.central.page.js")(app);      // GET /parceiros
+require("./partners.auth.page.js")(app);         // login/logout/esqueci/redefinir
+require("./partners.fabricacao.page.js")(app);   // cadastro e perfil fabricação
+require("./partners.venda.page.js")(app);        // cadastro e perfil venda
+// ============================================================
+
 // ------------------------------
 // API PARCEIROS
 // - parceiros consultam pedidos atribuídos a eles
@@ -1849,6 +1874,104 @@ app.get("/api/admin/partner-orders", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+
+// ✅ NOVA ROTA: API de checkout (cria pedido na tabela orders)
+app.post('/api/checkout', requireAuth, async (req, res) => {
+  try {
+    if (!supabaseAdmin) {
+      return res.status(500).json({ error: 'Supabase não configurado' });
+    }
+
+    const userId = req.user.id;
+    const {
+      bookId,
+      name,
+      whatsapp,
+      email,
+      address,
+      pack,
+      giftwrap,
+      total,
+      obs,
+      partnerRef
+    } = req.body;
+
+    // Validações básicas
+    if (!bookId || !name || !whatsapp || !email || !address) {
+      return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+    }
+
+    // Se partnerRef foi enviado, verifica se existe na tabela partners
+    let partnerId = null;
+    if (partnerRef) {
+      const { data: partner } = await supabaseAdmin
+        .from('partners')
+        .select('id')
+        .eq('id', partnerRef)
+        .maybeSingle();
+      if (partner) partnerId = partner.id;
+    }
+
+    const orderData = {
+      bookId,
+      name,
+      whatsapp,
+      email,
+      address,
+      pack,
+      giftwrap,
+      total,
+      obs,
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .insert({
+        user_id: userId,
+        partner_id: partnerId,
+        order_data: orderData,
+        status: 'pending',
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Erro ao inserir pedido:', error);
+      return res.status(500).json({ error: 'Erro ao salvar pedido' });
+    }
+
+    res.json({ ok: true, orderId: data.id });
+  } catch (e) {
+    console.error('checkout error:', e);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ✅ NOVA ROTA: API para parceiro visualizar seus pedidos (vendas)
+app.get('/api/partner/sales', async (req, res) => {
+  if (!requirePartnerToken(req, res)) return;
+
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Supabase não configurado' });
+  }
+
+  const partnerId = String(req.query?.partnerId || '').trim();
+  if (!partnerId) return res.status(400).json({ error: 'partnerId required' });
+
+  const { data, error } = await supabaseAdmin
+    .from('orders')
+    .select('*')
+    .eq('partner_id', partnerId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Erro ao buscar pedidos' });
+  }
+
+  res.json({ ok: true, orders: data });
+});
+
 // ------------------------------
 // LOGIN UI
 // ------------------------------
@@ -2193,18 +2316,13 @@ app.get("/exemplos", (req, res) => {
 
 // ------------------------------
 // UI / GERADOR (Steps 0–2) — "/" e "/create"
-// (Mantido como você enviou)
+// (Modificado para incluir botão de logout)
 // ------------------------------
 function renderGeneratorHtml(req, res) {
   const imageInfo =
     IMAGE_PROVIDER === "replicate"
       ? `Replicate: <span class="mono">${escapeHtml(REPLICATE_MODEL)}</span>`
       : `OpenAI (fallback): <span class="mono">${escapeHtml(IMAGE_MODEL)}</span>`;
-
-  // (HTML/JS idêntico ao seu — não alterei para não quebrar)
-  // OBS: eu mantive exatamente seu conteúdo; por limite de tamanho,
-  // aqui está como string igual (sem mexer) — você já sabe que é o mesmo.
-  // Para garantir “arquivo inteiro”, deixo exatamente como estava:
 
   res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
@@ -2251,7 +2369,9 @@ function renderGeneratorHtml(req, res) {
     border-radius:999px;
     font-weight:900;
     text-decoration:none;
+    cursor:pointer;
   }
+  .pill:hover{filter:brightness(1.05)}
   .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
 
   .stepper{display:flex; align-items:center; justify-content:center; gap: 10px; flex-wrap:wrap; margin: 10px 0 22px;}
@@ -2423,6 +2543,8 @@ function renderGeneratorHtml(req, res) {
         <a class="pill" href="/books">📚 Meus Livros</a>
         <a class="pill" href="/como-funciona">❓ Como funciona</a>
         <button class="pill" id="btnReset" style="cursor:pointer">♻️ Reiniciar</button>
+        <!-- ✅ Botão Sair -->
+        <button class="pill" id="btnLogout" style="cursor:pointer">🚪 Sair</button>
       </div>
     </div>
 
@@ -2556,6 +2678,16 @@ function renderGeneratorHtml(req, res) {
   };
 
   const $ = (id) => document.getElementById(id);
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   function setHint(el, msg) {
     el.textContent = msg || "";
@@ -2939,6 +3071,7 @@ app.get("/generate", requireAuth, async (req, res) => {
     <div class="imgs" id="imgs"></div>
 
     <div class="btns">
+      <button class="btn ghost" id="btnLogout">🚪 Sair</button>
       <a class="btn ghost" href="/create">← Voltar</a>
       <a class="btn ghost" href="/books">📚 Meus Livros</a>
       <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
@@ -2954,6 +3087,16 @@ app.get("/generate", requireAuth, async (req, res) => {
   function setSub(s){ $("sub").textContent = String(s||""); }
   function setMeta(s){ $("meta").textContent = String(s||""); }
   function setBar(p){ $("barFill").style.width = Math.max(0, Math.min(100, p)) + "%"; }
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   function renderImages(coverUrl, images){
     const root = $("imgs");
@@ -3951,6 +4094,7 @@ app.get("/preview", requireAuth, async (req, res) => {
       <div class="muted">${title}</div>
     </div>
     <div class="btns">
+      <button class="btn" id="btnLogout">🚪 Sair</button>
       <a class="btn" href="/books?open=${encodeURIComponent(id)}">📚 Meus Livros</a>
       <a class="btn" href="/create">➕ Criar outro</a>
       ${pdfUrl ? `<a class="btn primary" href="${escapeHtml(pdfUrl)}">⬇️ Baixar PDF</a>` : ``}
@@ -3977,6 +4121,16 @@ app.get("/preview", requireAuth, async (req, res) => {
 <script>
   const items = ${JSON.stringify(items)};
   const $ = (id) => document.getElementById(id);
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   let idx = 0;
 

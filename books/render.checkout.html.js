@@ -39,6 +39,9 @@ function renderCheckoutHtml(book, opts = {}) {
 
   const coverUrl = String(book?.coverUrl || "").trim();
 
+  // ✅ Recebe partnerRef das opções
+  const partnerRef = opts.partnerRef ? JSON.stringify(opts.partnerRef) : "null";
+
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -188,10 +191,6 @@ function renderCheckoutHtml(book, opts = {}) {
     color:transparent;
   }
 
-  /* ✅ “Gatilhos visuais” sem mudar o tema:
-     - barra de progresso (clareza + controle)
-     - timer suave (urgência ética: prazo de “reserva” local)
-     - selo “Quase lá” (micro-recompensa) */
   .topNudges{
     display:flex;
     gap:10px;
@@ -373,7 +372,6 @@ function renderCheckoutHtml(book, opts = {}) {
   }
   textarea{ min-height: 92px; resize: vertical; font-weight: 800; }
 
-  /* ✅ “Alerta” visual (sem trocar o tema) */
   .fieldError input, .fieldError textarea, .fieldError select{
     border-color: rgba(219,39,119,.35);
     box-shadow: 0 18px 34px rgba(219,39,119,.10);
@@ -386,7 +384,6 @@ function renderCheckoutHtml(book, opts = {}) {
   }
   .miniHelp strong{ color: rgba(109,40,217,1); font-weight: 1000; }
 
-  /* ✅ checkbox (embrulho) */
   .checkLine{
     display:flex;
     align-items:flex-start;
@@ -486,7 +483,6 @@ function renderCheckoutHtml(book, opts = {}) {
   }
   .warn{ color:#7f1d1d; }
 
-  /* ✅ toast “notificação” interna (sem push) */
   .toast{
     position: fixed;
     right: 16px;
@@ -532,7 +528,6 @@ function renderCheckoutHtml(book, opts = {}) {
     flex:0 0 auto;
   }
 
-  /* ✅ POPUP ANTIGO (MESMO CONCEITO): modal + confete */
   .modal{
     position: fixed;
     inset: 0;
@@ -631,6 +626,8 @@ function renderCheckoutHtml(book, opts = {}) {
       <div class="navRight">
         <a class="btn btnOutline" href="/books">← Voltar para Meus Livros</a>
         <a class="btn btnPrimary" href="/books/${encodeURIComponent(dirId)}">👀 Ver o livro</a>
+        <!-- ✅ Botão Sair -->
+        <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
   </div>
@@ -890,7 +887,21 @@ function renderCheckoutHtml(book, opts = {}) {
   const BOOK_ID = ${JSON.stringify(String(id || ""))};
   const BASE = ${JSON.stringify(basePrice)};
   const WRAP = ${JSON.stringify(wrapPrice)};
+
+  // ✅ Constante do partnerRef
+  const PARTNER_REF = ${partnerRef};
+
   const $ = (id) => document.getElementById(id);
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   const DRAFT_KEY = "mlm_checkout_draft_" + BOOK_ID;
   const TIMER_KEY = "mlm_checkout_timer_" + BOOK_ID;
@@ -1041,7 +1052,7 @@ function renderCheckoutHtml(book, opts = {}) {
       .replace(/'/g,"&#39;");
   }
 
-  function showSuccessModal(customerName, customerEmail){
+  function showSuccessModal(customerName, customerEmail, orderId){
     const modal = document.getElementById("successModal");
     const okBtn = document.getElementById("modalOk");
     const confettiWrap = document.getElementById("confettiWrap");
@@ -1057,7 +1068,8 @@ function renderCheckoutHtml(book, opts = {}) {
     if (modalSub){
       modalSub.innerHTML =
         (safeName ? ("Parabéns, <b>" + safeName + "</b>! ") : "Parabéns! ") +
-        "Você acabou de adquirir o <b>Meu Livro Mágico</b> ✨<br/>Seu pequeno vai se sentir o protagonista dessa aventura!";
+        "Você acabou de adquirir o <b>Meu Livro Mágico</b> ✨<br/>Seu pequeno vai se sentir o protagonista dessa aventura!" +
+        (orderId ? "<br/>Nº do pedido: <b>" + escHtml(orderId) + "</b>" : "");
     }
     if (modalEmail) modalEmail.textContent = safeEmail || "-";
 
@@ -1315,7 +1327,8 @@ function renderCheckoutHtml(book, opts = {}) {
     return text;
   }
 
-  $("btnSend").addEventListener("click", function(){
+  // ✅ NOVO: lógica do botão Enviar (usando fetch para /api/checkout)
+  $("btnSend").addEventListener("click", async function(){
     clearAllErr();
 
     const name = ($("name").value||"").trim();
@@ -1387,29 +1400,51 @@ function renderCheckoutHtml(book, opts = {}) {
       (addr.line2 ? ("- " + addr.line2 + "\\n") : "") +
       (addr.ref ? ("- Referência: " + addr.ref + "\\n") : "");
 
-    const text = buildOrderText({
+    // Monta payload para a API
+    const payload = {
+      bookId: BOOK_ID,
       name,
+      whatsapp: whatsClean,
       email,
-      whatsClean,
-      addrText,
-      v,
-      payLabel,
-      obs
-    });
+      address: {
+        cep: addr.cep,
+        uf: addr.uf,
+        street: addr.street,
+        number: addr.number,
+        comp: addr.comp,
+        district: addr.district,
+        city: addr.city,
+        ref: addr.ref,
+      },
+      pack: $("pack").value,
+      giftwrap: v.wrapChecked,
+      total: v.total,
+      obs,
+      partnerRef: PARTNER_REF,
+    };
 
-    // ✅ Aqui você pode integrar envio real. Por enquanto, deixa pronto.
-    // Exemplo:
-    // const phone = "5567999999999";
-    // window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(text), "_blank");
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    // ✅ marca como “enviado” (não travar o beforeunload)
-    submitted = true;
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Erro ao processar pedido');
 
-    // ✅ mantém rascunho (útil) mas reseta timer de “reserva” para não ficar piscando
-    try { localStorage.removeItem(TIMER_KEY); } catch(e){}
+      // ✅ marca como “enviado” (não travar o beforeunload)
+      submitted = true;
 
-    $("msg").textContent = "✅ Pedido pronto! (texto montado).";
-    showSuccessModal(name, email);
+      // ✅ mantém rascunho (útil) mas reseta timer de “reserva” para não ficar piscando
+      try { localStorage.removeItem(TIMER_KEY); } catch(e){}
+
+      $("msg").textContent = "✅ Pedido enviado com sucesso!";
+      showSuccessModal(name, email, result.orderId);
+    } catch (e) {
+      showToast('Erro', 'Falha ao enviar pedido: ' + e.message);
+      $("msg").textContent = "❌ Erro: " + e.message;
+    }
   });
 })();
 </script>

@@ -2,7 +2,6 @@
 // Página "Meus Livros" (galeria) — HTML completo
 // Export:
 //   module.exports = { renderBooksHtml }
-// (e também funciona se você der require(...) direto, via normalização no routes.js)
 
 "use strict";
 
@@ -79,6 +78,13 @@ function renderBooksHtml() {
   }
   .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 
+  /* Impede quebra dos botões em telas maiores (igual ao checkout) */
+  @media (min-width: 900px) {
+    .navRight {
+      flex-wrap: nowrap;
+    }
+  }
+
   /* Buttons */
   .btn{
     border:0;
@@ -118,6 +124,27 @@ function renderBooksHtml() {
     padding: 10px 12px;
     font-size: 13px;
     font-weight: 900;
+  }
+
+  /* Pill style (usado em outras páginas) */
+  .pill{
+    display:inline-flex; gap:8px; align-items:center;
+    padding:10px 12px; border-radius:999px;
+    background: rgba(255,255,255,.76);
+    border:1px solid rgba(221,214,254,.92);
+    color: rgba(109,40,217,1);
+    font-weight:950;
+    box-shadow: 0 14px 30px rgba(17,24,39,.08);
+    cursor:pointer;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    text-decoration:none;
+    white-space:nowrap;
+  }
+  .pill:hover{
+    background: rgba(245,243,255,.92);
+    border-color: rgba(196,181,253,.95);
+    transform: translateY(-1px);
+    box-shadow: 0 18px 44px rgba(17,24,39,.10);
   }
 
   /* Hero */
@@ -559,160 +586,103 @@ function renderBooksHtml() {
     line-height: 1.55;
   }
 
-  /* ✅ NOVO: Botões do card (retangulares, mais persuasivos, sem PDF) */
-  /* ✅ Botões do card (CTA forte) */
-/* ✅ Botões do card (CTA forte) */
-.rowBtns{
-  margin-top:auto;
-  display:grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.aBtn{
-  position:relative;
-  width:100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  gap:10px;
-  padding: 12px 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(221,214,254,.95);
-  background: rgba(255,255,255,.82);
-  color: rgba(109,40,217,1);
-  font-weight: 1000;
-  box-shadow: 0 12px 26px rgba(17,24,39,.06);
-  transition: transform .15s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;
-  text-align:center;
-  line-height:1;
-  min-height: 46px;
-  overflow:hidden;
-}
-
-.aBtn:hover{
-  transform: translateY(-1px);
-  box-shadow: 0 18px 42px rgba(17,24,39,.10);
-  background: rgba(245,243,255,.92);
-  border-color: rgba(196,181,253,.98);
-}
-
-.aBtn:active{
-  transform: translateY(0px);
-  box-shadow: 0 12px 26px rgba(17,24,39,.08);
-}
-
-/* Abrir (continua bonito e “seguro”) */
-.aBtn.primary{
-  border: 0;
-  color: #fff;
-  background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-  box-shadow: 0 18px 40px rgba(124,58,237,.22);
-}
-.aBtn.primary:hover{
-  background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-  box-shadow: 0 22px 50px rgba(124,58,237,.28);
-  filter: saturate(1.08);
-}
-.aBtn.primary::after{
-  content:"";
-  position:absolute; inset:-2px;
-  border-radius: 18px;
-  background: radial-gradient(220px 90px at 20% 0%, rgba(255,255,255,.28), transparent 60%);
-  pointer-events:none;
-  opacity:.9;
-}
-
-/* ✅ Fazer pedido (CTA “quente”: urgência visual + brilho + pulso sutil) */
-.aBtn.order{
-  border: 0;
-  color: #fff;
-  background: linear-gradient(90deg, #ef4444, #f97316); /* vermelho -> laranja */
-  box-shadow: 0 18px 44px rgba(239,68,68,.22);
-  transform: translateZ(0);
-}
-
-.aBtn.order:hover{
-  background: linear-gradient(90deg, #dc2626, #fb923c);
-  box-shadow: 0 24px 58px rgba(239,68,68,.30);
-  filter: saturate(1.10);
-}
-
-/* brilho no topo (tipo “botão de app”) */
-.aBtn.order::before{
-  content:"";
-  position:absolute;
-  left:-40%;
-  top:-60%;
-  width: 180%;
-  height: 140%;
-  background: radial-gradient(closest-side, rgba(255,255,255,.26), transparent 60%);
-  transform: rotate(10deg);
-  pointer-events:none;
-  opacity:.95;
-}
-
-/* borda “glow” leve */
-.aBtn.order::after{
-  content:"";
-  position:absolute; inset:-2px;
-  border-radius: 18px;
-  background: radial-gradient(200px 70px at 50% 10%, rgba(255,255,255,.18), transparent 65%);
-  pointer-events:none;
-}
-
-/* chip de confiança/ação (PIX / rápido / etc.) */
-.aBtn .tag{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  font-size: 11px;
-  font-weight: 1000;
-  padding: 6px 8px;
-  border-radius: 999px;
-  line-height: 1;
-  white-space:nowrap;
-}
-
-.aBtn.order .tag{
-  background: rgba(255,255,255,.18);
-  border: 1px solid rgba(255,255,255,.22);
-  color: rgba(255,255,255,.95);
-  box-shadow: 0 12px 26px rgba(0,0,0,.12);
-}
-
-/* microtexto (ajuda MUITO na persuasão) */
-.aBtn .sub{
-  display:block;
-  font-size: 11px;
-  font-weight: 900;
-  opacity: .92;
-  margin-top: 2px;
-  line-height: 1.05;
-}
-
-/* “pulse” bem sutil (chama o olho sem parecer spam) */
-@keyframes ctaPulse{
-  0%   { box-shadow: 0 18px 44px rgba(239,68,68,.20); }
-  50%  { box-shadow: 0 22px 56px rgba(239,68,68,.30); }
-  100% { box-shadow: 0 18px 44px rgba(239,68,68,.20); }
-}
-.aBtn.order{
-  animation: ctaPulse 1.85s ease-in-out infinite;
-}
-
-/* acessibilidade: se o usuário não gosta de animação */
-@media (prefers-reduced-motion: reduce){
-  .aBtn.order{ animation: none; }
-}
-  .aBtn.order:hover{
-    border-color: rgba(245,158,11,.55);
-    background:
-      radial-gradient(260px 110px at 25% 0%, rgba(252,211,77,.45), transparent 62%),
-      rgba(255,255,255,.92);
-    box-shadow: 0 18px 44px rgba(245,158,11,.14);
+  .rowBtns{
+    margin-top:auto;
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
-  .aBtn.order .tag{
+
+  .aBtn{
+    position:relative;
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding: 12px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(221,214,254,.95);
+    background: rgba(255,255,255,.82);
+    color: rgba(109,40,217,1);
+    font-weight: 1000;
+    box-shadow: 0 12px 26px rgba(17,24,39,.06);
+    transition: transform .15s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;
+    text-align:center;
+    line-height:1;
+    min-height: 46px;
+    overflow:hidden;
+    text-decoration:none;
+  }
+
+  .aBtn:hover{
+    transform: translateY(-1px);
+    box-shadow: 0 18px 42px rgba(17,24,39,.10);
+    background: rgba(245,243,255,.92);
+    border-color: rgba(196,181,253,.98);
+  }
+
+  .aBtn:active{
+    transform: translateY(0px);
+    box-shadow: 0 12px 26px rgba(17,24,39,.08);
+  }
+
+  .aBtn.primary{
+    border: 0;
+    color: #fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 40px rgba(124,58,237,.22);
+  }
+  .aBtn.primary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 22px 50px rgba(124,58,237,.28);
+    filter: saturate(1.08);
+  }
+  .aBtn.primary::after{
+    content:"";
+    position:absolute; inset:-2px;
+    border-radius: 18px;
+    background: radial-gradient(220px 90px at 20% 0%, rgba(255,255,255,.28), transparent 60%);
+    pointer-events:none;
+    opacity:.9;
+  }
+
+  .aBtn.order{
+    border: 0;
+    color: #fff;
+    background: linear-gradient(90deg, #ef4444, #f97316);
+    box-shadow: 0 18px 44px rgba(239,68,68,.22);
+    transform: translateZ(0);
+  }
+
+  .aBtn.order:hover{
+    background: linear-gradient(90deg, #dc2626, #fb923c);
+    box-shadow: 0 24px 58px rgba(239,68,68,.30);
+    filter: saturate(1.10);
+  }
+
+  .aBtn.order::before{
+    content:"";
+    position:absolute;
+    left:-40%;
+    top:-60%;
+    width: 180%;
+    height: 140%;
+    background: radial-gradient(closest-side, rgba(255,255,255,.26), transparent 60%);
+    transform: rotate(10deg);
+    pointer-events:none;
+    opacity:.95;
+  }
+
+  .aBtn.order::after{
+    content:"";
+    position:absolute; inset:-2px;
+    border-radius: 18px;
+    background: radial-gradient(200px 70px at 50% 10%, rgba(255,255,255,.18), transparent 65%);
+    pointer-events:none;
+  }
+
+  .aBtn .tag{
     display:inline-flex;
     align-items:center;
     gap:6px;
@@ -720,10 +690,37 @@ function renderBooksHtml() {
     font-weight: 1000;
     padding: 6px 8px;
     border-radius: 999px;
-    background: rgba(245,158,11,.14);
-    border: 1px solid rgba(245,158,11,.26);
-    color: rgba(146,64,14,1);
     line-height: 1;
+    white-space:nowrap;
+  }
+
+  .aBtn.order .tag{
+    background: rgba(255,255,255,.18);
+    border: 1px solid rgba(255,255,255,.22);
+    color: rgba(255,255,255,.95);
+    box-shadow: 0 12px 26px rgba(0,0,0,.12);
+  }
+
+  .aBtn .sub{
+    display:block;
+    font-size: 11px;
+    font-weight: 900;
+    opacity: .92;
+    margin-top: 2px;
+    line-height: 1.05;
+  }
+
+  @keyframes ctaPulse{
+    0%   { box-shadow: 0 18px 44px rgba(239,68,68,.20); }
+    50%  { box-shadow: 0 22px 56px rgba(239,68,68,.30); }
+    100% { box-shadow: 0 18px 44px rgba(239,68,68,.20); }
+  }
+  .aBtn.order{
+    animation: ctaPulse 1.85s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .aBtn.order{ animation: none; }
   }
 
   .noteLine{
@@ -888,7 +885,7 @@ function renderBooksHtml() {
         <div>Meu Livro Mágico</div>
       </div>
       <div class="navRight">
-        <a class="btn btnOutline btnTiny" href="/sales" title="Vendas">Pagina Inicial</a>
+        <a class="pill" href="/sales" title="Vendas">🛒 Pagina Inicial</a>
         <a class="btn btnPrimary" href="/create" title="Criar agora">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -898,6 +895,8 @@ function renderBooksHtml() {
           </svg>
           Criar Livro
         </a>
+        <!-- ✅ Botão Sair com estilo btnOutline (igual ao checkout) -->
+        <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
   </div>
@@ -1224,6 +1223,16 @@ function renderBooksHtml() {
             .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
   function $(id){ return document.getElementById(id); }
+
+  // ✅ Logout com estilo btnOutline (igual ao checkout)
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   (function renderStars(){
     var root = $("stars");

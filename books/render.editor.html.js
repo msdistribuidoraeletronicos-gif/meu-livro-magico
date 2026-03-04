@@ -352,6 +352,8 @@ function renderBookEditorHtml(book) {
     <div class="actions">
       <a class="pill" href="/books">📚 Meus Livros</a>
       <a class="pill" href="/create">✨ Criar novo</a>
+      <!-- ✅ Botão Sair -->
+      <button class="pill" id="btnLogout">🚪 Sair</button>
     </div>
   </div>
 
@@ -391,6 +393,16 @@ function renderBookEditorHtml(book) {
 (function(){
   const DATA = ${safeJsonForScript(data)};
   const $ = (id) => document.getElementById(id);
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   function showOk(msg){
     const el = $("msgOk");

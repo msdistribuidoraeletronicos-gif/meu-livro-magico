@@ -786,6 +786,8 @@ function renderBookPreviewHtml(book) {
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <a class="pill" href="/create">🪄 Criar novo</a>
         <a class="pill" href="/books/${encodeURIComponent(id)}/edit">✏️ Editar livro</a>
+        <!-- ✅ Botão Sair -->
+        <button class="pill" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
 
@@ -870,6 +872,16 @@ function renderBookPreviewHtml(book) {
   var coverUrl = ${safeCoverJson};
 
   function $(id){ return document.getElementById(id); }
+
+  // ✅ Logout
+  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/sales';
+    } catch (e) {
+      alert('Erro ao sair');
+    }
+  });
 
   function getCssPxVar(name, fallback){
     try{

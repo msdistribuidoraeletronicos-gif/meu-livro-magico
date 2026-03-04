@@ -1,11 +1,20 @@
 /**
  * partners.shared.js — Helpers compartilhados (Supabase + Auth + Layout + Reset + Email)
- * Usado por: partners.fabricacao.page.js e partners.venda.page.js
+ * UNIFICADO: agora usa JWT com cookie 'partner_token' (path='/') para todas as autenticações.
+ *
+ * ✅ ALTERAÇÃO pedida:
+ * - O layout agora aceita um "slot" à esquerda do brand:
+ *     layout(title, innerHtml, navRightHtml, navLeftHtml)
+ *   Assim você consegue colocar o botão "Voltar" ao lado esquerdo de "🤝 Parceiros • Meu Livro Mágico".
+ *
+ * - Mantém compatibilidade: se você continuar chamando layout(title, innerHtml, navRightHtml),
+ *   funciona igual (navLeft fica vazio).
  */
 "use strict";
 
 const express = require("express");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 const { createClient } = require("@supabase/supabase-js");
 
 // ===== Email (Brevo API) =====
@@ -153,89 +162,81 @@ function buildPartnersShared(app, opts = {}) {
   }
 
   // =========================
-  // Cookie session (simples, assinado)
+  // JWT Cookie (unificado)
   // =========================
-  const COOKIE_NAME = "mlm_partner";
+  const COOKIE_NAME = "partner_token";
   const COOKIE_SECRET = process.env.PARTNER_COOKIE_SECRET || (isDev ? "dev-secret-change-me" : "");
 
-  function hmacId(id) {
-    if (!COOKIE_SECRET) return "";
-    return crypto.createHmac("sha256", COOKIE_SECRET).update(String(id)).digest("hex");
-  }
+  // Define se o cookie deve ser Secure com base em variável de ambiente
+  const COOKIE_SECURE =
+    process.env.COOKIE_SECURE === "true"
+      ? true
+      : process.env.COOKIE_SECURE === "false"
+      ? false
+      : process.env.NODE_ENV === "production";
 
-  function makeCookieValue(id) {
-    const sig = hmacId(id);
-    return `${id}.${sig}`;
-  }
-
-  function parseCookies(req) {
-    const raw = req.headers.cookie || "";
-    const out = {};
-    raw.split(";").forEach((p) => {
-      const idx = p.indexOf("=");
-      if (idx === -1) return;
-      const k = p.slice(0, idx).trim();
-      const v = p.slice(idx + 1).trim();
-      if (!k) return;
-      out[k] = decodeURIComponent(v);
+  function setPartnerCookie(res, partnerId) {
+    console.log("[setPartnerCookie] COOKIE_SECURE =", COOKIE_SECURE);
+    if (!COOKIE_SECRET && !isDev) {
+      throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
+    }
+    const token = jwt.sign({ id: partnerId }, COOKIE_SECRET, { expiresIn: "30d" });
+    res.cookie(COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: COOKIE_SECURE,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dias
+      path: "/",
     });
-    return out;
   }
 
-  function isHttpsRequest(req) {
-    const xfProto = String(req.headers["x-forwarded-proto"] || "")
-      .split(",")[0]
-      .trim()
-      .toLowerCase();
-    if (xfProto) return xfProto === "https";
-    return !!req.secure;
+  function clearPartnerCookie(res) {
+    res.clearCookie(COOKIE_NAME, { path: "/" });
   }
 
-  function setCookie(req, res, name, value, { maxAgeSec = 60 * 60 * 24 * 30 } = {}) {
-    const parts = [
-      `${name}=${encodeURIComponent(value)}`,
-      `Path=/`,
-      `Max-Age=${Math.max(0, Number(maxAgeSec) || 0)}`,
-      `HttpOnly`,
-      `SameSite=Lax`,
-    ];
-
-    if (!isDev && isHttpsRequest(req)) parts.push("Secure");
-
-    const prev = res.getHeader("Set-Cookie");
-    if (!prev) res.setHeader("Set-Cookie", parts.join("; "));
-    else if (Array.isArray(prev)) res.setHeader("Set-Cookie", [...prev, parts.join("; ")]);
-    else res.setHeader("Set-Cookie", [prev, parts.join("; ")]);
+  // Função para obter o ID do parceiro a partir do token no cookie (sem redirecionar)
+  function getPartnerIdFromToken(req) {
+    const token = req.cookies?.[COOKIE_NAME];
+    if (!token) return null;
+    try {
+      const decoded = jwt.verify(token, COOKIE_SECRET);
+      return decoded.id;
+    } catch {
+      return null;
+    }
   }
 
-  function clearCookie(req, res, name) {
-    const parts = [`${name}=`, `Path=/`, `Max-Age=0`, `HttpOnly`, `SameSite=Lax`];
-    if (!isDev && isHttpsRequest(req)) parts.push("Secure");
-
-    const prev = res.getHeader("Set-Cookie");
-    if (!prev) res.setHeader("Set-Cookie", parts.join("; "));
-    else if (Array.isArray(prev)) res.setHeader("Set-Cookie", [...prev, parts.join("; ")]);
-    else res.setHeader("Set-Cookie", [prev, parts.join("; ")]);
+  // Middleware para proteger rotas de parceiro (redireciona para login se não autenticado)
+  function requirePartner(req, res, next) {
+    console.log(`[requirePartner] URL: ${req.method} ${req.originalUrl}`);
+    console.log("[requirePartner] Cookies recebidos:", req.cookies);
+    const token = req.cookies?.[COOKIE_NAME];
+    console.log("[requirePartner] Token encontrado:", token ? "sim" : "não");
+    if (!token) {
+      const redirectUrl = `/parceiros/login?next=${encodeURIComponent(req.originalUrl)}`;
+      console.log(`[requirePartner] Redirecionando para login: token ausente -> ${redirectUrl}`);
+      return res.redirect(redirectUrl);
+    }
+    try {
+      const decoded = jwt.verify(token, COOKIE_SECRET);
+      console.log("[requirePartner] Token válido para ID:", decoded.id);
+      req.partnerId = decoded.id;
+      next();
+    } catch (err) {
+      const redirectUrl = `/parceiros/login?next=${encodeURIComponent(req.originalUrl)}`;
+      console.log(`[requirePartner] Token inválido: ${err.message} -> redirecionando para ${redirectUrl}`);
+      return res.redirect(redirectUrl);
+    }
   }
 
-  function getPartnerIdFromCookie(req) {
-    const cookies = parseCookies(req);
-    const v = cookies[COOKIE_NAME];
-    if (!v) return null;
-    const [id, sig] = String(v).split(".");
-    if (!id || !sig) return null;
-    if (!COOKIE_SECRET) return null;
-    if (hmacId(id) !== sig) return null;
-    return id;
-  }
-
+  // Função para verificar se o parceiro logado é o mesmo do ID (para rotas que exigem ownership)
   function requirePartnerAuthForId(req, res, partnerId) {
-    const loggedId = getPartnerIdFromCookie(req);
-    if (loggedId && String(loggedId) === String(partnerId)) return true;
-
-    const next = encodeURIComponent(String(partnerId));
-    res.setHeader("Cache-Control", "no-store");
-    res.redirect(303, `/parceiros/login?next=${next}`);
+    const token = req.cookies?.[COOKIE_NAME];
+    if (!token) return false;
+    try {
+      const decoded = jwt.verify(token, COOKIE_SECRET);
+      if (String(decoded.id) === String(partnerId)) return true;
+    } catch {}
     return false;
   }
 
@@ -275,15 +276,17 @@ function buildPartnersShared(app, opts = {}) {
   }
 
   // =========================
-  // Layout (igual ao seu)
+  // Layout (ajustado: navLeft + navRight)
   // =========================
-  function layout(title, innerHtml, navRightHtml) {
+  function layout(title, innerHtml, navRightHtml, navLeftHtml) {
     const right = navRightHtml
       ? navRightHtml
       : `
         <a class="btn btnOutline" href="/sales">⬅️ Voltar</a>
         <a class="btn btnPrimary" href="/parceiros">Central</a>
       `;
+
+    const left = navLeftHtml ? navLeftHtml : ``;
 
     return `<!doctype html>
 <html lang="pt-BR">
@@ -311,14 +314,53 @@ function buildPartnersShared(app, opts = {}) {
     }
     a{ color:inherit; text-decoration:none; }
     .wrap{ max-width: 1100px; margin: 0 auto; padding: 0 16px; }
-    .nav{ padding: 16px 0; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .brand{ display:flex; align-items:center; gap:10px; font-weight:1000; letter-spacing:-.2px; }
+
+    .nav{
+      padding: 16px 0;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+
+    /* ✅ novo: lado esquerdo (Voltar + Brand) */
+    .navLeft{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      min-width: 0;
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-weight:1000;
+      letter-spacing:-.2px;
+      min-width: 0;
+    }
+    .brandText{
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
     .logo{
       width:42px;height:42px;border-radius:14px; display:grid;place-items:center;
       background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
       border: 1px solid rgba(124,58,237,.18);
       box-shadow: var(--shadow2); font-size:20px;
+      flex: 0 0 auto;
     }
+
+    .navRight{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+
     .btn{
       border:0; cursor:pointer; user-select:none;
       display:inline-flex; align-items:center; justify-content:center; gap:10px;
@@ -440,11 +482,15 @@ function buildPartnersShared(app, opts = {}) {
 <body>
   <div class="wrap">
     <div class="nav">
-      <div class="brand">
-        <div class="logo">🤝</div>
-        <div>Parceiros • Meu Livro Mágico</div>
+      <div class="navLeft">
+        ${left}
+        <div class="brand">
+          <div class="logo">🤝</div>
+          <div class="brandText">Parceiros • Meu Livro Mágico</div>
+        </div>
       </div>
-      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+
+      <div class="navRight">
         ${right}
       </div>
     </div>
@@ -475,15 +521,16 @@ function buildPartnersShared(app, opts = {}) {
     statusLabel,
     normalizePhoneBR,
 
-    // auth/cookies
+    // auth/cookies (unificado)
     COOKIE_NAME,
     COOKIE_SECRET,
-    makeCookieValue,
-    setCookie,
-    clearCookie,
+    setPartnerCookie,
+    clearPartnerCookie,
+    getPartnerIdFromToken, // NOVA FUNÇÃO
+    requirePartner,
+    requirePartnerAuthForId,
     verifyPassword,
     hashPassword,
-    requirePartnerAuthForId,
 
     // ui
     layout,

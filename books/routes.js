@@ -15,6 +15,7 @@
 //   GET  /api/books        -> JSON lista (do usuário logado; admin vê tudo)
 //   GET  /books/:id        -> HTML preview (layout 1)
 //   GET  /books/:id/edit   -> HTML editor (layout 2)
+//   GET  /checkout/:id     -> HTML checkout (com opção de partnerRef)
 
 "use strict";
 
@@ -321,10 +322,15 @@ app.get("/checkout/:id", requireAuth, async (req, res) => {
       folderId: String(dirId),
     };
 
+    // ✅ Obtém partnerRef do res.locals (definido pelo middleware no app.js)
+    const partnerRef = res.locals?.partnerRef || null;
+
     const html = renderCheckoutHtml(bookForUi, {
       basePrice: 39.9,
       printPrice: 29.9,
       bindPrice: 19.9,
+      wrapPrice: 15,
+      partnerRef, // <-- adicionado
     });
 
     res.type("html").send(html);

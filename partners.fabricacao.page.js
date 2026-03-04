@@ -1,6 +1,6 @@
 /**
  * partners.fabricacao.page.js — Parceiros (Fabricação)
- * Mantém URLs originais.
+ * UNIFICADO: usa as funções JWT do shared para autenticação.
  */
 "use strict";
 
@@ -15,462 +15,24 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
     esc,
     moneyBR,
     statusLabel,
-    verifyPassword,
     hashPassword,
     COOKIE_SECRET,
-    COOKIE_NAME,
-    makeCookieValue,
-    setCookie,
-    clearCookie,
+    setPartnerCookie,            // middleware
+    requirePartner,
     requirePartnerAuthForId,
-    genResetToken,
-    sha256Hex,
     getBaseUrl,
-    sendResetEmail,
   } = shared;
-
-  // =========================
-  // GET /parceiros  (Central) — igual
-  // =========================
-  app.get("/parceiros", (req, res) => {
-    res.type("html").send(
-      layout(
-        "Seja Parceiro",
-        `
-        <div class="card">
-          <div class="h1">Seja Parceiro 🤝</div>
-          <p class="p">Escolha como você quer ganhar com o Meu Livro Mágico: <b>Fabricando</b> os livros na sua cidade ou <b>Vendendo</b> com seu link de divulgação.</p>
-          <div style="height:14px"></div>
-
-          <div class="grid2">
-            <div class="opt">
-              <h3>🏭 Fabricação</h3>
-              <p>Receba pedidos da sua cidade, aceite/recuse, produza e entregue. <b>R$ 28 por pedido</b> (R$ 20 fabricação + R$ 8 entrega).</p>
-              <a class="btn btnPrimary" href="/parceiros/cadastro?tipo=fabricacao">Quero Fabricar</a>
-            </div>
-
-            <div class="opt">
-              <h3>🧲 Venda</h3>
-              <p>Gere seu link, divulgue e ganhe <b>10%</b> do valor total de cada compra feita pelo seu link.</p>
-              <a class="btn btnPrimary" href="/parceiros/cadastro?tipo=venda">Quero Vender</a>
-            </div>
-          </div>
-        </div>
-      `,
-        `
-        <a class="btn btnOutline" href="/sales">⬅️ Voltar</a>
-        <a class="btn btnPrimary" href="/parceiros/login">🔐 Login</a>
-      `
-      )
-    );
-  });
-
-  // =========================
-  // Login/Logout/Reset — compartilhado (igual)
-  // =========================
-  app.get("/parceiros/login", (req, res) => {
-    const next = String(req.query.next || "").trim();
-    res.type("html").send(
-      layout(
-        "Login — Parceiros",
-        `
-        <div class="card">
-          <div class="h1">Login do Parceiro 🔐</div>
-          <p class="p">Entre com seu <b>e-mail</b> e <b>senha</b> para acessar seu painel.</p>
-          <div style="height:14px"></div>
-
-          <form method="POST" action="/parceiros/login">
-            <input type="hidden" name="next" value="${esc(next)}"/>
-
-            <div class="formRow">
-              <div>
-                <label>E-mail</label>
-                <input type="email" name="email" placeholder="seuemail@exemplo.com" required/>
-              </div>
-              <div>
-                <label>Senha</label>
-                <input type="password" name="senha" placeholder="Sua senha" required/>
-              </div>
-            </div>
-
-            <div style="height:16px"></div>
-
-            <button class="btn btnPrimary" type="submit">Entrar</button>
-            <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
-          </form>
-
-          <div style="height:12px"></div>
-          <div class="muted">
-            <a href="/parceiros/esqueci" style="text-decoration:underline; font-weight:900;">Esqueci minha senha</a>
-          </div>
-        </div>
-      `
-      )
-    );
-  });
-
-  app.post("/parceiros/perfil/:id", (req, res) => {
-    const id = String(req.params.id || "").trim();
-    return res.redirect(`/parceiros/perfil/${encodeURIComponent(id)}`);
-  });
-  app.post("/parceiros/perfil", (req, res) => res.redirect(303, "/parceiros"));
-
-  app.post("/parceiros/login", async (req, res) => {
-    try {
-      const email = String(req.body.email || "").trim().toLowerCase();
-      const senha = String(req.body.senha || "");
-      const next = String(req.body.next || "").trim();
-
-      if (!email || !senha) throw new Error("Informe e-mail e senha.");
-
-      const { data: p, error } = await supabase
-        .from("partners")
-        .select("id,email,password_hash,negocio,tipo")
-        .eq("email", email)
-        .single();
-
-      if (error || !p) {
-        return res.status(401).type("html").send(
-          layout(
-            "Login",
-            `
-            <div class="card">
-              <div class="h1">Não encontrado</div>
-              <p class="p">Não achamos parceiro com esse e-mail.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/login">Tentar novamente</a>
-              <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
-            </div>
-          `
-          )
-        );
-      }
-
-      if (!p.password_hash) {
-        return res.status(401).type("html").send(
-          layout(
-            "Login",
-            `
-            <div class="card">
-              <div class="h1">Senha não configurada</div>
-              <p class="p">Esse parceiro ainda não tem senha cadastrada.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/esqueci">Criar nova senha</a>
-              <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
-            </div>
-          `
-          )
-        );
-      }
-
-      const ok = verifyPassword(senha, p.password_hash);
-      if (!ok) {
-        return res.status(401).type("html").send(
-          layout(
-            "Login",
-            `
-            <div class="card">
-              <div class="h1">Senha inválida</div>
-              <p class="p">Confira sua senha e tente novamente.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/login">Tentar novamente</a>
-              <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
-            </div>
-          `
-          )
-        );
-      }
-
-      if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
-
-      setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
-
-      const targetId = next || p.id;
-      res.setHeader("Cache-Control", "no-store");
-      return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(targetId)}`);
-    } catch (e) {
-      const msg = e?.message || String(e);
-      console.error("[partners] login erro:", msg);
-
-      res.status(500).type("html").send(
-        layout(
-          "Erro",
-          `
-          <div class="card">
-            <div class="h1">Ops…</div>
-            <p class="p">Não foi possível fazer login agora. Tente novamente.</p>
-            ${isDev ? `<div class="err">DEV ERROR:\n${esc(msg)}</div>` : ``}
-            <div style="height:14px"></div>
-            <a class="btn btnPrimary" href="/parceiros/login">Voltar para Login</a>
-          </div>
-        `
-        )
-      );
-    }
-  });
-
-  app.get("/parceiros/sair", (req, res) => {
-    clearCookie(req, res, COOKIE_NAME);
-    res.type("html").send(
-      layout(
-        "Saiu",
-        `
-        <div class="card">
-          <div class="h1">Você saiu ✅</div>
-          <p class="p">Sua sessão foi encerrada com segurança.</p>
-          <div style="height:14px"></div>
-          <a class="btn btnPrimary" href="/parceiros/login">Fazer login</a>
-          <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
-        </div>
-      `
-      )
-    );
-  });
-
-  app.get("/parceiros/esqueci", (req, res) => {
-    res.type("html").send(
-      layout(
-        "Esqueci minha senha",
-        `
-        <div class="card">
-          <div class="h1">Esqueci minha senha 🔁</div>
-          <p class="p">Informe seu e-mail. Vamos gerar um <b>link de redefinição</b>.</p>
-          <div style="height:14px"></div>
-
-          <form method="POST" action="/parceiros/esqueci">
-            <div class="formRow">
-              <div>
-                <label>E-mail</label>
-                <input type="email" name="email" placeholder="seuemail@exemplo.com" required/>
-              </div>
-              <div style="display:flex; align-items:end; gap:10px;">
-                <button class="btn btnPrimary" type="submit">Gerar link</button>
-                <a class="btn btnOutline" href="/parceiros/login">Voltar</a>
-              </div>
-            </div>
-          </form>
-
-          <div style="height:12px"></div>
-          <div class="muted">Dica: o link expira em 30 minutos.</div>
-        </div>
-      `
-      )
-    );
-  });
-
-  app.post("/parceiros/esqueci", async (req, res) => {
-    try {
-      const email = String(req.body.email || "").trim().toLowerCase();
-      if (!email) throw new Error("Informe um e-mail.");
-
-      const { data: p, error } = await supabase.from("partners").select("id,email").eq("email", email).single();
-
-      if (!error && p?.id) {
-        const token = genResetToken();
-        const tokenHash = sha256Hex(token);
-        const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-
-        const up = await supabase
-          .from("partners")
-          .update({ reset_token_hash: tokenHash, reset_token_expires: expires })
-          .eq("id", p.id);
-
-        if (up.error) {
-          console.error("[partners] reset token update error:", up.error);
-        } else {
-          const resetUrl = `${getBaseUrl(req)}/parceiros/redefinir?token=${encodeURIComponent(token)}`;
-          const mail = await sendResetEmail(email, resetUrl);
-          if (!mail?.ok) console.error("[partners] sendResetEmail failed:", mail?.error || mail);
-        }
-      }
-
-      return res.type("html").send(
-        layout(
-          "Recuperação de senha",
-          `
-          <div class="card">
-            <div class="h1">Pronto ✅</div>
-            <p class="p">Enviamos um <b>link de recuperação de senha</b> para sua caixa de entrada.</p>
-            <div style="height:10px"></div>
-            <div class="muted">Verifique também o <b>spam/lixo eletrônico</b>. O link expira em 30 minutos.</div>
-            <div style="height:16px"></div>
-            <a class="btn btnPrimary" href="/parceiros/login">Voltar para Login</a>
-          </div>
-          `
-        )
-      );
-    } catch (e) {
-      const msg = e?.message || String(e);
-      console.error("[partners] esqueci erro:", msg);
-      return res.status(500).type("html").send(
-        layout(
-          "Erro",
-          `
-          <div class="card">
-            <div class="h1">Ops…</div>
-            <p class="p">Não foi possível processar a recuperação agora. Tente novamente.</p>
-            <div style="height:14px"></div>
-            <a class="btn btnPrimary" href="/parceiros/esqueci">Tentar novamente</a>
-          </div>
-          `
-        )
-      );
-    }
-  });
-
-  app.get("/parceiros/redefinir", (req, res) => {
-    const token = String(req.query.token || "").trim();
-    if (!token) return res.redirect("/parceiros/esqueci");
-
-    res.type("html").send(
-      layout(
-        "Redefinir senha",
-        `
-        <div class="card">
-          <div class="h1">Redefinir senha 🔐</div>
-          <p class="p">Crie uma nova senha para acessar seu painel.</p>
-
-          <div style="height:14px"></div>
-
-          <form method="POST" action="/parceiros/redefinir">
-            <input type="hidden" name="token" value="${esc(token)}"/>
-
-            <div class="formRow">
-              <div>
-                <label>Nova senha</label>
-                <input type="password" name="senha" placeholder="Nova senha" required/>
-                <div class="muted" style="margin-top:6px;">Mínimo recomendado: 6+ caracteres.</div>
-              </div>
-              <div>
-                <label>Confirmar nova senha</label>
-                <input type="password" name="senha2" placeholder="Repita a nova senha" required/>
-              </div>
-            </div>
-
-            <div style="height:16px"></div>
-
-            <button class="btn btnPrimary" type="submit">Salvar nova senha</button>
-            <a class="btn btnOutline" href="/parceiros/login" style="margin-left:10px;">Voltar</a>
-          </form>
-        </div>
-      `
-      )
-    );
-  });
-
-  app.post("/parceiros/redefinir", async (req, res) => {
-    try {
-      const token = String(req.body.token || "").trim();
-      const senha = String(req.body.senha || "");
-      const senha2 = String(req.body.senha2 || "");
-
-      if (!token) throw new Error("Token inválido.");
-      if (!senha || senha.length < 6) throw new Error("A senha precisa ter pelo menos 6 caracteres.");
-      if (senha !== senha2) throw new Error("As senhas não conferem.");
-
-      const tokenHash = sha256Hex(token);
-
-      const { data: p, error } = await supabase
-        .from("partners")
-        .select("id,reset_token_hash,reset_token_expires")
-        .eq("reset_token_hash", tokenHash)
-        .single();
-
-      if (error || !p) {
-        return res.status(400).type("html").send(
-          layout(
-            "Link inválido",
-            `
-            <div class="card">
-              <div class="h1">Link inválido</div>
-              <p class="p">Esse link não é válido ou já foi usado.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
-            </div>
-          `
-          )
-        );
-      }
-
-      const exp = p.reset_token_expires ? new Date(p.reset_token_expires).getTime() : 0;
-      if (!exp || Date.now() > exp) {
-        return res.status(400).type("html").send(
-          layout(
-            "Link expirado",
-            `
-            <div class="card">
-              <div class="h1">Link expirado ⏳</div>
-              <p class="p">Esse link expirou. Gere um novo link para redefinir sua senha.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
-            </div>
-          `
-          )
-        );
-      }
-
-      const upd = await supabase
-        .from("partners")
-        .update({
-          password_hash: hashPassword(senha),
-          reset_token_hash: null,
-          reset_token_expires: null,
-        })
-        .eq("id", p.id);
-
-      if (upd.error) {
-        console.error("[partners] redefinir update error:", upd.error);
-        throw new Error("Não foi possível salvar a nova senha.");
-      }
-
-      if (!COOKIE_SECRET && !isDev) {
-        return res.type("html").send(
-          layout(
-            "Senha redefinida",
-            `
-            <div class="card">
-              <div class="h1">Senha redefinida ✅</div>
-              <p class="p">Sua senha foi atualizada com sucesso. Agora faça login para entrar no painel.</p>
-              <div style="height:14px"></div>
-              <a class="btn btnPrimary" href="/parceiros/login">Ir para Login</a>
-            </div>
-            `
-          )
-        );
-      }
-
-      setCookie(req, res, COOKIE_NAME, makeCookieValue(p.id), { maxAgeSec: 60 * 60 * 24 * 30 });
-      res.setHeader("Cache-Control", "no-store");
-      return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(p.id)}`);
-    } catch (e) {
-      const msg = e?.message || String(e);
-      console.error("[partners] redefinir erro:", msg);
-      return res.status(500).type("html").send(
-        layout(
-          "Erro",
-          `
-          <div class="card">
-            <div class="h1">Ops…</div>
-            <p class="p">Não foi possível redefinir sua senha agora. Tente novamente.</p>
-            ${isDev ? `<div class="err">DEV ERROR:\n${esc(msg)}</div>` : ``}
-            <div style="height:14px"></div>
-            <a class="btn btnPrimary" href="/parceiros/esqueci">Gerar novo link</a>
-          </div>
-          `
-        )
-      );
-    }
-  });
 
   // =========================
   // CADASTRO — somente Fabricação
   // =========================
   app.get("/parceiros/cadastro", (req, res, next) => {
     const tipo = String(req.query.tipo || "").toLowerCase();
-    if (tipo !== "fabricacao") return next(); // deixa o módulo de venda cuidar do tipo=venda
+    if (tipo !== "fabricacao") return next();
 
     const title = "Cadastro — Fabricação";
-    const campoSegmento = `<label>Tipo de negócio</label>
+    const campoSegmento = `
+      <label>Tipo de negócio</label>
       <select name="segmento" required>
         <option value="">Selecione…</option>
         <option value="papelaria">Papelaria</option>
@@ -478,7 +40,8 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
         <option value="personalizados">Personalizados</option>
         <option value="encadernacao">Encadernação</option>
         <option value="outro">Outro</option>
-      </select>`;
+      </select>
+    `;
 
     res.type("html").send(
       layout(
@@ -566,14 +129,14 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
             <a class="btn btnOutline" href="/parceiros" style="margin-left:10px;">Voltar</a>
           </form>
         </div>
-      `
+        `
       )
     );
   });
 
   app.post("/parceiros/cadastro", async (req, res, next) => {
     const tipo = String(req.body.tipo || "").toLowerCase();
-    if (tipo !== "fabricacao") return next(); // deixa o módulo de venda cuidar do tipo=venda
+    if (tipo !== "fabricacao") return next();
 
     try {
       const responsavel = String(req.body.responsavel || "").trim();
@@ -591,7 +154,11 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
       if (!senha || senha.length < 6) throw new Error("A senha precisa ter pelo menos 6 caracteres.");
       if (senha !== senha2) throw new Error("As senhas não conferem.");
 
-      const { data: exists, error: exErr } = await supabase.from("partners").select("id").eq("email", email).maybeSingle();
+      const { data: exists, error: exErr } = await supabase
+        .from("partners")
+        .select("id")
+        .eq("email", email)
+        .maybeSingle();
       if (exErr) console.error("[partners] check email error:", exErr);
 
       if (exists?.id) {
@@ -606,7 +173,7 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
               <a class="btn btnPrimary" href="/parceiros/login">Ir para Login</a>
               <a class="btn btnOutline" href="/parceiros/esqueci" style="margin-left:10px;">Esqueci a senha</a>
             </div>
-          `
+            `
           )
         );
       }
@@ -635,7 +202,8 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
       }
 
       if (!COOKIE_SECRET && !isDev) throw new Error("Defina PARTNER_COOKIE_SECRET no ambiente de produção.");
-      setCookie(req, res, COOKIE_NAME, makeCookieValue(data.id), { maxAgeSec: 60 * 60 * 24 * 30 });
+
+      setPartnerCookie(res, data.id); // usa JWT do shared
 
       res.setHeader("Cache-Control", "no-store");
       return res.redirect(303, `/parceiros/perfil/${encodeURIComponent(data.id)}`);
@@ -654,26 +222,90 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
             <div style="height:14px"></div>
             <a class="btn btnPrimary" href="/parceiros">Voltar para Central</a>
           </div>
-        `
+          `
         )
       );
     }
   });
 
   // =========================
-  // PERFIL — serve para ambos (mas o módulo de venda também terá)
-  // Importante: aqui NÃO filtra tipo; o painel muda pelo p.tipo.
+  // AÇÕES DE PEDIDOS (FUNCIONAL)
+  // POST /parceiros/pedido/:orderId/status  body: status=...
   // =========================
-  app.get("/parceiros/perfil/:id", async (req, res, next) => {
-    // Deixa o módulo "fabricacao" atender QUALQUER tipo? Pode.
-    // Se você preferir que cada módulo cuide só do seu tipo, dá pra filtrar.
-    // Aqui mantive igual ao seu: painel dinâmico por p.tipo.
+  app.post("/parceiros/pedido/:orderId/status", async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const orderId = String(req.params.orderId || "").trim();
+      const nextStatus = String(req.body.status || "").trim();
+
+      const allowed = new Set(["para_aceitar", "em_fabricacao", "finalizado", "retorno", "recusado"]);
+      if (!orderId) return res.status(400).json({ ok: false, error: "orderId inválido" });
+      if (!allowed.has(nextStatus)) return res.status(400).json({ ok: false, error: "status inválido" });
+
+      const { data: o, error: oErr } = await supabase
+        .from("partner_orders")
+        .select("id,partner_id,status")
+        .eq("id", orderId)
+        .single();
+      if (oErr || !o) return res.status(404).json({ ok: false, error: "pedido não encontrado" });
+
+      // Verifica autenticação e ownership com shared
+      if (!requirePartnerAuthForId(req, res, o.partner_id)) {
+        return res.status(401).json({ ok: false, error: "não autenticado" });
+      }
+
+      const cur = String(o.status || "");
+      const can = (from, to) => {
+        const map = {
+          para_aceitar: new Set(["em_fabricacao", "recusado", "retorno"]),
+          em_fabricacao: new Set(["finalizado", "retorno"]),
+          retorno: new Set(["em_fabricacao", "finalizado"]),
+          finalizado: new Set([]),
+          recusado: new Set([]),
+        };
+        return (map[from] || new Set()).has(to);
+      };
+
+      if (!isDev && !can(cur, nextStatus)) {
+        return res.status(400).json({ ok: false, error: `Transição não permitida: ${cur} → ${nextStatus}` });
+      }
+
+      const upd = await supabase
+        .from("partner_orders")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", orderId);
+
+      if (upd.error) {
+        console.error("[partners] update order status error:", upd.error);
+        return res.status(500).json({ ok: false, error: "Falha ao atualizar" });
+      }
+
+      return res.json({ ok: true });
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.error("[partners] pedido status erro:", msg);
+      return res.status(500).json({ ok: false, error: "Erro interno" });
+    }
+  });
+
+  // =========================
+  // PERFIL — painel
+  // =========================
+  app.get("/parceiros/perfil/:id", requirePartner, async (req, res) => {
     try {
       res.setHeader("Cache-Control", "no-store");
       const id = String(req.params.id || "").trim();
       if (!id) return res.redirect("/parceiros");
 
-      if (!requirePartnerAuthForId(req, res, id)) return;
+      // req.partnerId vem do middleware requirePartner
+      if (String(req.partnerId) !== String(id)) {
+        return res.status(403).type("html").send(
+          layout(
+            "Acesso negado",
+            `<div class="card"><h1>403</h1><p>Você não tem permissão para acessar este perfil.</p><a href="/parceiros">Voltar</a></div>`
+          )
+        );
+      }
 
       const { data: p, error: pErr } = await supabase.from("partners").select("*").eq("id", id).single();
       if (pErr || !p) return res.redirect("/parceiros");
@@ -687,39 +319,138 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
       if (oErr) console.error("[partners] select orders error:", oErr);
 
       const orders = Array.isArray(pedidos) ? pedidos : [];
+
       const pedidos_para_aceitar = orders.filter((x) => x.status === "para_aceitar").length;
       const pedidos_em_fabricacao = orders.filter((x) => x.status === "em_fabricacao").length;
       const pedidos_finalizados = orders.filter((x) => x.status === "finalizado").length;
       const pedidos_retorno = orders.filter((x) => x.status === "retorno").length;
+      const pedidos_recusados = orders.filter((x) => x.status === "recusado").length;
       const caixa_total = orders.reduce((acc, x) => acc + Number(x.ganho_parceiro || 0), 0);
 
-      const isFab = p.tipo === "fabricacao";
-      const title = isFab ? "Perfil — Fabricação" : "Perfil — Venda";
+      const tipoNorm = String(p.tipo || "").trim().toLowerCase();
+      const isFab = tipoNorm === "fabricacao";
 
-      const menuFab = `
-        <a href="#caixa">💰 Meu caixa</a>
-        <a href="#aceitar">📥 Pedidos para aceitar</a>
-        <a href="#emf">🏭 Pedidos em fabricação</a>
-        <a href="#finalizados">✅ Pedidos finalizados</a>
-        <a href="#retorno">↩️ Pedidos com retorno</a>
-        <a href="#como">❓ Como funciona</a>
-        <a href="#historico">📚 Histórico</a>
-      `;
+      const title = "Perfil — Fabricação";
 
-      const menuVenda = `
-        <a href="#caixa">💰 Meu caixa</a>
-        <a href="#aceitar">📥 Pedidos para aceitar</a>
-        <a href="#emf">🧾 Pedidos em fabricação</a>
-        <a href="#finalizados">✅ Pedidos finalizados</a>
-        <a href="#retorno">↩️ Pedidos com retorno</a>
-        <a href="#como">❓ Como funciona</a>
-        <a href="#links">🔗 Meus links</a>
-        <a href="#historico">📚 Histórico</a>
-      `;
+      const fmtWhen = (d) => (d ? new Date(d).toLocaleString("pt-BR") : "-");
+      const fmtCli = (o) => [o.cliente_nome, o.cliente_cidade].filter(Boolean).join(" • ") || "-";
+      const fmtMoney = (v) => `R$ ${moneyBR(v)}`;
 
-      const host = req.get("host") || "seusite.com";
-      const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
-      const linkVenda = `${proto}://${host}/?ref=${encodeURIComponent(p.id)}`;
+      // ---- Progressos “humanos” (não viciantes): completude do perfil e nível por entregas
+      const profileFields = [
+        ["responsavel", p.responsavel],
+        ["negocio", p.negocio],
+        ["segmento", p.segmento],
+        ["whatsapp", p.whatsapp],
+        ["email", p.email],
+        ["cidade", p.cidade],
+        ["endereco", p.endereco],
+        ["cep", p.cep],
+      ];
+      const filled = profileFields.filter(([, v]) => String(v || "").trim()).length;
+      const total = profileFields.length;
+      const profilePct = Math.round((filled / total) * 100);
+
+      const level = (() => {
+        const n = Number(pedidos_finalizados || 0);
+        if (n >= 50) return { name: "Ouro", icon: "🥇", hint: "Excelência em entregas" };
+        if (n >= 15) return { name: "Prata", icon: "🥈", hint: "Boa consistência" };
+        if (n >= 5) return { name: "Bronze", icon: "🥉", hint: "Primeiros resultados" };
+        return { name: "Iniciante", icon: "✨", hint: "Começando agora" };
+      })();
+
+      const ordersParaAceitar = orders.filter((x) => x.status === "para_aceitar");
+      const ordersEmFab = orders.filter((x) => x.status === "em_fabricacao");
+      const ordersFinal = orders.filter((x) => x.status === "finalizado");
+      const ordersRetorno = orders.filter((x) => x.status === "retorno");
+      const ordersRecusados = orders.filter((x) => x.status === "recusado");
+
+      // “Feed” suave (sem rolagem infinita): mostrar 50 e pronto.
+      const renderOrdersTable = (list, { showActions }) => {
+        if (!list || list.length === 0) {
+          return `<div class="empty">
+            <div class="emptyIcon">📭</div>
+            <div class="emptyTitle">Nada por aqui</div>
+            <div class="emptyText">Quando houver pedidos nesta etapa, eles aparecem aqui.</div>
+          </div>`;
+        }
+
+        return `
+          <div class="tableWrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Cliente</th>
+                  <th>Status</th>
+                  <th>Total</th>
+                  <th>Ganho</th>
+                  ${showActions ? `<th style="width:290px;">Ações</th>` : ``}
+                </tr>
+              </thead>
+              <tbody>
+                ${list
+                  .slice(0, 50)
+                  .map((o) => {
+                    const st = String(o.status || "");
+                    const actions = showActions
+                      ? `
+                        <div class="rowActions">
+                          ${
+                            st === "para_aceitar"
+                              ? `
+                                <button class="btnSmall btnOk" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="em_fabricacao" type="button">✅ Aceitar</button>
+                                <button class="btnSmall btnWarn" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="retorno" type="button">↩️ Retorno</button>
+                                <button class="btnSmall btnBad" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="recusado" type="button">⛔ Recusar</button>
+                              `
+                              : st === "em_fabricacao"
+                              ? `
+                                <button class="btnSmall btnOk" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="finalizado" type="button">✅ Finalizar</button>
+                                <button class="btnSmall btnWarn" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="retorno" type="button">↩️ Retorno</button>
+                              `
+                              : st === "retorno"
+                              ? `
+                                <button class="btnSmall btnOk" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="em_fabricacao" type="button">🏭 Voltar</button>
+                                <button class="btnSmall btnOk" data-action="setStatus" data-id="${esc(
+                                  o.id
+                                )}" data-status="finalizado" type="button">✅ Finalizar</button>
+                              `
+                              : `<span class="muted">Sem ações</span>`
+                          }
+                        </div>
+                      `
+                      : ``;
+
+                    return `
+                      <tr>
+                        <td>${esc(fmtWhen(o.created_at))}</td>
+                        <td>${esc(fmtCli(o))}</td>
+                        <td><span class="pill pill-${esc(st)}">${esc(statusLabel(st))}</span></td>
+                        <td>${esc(fmtMoney(o.valor_total))}</td>
+                        <td>${esc(fmtMoney(o.ganho_parceiro))}</td>
+                        ${showActions ? `<td>${actions}</td>` : ``}
+                      </tr>
+                    `;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="hint">Mostrando os 50 pedidos mais recentes desta seção.</div>
+        `;
+      };
 
       const historicoHtml =
         orders.length === 0
@@ -742,18 +473,19 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
                     .slice(0, 50)
                     .map((o) => {
                       const when = o.created_at ? new Date(o.created_at).toLocaleString("pt-BR") : "-";
-                      const tipo = o.tipo === "fabricacao" ? "🏭 Fabricação" : "🧲 Venda";
+                      const tipoTxt = o.tipo === "fabricacao" ? "🏭 Fabricação" : "🧲 Venda";
                       const cli = [o.cliente_nome, o.cliente_cidade].filter(Boolean).join(" • ") || "-";
-                      const total = `R$ ${moneyBR(o.valor_total)}`;
-                      const ganho = `R$ ${moneyBR(o.ganho_parceiro)}`;
+                      const totalV = `R$ ${moneyBR(o.valor_total)}`;
+                      const ganhoV = `R$ ${moneyBR(o.ganho_parceiro)}`;
+                      const st = String(o.status || "");
                       return `
                         <tr>
                           <td>${esc(when)}</td>
-                          <td>${esc(tipo)}</td>
-                          <td><span class="pill">${esc(statusLabel(o.status))}</span></td>
+                          <td>${esc(tipoTxt)}</td>
+                          <td><span class="pill pill-${esc(st)}">${esc(statusLabel(o.status))}</span></td>
                           <td>${esc(cli)}</td>
-                          <td>${esc(total)}</td>
-                          <td>${esc(ganho)}</td>
+                          <td>${esc(totalV)}</td>
+                          <td>${esc(ganhoV)}</td>
                         </tr>
                       `;
                     })
@@ -765,117 +497,791 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
             <div class="muted">Mostrando os 50 pedidos mais recentes.</div>
           `;
 
-      res.type("html").send(
-        layout(
-          title,
-          `
-          <div class="card">
-            <div class="h1">${isFab ? "Painel do Parceiro — Fabricação 🏭" : "Painel do Parceiro — Venda 🧲"}</div>
-            <p class="p">
-              <b>${esc(p.negocio)}</b> • ${esc(p.cidade)} • ${esc(p.whatsapp)}<br/>
-              Segmento: <b>${esc(p.segmento || "-")}</b>
-            </p>
+      // Badges “reais”: só aparecem se houver pendência (urgência natural, sem exagero)
+      const badge = (n, tone) => {
+        const v = Number(n || 0);
+        if (!v) return "";
+        const cls = tone || "alert";
+        return `<span class="badge badge-${esc(cls)}" title="${esc(String(v))}">${esc(String(v))}</span>`;
+      };
+
+      const baseMenuFab = [
+        { id: "visao", label: "📌 Visão geral" },
+        { id: "caixa", label: "💰 Meu caixa" },
+        { id: "aceitar", label: `📥 Para aceitar ${badge(pedidos_para_aceitar, "alert")}` },
+        { id: "emf", label: `🏭 Em fabricação ${badge(pedidos_em_fabricacao, "info")}` },
+        { id: "retorno", label: `↩️ Retorno ${badge(pedidos_retorno, "warn")}` },
+        { id: "finalizados", label: "✅ Finalizados" },
+        { id: "recusados", label: "⛔ Recusados" },
+        { id: "como", label: "❓ Como funciona" },
+        { id: "link", label: "🔗 Gerar link" },
+        { id: "historico", label: "📚 Histórico" },
+      ];
+
+      const menuItems = baseMenuFab;
+
+      const sidebarHtml = `
+        <div class="sideCard">
+          <div class="sideTop">
+            <div class="sideTitle">Menu</div>
+            <div style="display:flex; gap:10px; align-items:center;">
+              <button class="focusBtn" data-action="toggleFocus" type="button" title="Ativar/desativar modo foco">
+                🧘 <span>Foco</span>
+              </button>
+              <button class="refreshBtn" data-action="refresh" type="button" title="Atualizar">
+                <span class="spin" aria-hidden="true">⟳</span>
+                <span>Atualizar</span>
+              </button>
+            </div>
+          </div>
+          <div class="lastSync muted" id="lastSync">Atualizado agora</div>
+
+          <div class="sideNav">
+            ${menuItems
+              .map(
+                (m, idx) => `
+              <button class="navBtn ${idx === 0 ? "active" : ""}" data-tab="${esc(m.id)}" type="button">
+                <span class="navLabel">${m.label}</span>
+                <span class="chev">›</span>
+              </button>`
+              )
+              .join("")}
           </div>
 
-          <div class="dash">
-            <div class="menu">
-              <div class="card">
-                <div style="font-weight:1000; margin-bottom:10px;">Menu</div>
-                ${isFab ? menuFab : menuVenda}
-              </div>
+          <div class="sideMini">
+            <div class="miniLine">
+              <span class="muted">Nível</span>
+              <span class="lvl">${esc(level.icon)} <b>${esc(level.name)}</b></span>
             </div>
+            <div class="miniHint muted">${esc(level.hint)}</div>
 
+            <div style="height:10px"></div>
+
+            <div class="miniLine">
+              <span class="muted">Perfil</span>
+              <span class="muted"><b>${esc(String(profilePct))}%</b> completo</span>
+            </div>
+            <div class="bar">
+              <div class="barFill" style="width:${esc(String(profilePct))}%;"></div>
+            </div>
+            <div class="miniHint muted">Quanto mais completo, mais fácil confirmar cidade/entrega.</div>
+          </div>
+        </div>
+      `;
+
+      const headerKpis = `
+        <div class="kpiGrid">
+          <div class="kpiCard">
+            <div class="kpiTop">
+              <div class="kpiTitle">Meu caixa</div>
+              <div class="kpiBadge">Fabricação</div>
+            </div>
+            <div class="kpiValue">${fmtMoney(caixa_total)}</div>
+            <div class="kpiSub">R$ 28 por pedido (20+8)</div>
+          </div>
+
+          <div class="kpiCard">
+            <div class="kpiTitle">Total de pedidos</div>
+            <div class="kpiValue">${orders.length}</div>
+            <div class="kpiSub">Todos os pedidos do parceiro</div>
+          </div>
+
+          <div class="kpiCard kpiCardHot">
+            <div class="kpiTitle">Para aceitar</div>
+            <div class="kpiValue">${pedidos_para_aceitar}</div>
+            <div class="kpiSub">Pendências de ação</div>
+          </div>
+
+          <div class="kpiCard">
+            <div class="kpiTitle">Em fabricação</div>
+            <div class="kpiValue">${pedidos_em_fabricacao}</div>
+            <div class="kpiSub">Pedidos em progresso</div>
+          </div>
+        </div>
+      `;
+
+      const pendNow = pedidos_para_aceitar + pedidos_em_fabricacao + pedidos_retorno;
+      const doneNow = pedidos_finalizados;
+      const dayPct = pendNow + doneNow ? Math.round((doneNow / (pendNow + doneNow)) * 100) : 0;
+
+      const tabVisao = `
+        <div class="panel" data-panel="visao">
+          <div class="panelHead">
             <div>
-              <div class="kpi">
-                <div class="box" id="caixa">
-                  <div class="t">Meu caixa</div>
-                  <div class="v">R$ ${moneyBR(caixa_total)}</div>
-                  <div class="muted">${isFab ? "R$ 28 por pedido (20+8)" : "10% por compra via link"}</div>
-                </div>
-                <div class="box" id="aceitar">
-                  <div class="t">Para aceitar</div>
-                  <div class="v">${pedidos_para_aceitar}</div>
-                  <div class="muted">Pedidos aguardando ação</div>
-                </div>
-                <div class="box" id="finalizados">
-                  <div class="t">Finalizados</div>
-                  <div class="v">${pedidos_finalizados}</div>
-                  <div class="muted">Histórico de conclusões</div>
+              <div class="panelTitle">Visão geral</div>
+              <div class="muted">Resumo do que está acontecendo agora.</div>
+            </div>
+            <div class="panelRight">
+              <div class="softPill" title="Nível baseado em pedidos finalizados">${esc(level.icon)} ${esc(level.name)}</div>
+            </div>
+          </div>
+
+          ${headerKpis}
+
+          <div style="height:12px"></div>
+
+          <div class="note">
+            <div class="noteTop">
+              <div><b>Progresso do dia</b> <span class="muted">(apenas um resumo)</span></div>
+              <div class="muted"><b>${esc(String(dayPct))}%</b> concluído</div>
+            </div>
+            <div class="bar barBig"><div class="barFill" style="width:${esc(String(dayPct))}%;"></div></div>
+            <div style="height:10px"></div>
+            <div class="muted">Dica rápida: priorize “Para aceitar” e “Retorno” para manter o fluxo leve.</div>
+          </div>
+
+          <div style="height:12px"></div>
+
+          <div class="split">
+            <div class="miniCard">
+              <div class="miniTitle">✅ Finalizados</div>
+              <div class="miniValue">${pedidos_finalizados}</div>
+              <div class="muted">Pedidos concluídos</div>
+            </div>
+            <div class="miniCard miniWarn">
+              <div class="miniTitle">↩️ Retorno</div>
+              <div class="miniValue">${pedidos_retorno}</div>
+              <div class="muted">Pendências</div>
+            </div>
+            <div class="miniCard miniBad">
+              <div class="miniTitle">⛔ Recusados</div>
+              <div class="miniValue">${pedidos_recusados}</div>
+              <div class="muted">Pedidos recusados</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const tabCaixa = `
+        <div class="panel" data-panel="caixa" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Meu caixa</div>
+              <div class="muted">
+                Você ganha R$ 28 por pedido finalizado (R$ 20 fabricação + R$ 8 entrega).
+              </div>
+            </div>
+            <div class="panelRight">
+              <div class="cashPill">${fmtMoney(caixa_total)}</div>
+            </div>
+          </div>
+          <div class="note">
+            <b>Importante:</b> este painel soma os ganhos registrados em cada pedido.
+            Se quiser, depois eu adiciono “saldo disponível / a receber”.
+          </div>
+        </div>
+      `;
+
+      const tabAceitar = `
+        <div class="panel" data-panel="aceitar" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Pedidos para aceitar</div>
+              <div class="muted">Aceite para iniciar a produção, ou marque como retorno/recusado.</div>
+            </div>
+          </div>
+          ${renderOrdersTable(ordersParaAceitar, { showActions: true })}
+        </div>
+      `;
+
+      const tabEmFab = `
+        <div class="panel" data-panel="emf" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Pedidos em fabricação</div>
+              <div class="muted">Quando concluir, marque como finalizado.</div>
+            </div>
+          </div>
+          ${renderOrdersTable(ordersEmFab, { showActions: true })}
+        </div>
+      `;
+
+      const tabRetorno = `
+        <div class="panel" data-panel="retorno" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Pedidos com retorno</div>
+              <div class="muted">Pendências para resolver: endereço, pagamento, ajuste, etc.</div>
+            </div>
+          </div>
+          ${renderOrdersTable(ordersRetorno, { showActions: true })}
+        </div>
+      `;
+
+      const tabFinalizados = `
+        <div class="panel" data-panel="finalizados" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Pedidos finalizados</div>
+              <div class="muted">Histórico de pedidos concluídos.</div>
+            </div>
+          </div>
+          ${renderOrdersTable(ordersFinal, { showActions: false })}
+        </div>
+      `;
+
+      const tabRecusados = `
+        <div class="panel" data-panel="recusados" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Pedidos recusados</div>
+              <div class="muted">Apenas para consulta.</div>
+            </div>
+          </div>
+          ${renderOrdersTable(ordersRecusados, { showActions: false })}
+        </div>
+      `;
+
+      const tabComo = `
+        <div class="panel" data-panel="como" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Como funciona</div>
+              <div class="muted">Regras e fluxo do parceiro.</div>
+            </div>
+          </div>
+
+          <div class="steps">
+            <div class="step"><div class="n">1</div><div><b>Chega pedido</b><div class="muted">Ele entra em <b>Para aceitar</b>.</div></div></div>
+            <div class="step"><div class="n">2</div><div><b>Aceita</b><div class="muted">Vai para <b>Em fabricação</b>.</div></div></div>
+            <div class="step"><div class="n">3</div><div><b>Produz e entrega</b><div class="muted">Marque como <b>Finalizado</b>.</div></div></div>
+            <div class="step"><div class="n">4</div><div><b>Ganho</b><div class="muted">Cada pedido finalizado rende <b>R$ 28</b> (20+8).</div></div></div>
+          </div>
+        </div>
+      `;
+
+      const base = getBaseUrl(req);
+      const referralLink = `${base}/sales?ref=${encodeURIComponent(p.id)}`;
+
+      const tabLink = `
+        <div class="panel" data-panel="link" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">🔗 Gerar link</div>
+              <div class="muted">Gere seu link, divulgue e receba comissão automaticamente.</div>
+            </div>
+          </div>
+
+          <div class="note">
+            <b>Como funciona:</b>
+            <div style="height:8px"></div>
+
+            <div class="steps">
+              <div class="step">
+                <div class="n">1</div>
+                <div>
+                  <b>Gere seu link</b>
+                  <div class="muted">Use o botão abaixo para copiar e compartilhar.</div>
                 </div>
               </div>
 
-              <div style="height:14px"></div>
-
-              <div class="kpi">
-                <div class="box" id="emf">
-                  <div class="t">${isFab ? "Em fabricação" : "Em andamento"}</div>
-                  <div class="v">${pedidos_em_fabricacao}</div>
-                  <div class="muted">Pedidos em processamento</div>
-                </div>
-                <div class="box" id="retorno">
-                  <div class="t">Retorno</div>
-                  <div class="v">${pedidos_retorno}</div>
-                  <div class="muted">Pedidos com pendência</div>
-                </div>
-                <div class="box">
-                  <div class="t">Total de pedidos</div>
-                  <div class="v">${orders.length}</div>
-                  <div class="muted">Todos os pedidos deste parceiro</div>
+              <div class="step">
+                <div class="n">2</div>
+                <div>
+                  <b>Divulgue</b>
+                  <div class="muted">Coloque em bio, stories e WhatsApp.</div>
                 </div>
               </div>
 
-              <div style="height:14px"></div>
-
-              <div class="card" id="como">
-                <div style="font-weight:1000; margin-bottom:8px;">Como funciona</div>
-                ${
-                  isFab
-                    ? `
-                  <div class="muted">
-                    Quando um pedido for realizado na sua cidade, ele cai em <b>Pedidos para aceitar</b>.
-                    Você pode <b>aceitar</b> ou <b>recusar</b>. Aceitando, ele vai para <b>Pedidos em fabricação</b>.
-                    Ao finalizar e entregar, marque como <b>finalizado</b>. Cada pedido rende <b>R$ 28</b> (R$ 20 fabricação + R$ 8 entrega).
-                  </div>
-                `
-                    : `
-                  <div class="muted">
-                    Você gera um <b>link de divulgação</b> em <b>Meus links</b>. Quando alguém compra por ele,
-                    você ganha <b>10%</b> do valor total. Seus ganhos aparecem em <b>Meu caixa</b>.
-                  </div>
-                `
-                }
-              </div>
-
-              ${
-                isFab
-                  ? ""
-                  : `
-                <div style="height:14px"></div>
-                <div class="card" id="links">
-                  <div style="font-weight:1000; margin-bottom:8px;">Meus links</div>
-                  <div class="muted">Link de divulgação:</div>
-                  <div style="height:8px"></div>
-                  <input readonly value="${esc(linkVenda)}"/>
-                  <div style="height:10px"></div>
-                  <div class="muted">Dica: use esse link em bio, stories e WhatsApp.</div>
+              <div class="step">
+                <div class="n">3</div>
+                <div>
+                  <b>Receba 10% de comissão</b>
+                  <div class="muted">A cada pedido realizado através do seu link, você recebe <b>10%</b> do valor total do pedido.</div>
                 </div>
-              `
-              }
-
-              <div style="height:14px"></div>
-              <div class="card" id="historico">
-                <div style="font-weight:1000; margin-bottom:8px;">Histórico de pedidos</div>
-                ${historicoHtml}
               </div>
             </div>
           </div>
-        `,
+
+          <div style="height:12px"></div>
+
+          <div class="card" style="padding:14px; border:1px solid rgba(255,255,255,.10); background:rgba(0,0,0,.18);">
+            <div style="font-weight:1000;margin-bottom:8px;">Seu link</div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+              <input
+                id="refLink"
+                value="${esc(referralLink)}"
+                readonly
+                style="flex:1; min-width:260px; padding:12px; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(0,0,0,.25); color:#fff;"
+              />
+              <button class="btnSmall btnOk" type="button" data-action="copyLink">📋 Copiar</button>
+              <button class="btnSmall" type="button" data-action="regenLink">⟳ Atualizar</button>
+            </div>
+
+            <div class="muted" style="margin-top:10px; font-size:12px;">
+              Dica: ao divulgar, você pode dizer “use meu link para me apoiar”.
+            </div>
+          </div>
+        </div>
+      `;
+
+      const tabHistorico = `
+        <div class="panel" data-panel="historico" style="display:none;">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Histórico</div>
+              <div class="muted">Todos os pedidos (últimos 50).</div>
+            </div>
+          </div>
+          ${historicoHtml}
+        </div>
+      `;
+
+      // ==================== BOTÕES DO TOPO (CORRIGIDOS) ====================
+  const navLeft = `
+  <button class="btn btnOutline" onclick="window.history.back()" type="button">🔙 Voltar</button>
+`;
+
+const navRight = `
+  <a class="btn btnOutline" href="/sales">🏠 Início</a>
+  <a class="btn btnDanger" href="/parceiros/sair">🚪 Sair</a>
+`;
+
+    return res.type("html").send(
+  layout(
+    title,
           `
-          <a class="btn btnOutline" href="/parceiros">🏠 Início</a>
-          <a class="btn btnDanger" href="/parceiros/sair">🚪 Sair</a>
-        `
-        )
-      );
+<style>
+  :root{
+    --c-trust: rgba(84, 169, 255, .95);
+    --c-okay:  rgba(40, 200, 120, .95);
+    --c-warn:  rgba(255, 193, 7, .95);
+    --c-urg:   rgba(255, 82, 82, .95);
+  }
+
+  .dashWrap{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+  @media(max-width:980px){.dashWrap{grid-template-columns:1fr}.sideCard{position:relative!important}}
+  .topCard{padding:18px 18px 16px 18px}
+  .topTitle{font-size:22px;font-weight:1000;letter-spacing:-0.02em}
+  .topSub{margin-top:6px}
+  .metaRow{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px}
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10)}
+  .chip b{font-weight:1000}
+
+  .sideCard{position:sticky;top:16px}
+  .sideTop{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+  .sideTitle{font-weight:1000}
+
+  .refreshBtn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:8px 10px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);
+    color:#fff;cursor:pointer;font-weight:900;
+  }
+  .refreshBtn:hover{transform:translateY(-1px)}
+  .refreshBtn.isLoading{opacity:.85}
+  .refreshBtn.isLoading .spin{animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .lastSync{font-size:12px;opacity:.85;margin-bottom:10px}
+
+  /* Modo foco (controle do usuário) */
+  .focusBtn{
+    display:inline-flex; align-items:center; gap:8px;
+    padding:8px 10px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);
+    color:#fff; cursor:pointer; font-weight:900;
+  }
+  .focusBtn:hover{ transform: translateY(-1px); }
+  .focusOn .badge{ display:none !important; }
+  .focusOn .toast{ animation:none !important; }
+  .focusOn .navBtn:hover,
+  .focusOn .btnSmall:hover,
+  .focusOn .refreshBtn:hover,
+  .focusOn .focusBtn:hover{ transform:none !important; }
+
+  .sideNav{display:flex;flex-direction:column;gap:8px}
+  .navBtn{
+    width:100%;text-align:left;
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:10px 12px;border-radius:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(0,0,0,.18);
+    color:#fff;cursor:pointer;
+  }
+  .navBtn:hover{transform:translateY(-1px)}
+  .navBtn.active{background:linear-gradient(135deg, rgba(84,169,255,.18), rgba(255,82,173,.16));border-color:rgba(255,255,255,.18)}
+  .navLabel{display:flex;align-items:center;gap:10px}
+  .chev{opacity:.7;font-size:18px}
+
+  .badge{
+    margin-left:8px;
+    display:inline-flex;align-items:center;justify-content:center;
+    min-width:22px;height:22px;
+    padding:0 8px;border-radius:999px;
+    font-size:12px;font-weight:1000;
+    border:1px solid rgba(255,255,255,.16);
+    background:rgba(255,255,255,.08);
+  }
+  .badge-alert{background:rgba(255,82,82,.14);border-color:rgba(255,82,82,.24);color:#fff}
+  .badge-warn{background:rgba(255,193,7,.14);border-color:rgba(255,193,7,.24);color:#fff}
+  .badge-info{background:rgba(84,169,255,.14);border-color:rgba(84,169,255,.24);color:#fff}
+
+  .sideMini{margin-top:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);border-radius:16px;padding:12px}
+  .miniLine{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .miniHint{margin-top:6px;font-size:12px;opacity:.85}
+  .lvl b{font-weight:1000}
+
+  .panel{padding:16px}
+  .panelHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:12px}
+  .panelTitle{font-weight:1000;font-size:16px}
+  .panelRight{display:flex;gap:10px;align-items:center}
+  .cashPill{padding:10px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);font-weight:1000}
+  .softPill{padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);font-weight:1000}
+
+  .kpiGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:980px){.kpiGrid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:520px){.kpiGrid{grid-template-columns:1fr}}
+  .kpiCard{border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);border-radius:16px;padding:14px}
+  .kpiCardHot{background:linear-gradient(135deg, rgba(255,82,82,.12), rgba(0,0,0,.18));border-color:rgba(255,82,82,.18)}
+  .kpiTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .kpiTitle{opacity:.9;font-weight:900}
+  .kpiBadge{font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06)}
+  .kpiValue{font-size:22px;font-weight:1000;letter-spacing:-0.02em}
+  .kpiSub{margin-top:6px;font-size:12px;opacity:.8}
+
+  .split{margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:980px){.split{grid-template-columns:1fr}}
+  .miniCard{border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);border-radius:16px;padding:14px}
+  .miniWarn{background:rgba(255,193,7,.10);border-color:rgba(255,193,7,.18)}
+  .miniBad{background:rgba(255,82,82,.08);border-color:rgba(255,82,82,.16)}
+  .miniTitle{font-weight:1000}
+  .miniValue{font-size:20px;font-weight:1000;margin-top:8px}
+
+  .note{border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);border-radius:16px;padding:14px}
+  .noteTop{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .hint{margin-top:10px;font-size:12px;opacity:.8}
+
+  .bar{height:10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.10);overflow:hidden}
+  .barBig{height:12px}
+  .barFill{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg, rgba(84,169,255,.9), rgba(40,200,120,.85));
+    border-radius:999px;
+    transition:width .45s ease;
+  }
+
+  .tableWrap{overflow:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10)}
+  .table{width:100%;border-collapse:collapse}
+  .table th,.table td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:middle}
+  .table thead th{position:sticky;top:0;background:rgba(0,0,0,.35);backdrop-filter:blur(8px);text-align:left;font-weight:1000}
+  .rowActions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+
+  .btnSmall{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;border-radius:12px;padding:8px 10px;cursor:pointer;font-weight:900}
+  .btnSmall:hover{transform:translateY(-1px)}
+  .btnOk{background:rgba(40,200,120,.18);border-color:rgba(40,200,120,.22)}
+  .btnWarn{background:rgba(255,193,7,.16);border-color:rgba(255,193,7,.20)}
+  .btnBad{background:rgba(255,82,82,.14);border-color:rgba(255,82,82,.20)}
+  .btnSmall:disabled{opacity:.65;cursor:not-allowed;transform:none}
+
+  .pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);font-weight:1000;font-size:12px}
+  .pill-para_aceitar{background:rgba(255,193,7,.12);border-color:rgba(255,193,7,.22)}
+  .pill-em_fabricacao{background:rgba(84,169,255,.12);border-color:rgba(84,169,255,.22)}
+  .pill-finalizado{background:rgba(40,200,120,.14);border-color:rgba(40,200,120,.22)}
+  .pill-retorno{background:rgba(255,82,173,.12);border-color:rgba(255,82,173,.20)}
+  .pill-recusado{background:rgba(255,82,82,.12);border-color:rgba(255,82,82,.20)}
+
+  .empty{border:1px dashed rgba(255,255,255,.18);background:rgba(255,255,255,.03);border-radius:18px;padding:18px;text-align:center}
+  .emptyIcon{font-size:26px}
+  .emptyTitle{margin-top:6px;font-weight:1000}
+  .emptyText{margin-top:6px;opacity:.85;font-size:13px}
+
+  .steps{display:grid;gap:10px}
+  .step{display:flex;gap:12px;align-items:flex-start;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);border-radius:16px;padding:14px}
+  .step .n{width:30px;height:30px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:1000;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
+
+  /* Toast */
+  .toasts{position:fixed;right:14px;bottom:14px;display:grid;gap:10px;z-index:9999}
+  .toast{
+    width:min(360px, calc(100vw - 28px));
+    border-radius:16px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(10px);
+    padding:12px 12px;
+    box-shadow:0 18px 40px rgba(0,0,0,.35);
+    transform:translateY(8px);
+    opacity:0;
+    animation:toastIn .22s ease forwards;
+  }
+  @keyframes toastIn{to{transform:translateY(0);opacity:1}}
+  .toastTop{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .toastTitle{font-weight:1000}
+  .toastMsg{margin-top:4px;opacity:.9;font-size:13px}
+  .toast.ok{border-color:rgba(40,200,120,.22)}
+  .toast.warn{border-color:rgba(255,193,7,.22)}
+  .toast.bad{border-color:rgba(255,82,82,.22)}
+  .toast .x{border:0;background:transparent;color:#fff;opacity:.7;cursor:pointer;font-size:16px}
+  .toast .x:hover{opacity:1}
+
+  /* Flash */
+  .panelHostFlash{animation:flash .45s ease}
+  @keyframes flash{
+    0%{box-shadow:0 0 0 rgba(0,0,0,0)}
+    45%{box-shadow:0 0 0 4px rgba(84,169,255,.10)}
+    100%{box-shadow:0 0 0 rgba(0,0,0,0)}
+  }
+</style>
+
+<div class="card topCard">
+  <div class="topTitle">Painel do Parceiro — Fabricação 🏭</div>
+  <div class="topSub p"><b>${esc(p.negocio)}</b></div>
+  <div class="metaRow">
+    <div class="chip">📍 <b>${esc(p.cidade)}</b></div>
+    <div class="chip">📞 <b>${esc(p.whatsapp)}</b></div>
+    <div class="chip">🏷️ Segmento: <b>${esc(p.segmento || "-")}</b></div>
+  </div>
+</div>
+
+<div class="dashWrap">
+  <div>${sidebarHtml}</div>
+
+  <div class="card panelHost" id="panelHost">
+    ${tabVisao}
+    ${tabCaixa}
+    ${tabAceitar}
+    ${tabEmFab}
+    ${tabRetorno}
+    ${tabFinalizados}
+    ${tabRecusados}
+    ${tabComo}
+    ${tabLink}
+    ${tabHistorico}
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+(function(){
+  const nav = Array.from(document.querySelectorAll('[data-tab]'));
+  const panels = Array.from(document.querySelectorAll('[data-panel]'));
+  const toasts = document.getElementById('toasts');
+  const panelHost = document.getElementById('panelHost');
+  const lastSync = document.getElementById('lastSync');
+
+  function nowLabel(){
+    try{
+      const d = new Date();
+      return d.toLocaleString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+    }catch(e){ return 'agora'; }
+  }
+
+  function setLastSync(){
+    if(lastSync) lastSync.textContent = 'Atualizado às ' + nowLabel();
+  }
+  setLastSync();
+
+  function toast(type, title, msg, ms){
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type || '');
+    el.innerHTML = \`
+      <div class="toastTop">
+        <div class="toastTitle">\${title || 'Aviso'}</div>
+        <button class="x" type="button" aria-label="Fechar">✕</button>
+      </div>
+      \${msg ? \`<div class="toastMsg">\${msg}</div>\` : ''}
+    \`;
+    const btn = el.querySelector('.x');
+    btn.addEventListener('click', () => el.remove());
+    toasts.appendChild(el);
+
+    const ttl = typeof ms === 'number' ? ms : 2800;
+    setTimeout(() => { try{ el.remove(); }catch(e){} }, ttl);
+  }
+
+  // ---- Modo foco (controle do usuário)
+  const FOCUS_KEY = 'partners_focus_mode_v1';
+
+  function getFocus(){
+    try{ return localStorage.getItem(FOCUS_KEY) === '1'; }catch(e){ return false; }
+  }
+  function setFocus(on){
+    try{ localStorage.setItem(FOCUS_KEY, on ? '1' : '0'); }catch(e){}
+  }
+  function applyFocus(on){
+    document.documentElement.classList.toggle('focusOn', !!on);
+  }
+  applyFocus(getFocus());
+  function getActiveTab(){
+    const act = document.querySelector('.navBtn.active');
+    return act ? act.getAttribute('data-tab') : 'visao';
+  }
+
+  function show(tabId, pushHash){
+    nav.forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === tabId));
+    panels.forEach(p => p.style.display = (p.getAttribute('data-panel') === tabId) ? '' : 'none');
+
+    if(pushHash) {
+      try{ history.replaceState(null, '', location.pathname + location.search + '#' + tabId); }catch(e){}
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  nav.forEach(b => b.addEventListener('click', () => show(b.getAttribute('data-tab'), true)));
+
+  const hash = (location.hash || '').replace('#','').trim();
+  if(hash && panels.some(p => p.getAttribute('data-panel') === hash)) show(hash, false);
+
+  function flashPanel(){
+    if(!panelHost) return;
+    panelHost.classList.remove('panelHostFlash');
+    void panelHost.offsetWidth;
+    panelHost.classList.add('panelHostFlash');
+  }
+
+  async function setStatus(orderId, status, btn){
+    const labelMap = {
+      em_fabricacao: 'Em fabricação',
+      finalizado: 'Finalizado',
+      retorno: 'Retorno',
+      recusado: 'Recusado'
+    };
+    const confirmMsg = 'Confirmar: mudar status para "' + (labelMap[status] || status) + '"?';
+
+    const ok = confirm(confirmMsg);
+    if(!ok) return;
+
+    if(btn){
+      btn.disabled = true;
+      btn.dataset.old = btn.textContent;
+      btn.textContent = 'Salvando…';
+    }
+
+    const body = new URLSearchParams();
+    body.set('status', status);
+
+    const r = await fetch('/parceiros/pedido/' + encodeURIComponent(orderId) + '/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString()
+    });
+
+    const j = await r.json().catch(()=>null);
+
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = btn.dataset.old || btn.textContent;
+    }
+
+    if(!r.ok || !j || !j.ok){
+      toast('bad', 'Não foi possível atualizar', (j && j.error) ? j.error : 'Tente novamente.', 3800);
+      return;
+    }
+
+    flashPanel();
+    setLastSync();
+    toast('ok', 'Atualizado ✅', 'Status do pedido foi atualizado.', 2400);
+
+    setTimeout(() => {
+      const tab = getActiveTab();
+      try{ location.replace(location.pathname + location.search + '#' + tab); }catch(e){ location.reload(); }
+    }, 650);
+  }
+
+  function doRefresh(btn){
+    if(btn){
+      btn.classList.add('isLoading');
+      btn.disabled = true;
+      const label = btn.querySelector('span:nth-child(2)');
+      if(label) label.textContent = 'Sincronizando…';
+    }
+
+    setLastSync();
+    toast('warn', 'Sincronizando', 'Atualizando pedidos e status.', 1600);
+
+    setTimeout(() => {
+      const tab = getActiveTab();
+      try{ location.replace(location.pathname + location.search + '#' + tab); }catch(e){ location.reload(); }
+    }, 650);
+  }
+
+  async function doCopyLink(){
+    const inp = document.getElementById('refLink');
+    if(!inp) return toast('bad', 'Link não encontrado', 'Abra a aba “Gerar link” e tente novamente.', 3200);
+
+    const val = String(inp.value || '').trim();
+    if(!val) return toast('bad', 'Link vazio', 'Tente atualizar a página.', 2800);
+
+    try{
+      try{
+        inp.focus();
+        inp.select();
+        inp.setSelectionRange(0, inp.value.length);
+      }catch(e){}
+
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(val);
+      }else{
+        document.execCommand('copy');
+      }
+      toast('ok', 'Copiado ✅', 'Agora é só colar e divulgar.', 2200);
+    }catch(e){
+      toast('warn', 'Não deu pra copiar automático', 'Selecione o link e copie manualmente.', 3600);
+    }
+  }
+
+  function doRegenLink(){
+    setLastSync();
+    flashPanel();
+    toast('ok', 'Link pronto ✅', 'Seu link está atualizado e pronto para divulgar.', 2400);
+  }
+
+  function toggleFocus(){
+    const on = !getFocus();
+    setFocus(on);
+    applyFocus(on);
+    toast('ok', on ? 'Modo foco ativado' : 'Modo foco desativado', on ? 'Badges e animações reduzidas.' : 'Badges e feedbacks visuais voltaram.', 1800);
+  }
+
+  document.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-action]');
+    if(!el) return;
+
+    const action = el.getAttribute('data-action');
+
+    if(action === 'setStatus'){
+      ev.preventDefault();
+      const id = el.getAttribute('data-id');
+      const st = el.getAttribute('data-status');
+      if(id && st) setStatus(id, st, el);
+      return;
+    }
+
+    if(action === 'refresh'){
+      ev.preventDefault();
+      doRefresh(el);
+      return;
+    }
+
+    if(action === 'copyLink'){
+      ev.preventDefault();
+      doCopyLink();
+      return;
+    }
+
+    if(action === 'regenLink'){
+      ev.preventDefault();
+      doRegenLink();
+      return;
+    }
+
+    if(action === 'toggleFocus'){
+      ev.preventDefault();
+      toggleFocus();
+      return;
+    }
+  });
+})();
+</script>
+          `,
+         navRight,
+    navLeft
+  )
+);
     } catch (e) {
       const msg = e?.message || String(e);
       console.error("[partners] perfil erro:", msg);
@@ -890,7 +1296,7 @@ module.exports = function mountPartnersFabricacao(app, opts = {}) {
             <div style="height:14px"></div>
             <a class="btn btnPrimary" href="/parceiros">Voltar para Central</a>
           </div>
-        `
+          `
         )
       );
     }
