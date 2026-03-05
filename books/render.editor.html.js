@@ -1,19 +1,17 @@
-/**
- * render.editor.html.js
- * Página /books/:id/edit — Layout 2 (editor por página usando /api/editPageText)
- *
- * ✅ Não depende do preview e NÃO usa redirect/auto-open.
- *
- * Requer API no app.js:
- *   POST /api/editPageText
- *     body: { id: "<dirId|id>", page: <number>, text: "<novo texto>" }
- *
- * ✅ Importante (compat com seu código antigo):
- * - Espera resposta { ok:true, url?:string, rev?:string|number } para atualizar a imagem na hora.
- *
- * Export:
- *   module.exports = { renderBookEditorHtml }
- */
+// render.editor.html.js
+// Página /books/:id/edit — Layout unificado (editor por página usando /api/editPageText e /api/regeneratePage)
+//
+// ✅ Não depende do preview e NÃO usa redirect/auto-open.
+//
+// Requer API no app.js:
+//   POST /api/editPageText
+//     body: { id: "<dirId|id>", page: <number>, text: "<novo texto>" }
+//   POST /api/regeneratePage  (NOVO)
+//     body: { id: "<dirId|id>", page: <number>, text: "<texto atual>" }
+//
+// Export:
+//   module.exports = { renderBookEditorHtml }
+
 "use strict";
 
 function escapeHtml(s) {
@@ -142,60 +140,147 @@ function renderBookEditorHtml(book) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Editar Livro ${escapeHtml(book?.id || id)} — Meu Livro Mágico</title>
 <style>
+  /* ===== ESTILOS UNIFICADOS (mesmo do layout de referência) ===== */
   :root{
-    --bg1:#ede9fe; --bg2:#ffffff; --bg3:#fdf2f8;
-    --card:#ffffff; --text:#111827; --muted:#6b7280; --border:#e5e7eb;
-    --shadow: 0 20px 50px rgba(0,0,0,.10);
-    --shadow2: 0 10px 24px rgba(0,0,0,.08);
-    --violet:#7c3aed; --pink:#db2777;
-    --good:#10b981; --bad:#ef4444;
+    --violet-50:#f5f3ff;
+    --pink-50:#fff1f2;
+    --white:#ffffff;
+    --gray-900:#111827;
+    --gray-800:#1f2937;
+    --gray-700:#374151;
+    --gray-600:#4b5563;
+    --gray-500:#6b7280;
+    --violet-600:#7c3aed;
+    --violet-700:#6d28d9;
+    --pink-600:#db2777;
+    --pink-700:#be185d;
+    --amber-500:#f59e0b;
+    --amber-300:#fcd34d;
+    --violet-200:#ddd6fe;
+    --shadow: 0 22px 55px rgba(124,58,237,.18);
+    --shadow2: 0 12px 30px rgba(17,24,39,.10);
+    --r: 22px;
+
+    --good:#10b981;
+    --bad:#ef4444;
   }
-  *{box-sizing:border-box}
+
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
   body{
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    color:var(--text);
-    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    color: var(--gray-800);
+    background: linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
+    overflow-x:hidden;
     min-height:100vh;
     padding-bottom:90px;
   }
-  .container{max-width: 1100px; margin:0 auto; padding: 18px 16px;}
-  .topRow{
-    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-    margin-bottom: 12px;
+
+  a{ color:inherit; text-decoration:none; }
+  .wrap{ max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+
+  /* Nav */
+  .nav{
+    padding: 16px 0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
   }
-  .pill{
-    background: rgba(124,58,237,.10);
-    color: #4c1d95;
-    border:1px solid rgba(124,58,237,.16);
-    padding:8px 12px;
-    border-radius:999px;
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
     font-weight:1000;
-    text-decoration:none;
-    display:inline-flex; align-items:center; gap:8px;
-    cursor:pointer;
+    letter-spacing:-.2px;
   }
-  .pill:hover{filter:brightness(1.05)}
+  .brand .logo{
+    width:42px;height:42px;border-radius:14px;
+    display:grid;place-items:center;
+    background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
+    border: 1px solid rgba(124,58,237,.18);
+    box-shadow: var(--shadow2);
+    font-size:20px;
+  }
+  .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+  /* Buttons / Pills */
+  .btn{
+    border:0;
+    cursor:pointer;
+    user-select:none;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding: 14px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
+    white-space:nowrap;
+  }
+  .btn:active{ transform: translateY(1px); }
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 40px rgba(124,58,237,.20);
+  }
+  .btnPrimary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 18px 46px rgba(124,58,237,.26);
+  }
+  .btnOutline{
+    color: var(--violet-700);
+    background: rgba(255,255,255,.78);
+    border: 2px solid rgba(221,214,254,.95);
+    box-shadow: 0 12px 26px rgba(17,24,39,.06);
+  }
+  .btnOutline:hover{
+    background: rgba(245,243,255,.95);
+    border-color: rgba(196,181,253,.95);
+  }
+  .btnTiny{
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .pill{
+    display:inline-flex; gap:8px; align-items:center;
+    padding:10px 12px; border-radius:999px;
+    background: rgba(255,255,255,.76);
+    border:1px solid rgba(221,214,254,.92);
+    color: rgba(109,40,217,1);
+    font-weight:950;
+    box-shadow: 0 14px 30px rgba(17,24,39,.08);
+    cursor:pointer;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    text-decoration:none;
+    white-space:nowrap;
+  }
+  .pill:hover{
+    background: rgba(245,243,255,.92);
+    border-color: rgba(196,181,253,.95);
+    transform: translateY(-1px);
+    box-shadow: 0 18px 44px rgba(17,24,39,.10);
+  }
   .pill.ghost{
     background:#fff;
-    border-color: var(--border);
+    border-color: var(--gray-200);
     color:#6d28d9;
-    box-shadow: var(--shadow2);
   }
 
   .card{
-    background: var(--card);
-    border:1px solid var(--border);
-    border-radius: 22px;
-    box-shadow: var(--shadow);
+    background: rgba(255,255,255,.92);
+    border: 1px solid rgba(17,24,39,.06);
+    border-radius: 24px;
+    box-shadow: var(--shadow2);
+    overflow:hidden;
+  }
+  .cardIn{
     padding: 16px;
   }
-  .head{
-    display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between;
-  }
-  .ttl{margin:0;font-size:18px;font-weight:1100}
-  .meta{margin-top:6px;color:var(--muted);font-weight:850;font-size:13px;line-height:1.35}
-  .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
 
   .banner{
     margin-top:12px;
@@ -210,6 +295,21 @@ function renderBookEditorHtml(book) {
   .banner.ok{ border-color: rgba(16,185,129,.22); background: rgba(16,185,129,.08); color:#065f46; }
   .banner.info{ border-color: rgba(124,58,237,.18); background: rgba(124,58,237,.06); color:#4c1d95; }
 
+  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+
+  /* ===== ESTILOS ESPECÍFICOS DO EDITOR ===== */
+  .container{max-width: 1100px; margin:0 auto; padding: 18px 16px;}
+  .topRow{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin-bottom: 12px;
+  }
+  .head{
+    display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between;
+  }
+  .ttl{margin:0;font-size:18px;font-weight:1100}
+  .meta{margin-top:6px;color:var(--gray-600);font-weight:850;font-size:13px;line-height:1.35}
+  .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
+
   .grid{
     margin-top:14px;
     display:grid;
@@ -218,7 +318,7 @@ function renderBookEditorHtml(book) {
   }
   .pageCard{
     grid-column: span 12;
-    border:1px solid var(--border);
+    border:1px solid rgba(17,24,39,.06);
     border-radius: 18px;
     background:#fff;
     box-shadow: var(--shadow2);
@@ -227,7 +327,7 @@ function renderBookEditorHtml(book) {
   .pageHead{
     display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
     padding:12px 12px;
-    border-bottom:1px solid var(--border);
+    border-bottom:1px solid rgba(17,24,39,.06);
     background: rgba(0,0,0,.02);
   }
   .pageHead .left{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
@@ -243,7 +343,7 @@ function renderBookEditorHtml(book) {
   .hint{
     font-weight:900;
     font-size:12px;
-    color: var(--muted);
+    color: var(--gray-500);
     margin-left: 8px;
   }
   .hint.ok{ color:#065f46; }
@@ -261,7 +361,7 @@ function renderBookEditorHtml(book) {
   }
 
   .imgBox{
-    border:1px solid var(--border);
+    border:1px solid rgba(17,24,39,.06);
     border-radius: 16px;
     background:#fff;
     overflow:hidden;
@@ -294,8 +394,8 @@ function renderBookEditorHtml(book) {
   }
   .imgBox .imgFoot{
     padding:10px 10px;
-    border-top:1px solid var(--border);
-    color: var(--muted);
+    border-top:1px solid rgba(17,24,39,.06);
+    color: var(--gray-500);
     font-weight:850;
     font-size:12px;
     display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -305,55 +405,58 @@ function renderBookEditorHtml(book) {
     width:100%;
     min-height: 220px;
     resize: vertical;
-    border:1px solid var(--border);
+    border:1px solid rgba(221,214,254,.95);
     border-radius: 16px;
     padding:12px;
     font: inherit;
     font-weight:850;
     outline:none;
-    box-shadow: 0 10px 24px rgba(0,0,0,.06);
+    box-shadow: 0 10px 24px rgba(17,24,39,.06);
   }
   textarea:focus{
     border-color: rgba(124,58,237,.35);
-    box-shadow: 0 0 0 4px rgba(124,58,237,.10), 0 10px 24px rgba(0,0,0,.08);
+    box-shadow: 0 0 0 4px rgba(124,58,237,.10), 0 10px 24px rgba(17,24,39,.08);
   }
 
   .rowBtn{display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:10px;}
-  .btn{
-    border:0; cursor:pointer;
-    border-radius: 999px;
-    padding: 10px 14px;
-    font-weight:1000;
-    display:inline-flex; align-items:center; gap:10px;
-    transition: transform .12s ease, opacity .12s ease, filter .12s ease;
-    user-select:none;
-  }
-  .btn:active{ transform: translateY(1px); }
   .btnGhost{
     background:#fff;
     color:#6d28d9;
-    border:1px solid var(--border);
-  }
-  .btnPrimary{
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet), var(--pink));
-    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+    border:1px solid rgba(221,214,254,.95);
   }
   .btnPrimary:disabled, .btnGhost:disabled{ opacity:.55; cursor:not-allowed; box-shadow:none; }
-  .muted{color:var(--muted)}
-  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+  .muted{color:var(--gray-500)}
 </style>
 </head>
 <body>
-<div class="container">
+<div class="wrap">
+  <!-- Navbar igual ao dos outros -->
+  <div class="nav">
+    <div class="brand">
+      <div class="logo">📚</div>
+      <div>Meu Livro Mágico</div>
+    </div>
+    <div class="navRight">
+      <a class="pill" href="/sales" title="Vendas">🛒 Pagina Inicial</a>
+      <a class="btn btnPrimary" href="/create" title="Criar agora">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Criar Livro
+      </a>
+      <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
+    </div>
+  </div>
 
+  <!-- Conteúdo do editor -->
   <div class="topRow">
     <a class="pill ghost" href="/books/${encodeURIComponent(id)}">← Voltar pro preview</a>
     <div class="actions">
       <a class="pill" href="/books">📚 Meus Livros</a>
       <a class="pill" href="/create">✨ Criar novo</a>
-      <!-- ✅ Botão Sair -->
-      <button class="pill" id="btnLogout">🚪 Sair</button>
     </div>
   </div>
 
@@ -379,14 +482,13 @@ function renderBookEditorHtml(book) {
     ${errBox}
 
     <div class="banner info" id="msgInfo">
-      Dica: edite o texto e clique em <b>Salvar</b> na página, ou <b>Salvar tudo</b> no topo.
+      Dica: edite o texto e clique em <b>Salvar</b> na página, ou <b>Salvar tudo</b> no topo. Para gerar uma nova imagem, use <b>Refazer cena</b>.
     </div>
     <div class="banner ok" id="msgOk" style="display:none;"></div>
     <div class="banner err" id="msgErr" style="display:none;"></div>
 
     <div class="grid" id="gridPages"></div>
   </div>
-
 </div>
 
 <script>
@@ -394,7 +496,7 @@ function renderBookEditorHtml(book) {
   const DATA = ${safeJsonForScript(data)};
   const $ = (id) => document.getElementById(id);
 
-  // ✅ Logout
+  // Logout
   document.getElementById('btnLogout')?.addEventListener('click', async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -431,7 +533,6 @@ function renderBookEditorHtml(book) {
   }
 
   function normalizeTextInput(s){
-    // mesma ideia do seu código antigo
     return String(s || "").trim().replace(/\\s+/g, " ");
   }
 
@@ -454,12 +555,19 @@ function renderBookEditorHtml(book) {
     if (msg) el.classList.add(ok ? "ok" : "bad");
   }
 
-  function setPageButtonsDisabled(page, disabled, savingLabel){
-    const btns = document.querySelectorAll("button[data-save='"+page+"']");
-    btns.forEach(b=>{
+  // NOVO: desabilita/habilita os botões da página (Salvar e Refazer)
+  function setPageControlsDisabled(page, disabled, savingLabel){
+    const btnsSave = document.querySelectorAll("button[data-save='"+page+"']");
+    const btnsRegen = document.querySelectorAll("button[data-regen='"+page+"']");
+    btnsSave.forEach(b=>{
       b.disabled = !!disabled;
       if (savingLabel && disabled) b.textContent = savingLabel;
       if (!disabled) b.textContent = "💾 Salvar";
+    });
+    btnsRegen.forEach(b=>{
+      b.disabled = !!disabled;
+      if (savingLabel && disabled) b.textContent = "⏳ Refazendo…";
+      if (!disabled) b.textContent = "🔄 Refazer cena";
     });
   }
 
@@ -481,7 +589,6 @@ function renderBookEditorHtml(book) {
     if (bg) bg.src = busted;
     if (fg) fg.src = busted;
 
-    // também atualiza o link "abrir imagem"
     const a = qs(card, "a[data-open-image='1']");
     if (a) a.href = base;
   }
@@ -496,18 +603,16 @@ function renderBookEditorHtml(book) {
     const raw = String(ta.value || "");
     const text = normalizeTextInput(raw);
 
-    setPageButtonsDisabled(page, true, "⏳ Salvando…");
+    setPageControlsDisabled(page, true, "⏳ Salvando…");
     setPageHint(page, "Salvando…", true);
 
     try{
-      // ✅ Aqui é a lógica do antigo: chama API e usa resposta pra atualizar imagem
       const j = await postJson("/api/editPageText", {
         id: DATA.id,
         page: Number(page),
         text
       });
 
-      // se backend devolveu url/rev, atualiza imagem na hora
       if (j && j.url){
         updatePageImage(page, String(j.url), j.rev);
       }
@@ -519,7 +624,43 @@ function renderBookEditorHtml(book) {
       setPageHint(page, msg, false);
       return { ok:false, error: msg };
     }finally{
-      setPageButtonsDisabled(page, false);
+      setPageControlsDisabled(page, false);
+    }
+  }
+
+  // NOVO: regenerar imagem da página
+  async function regeneratePage(page){
+    const card = document.querySelector(".pageCard[data-page-card='"+page+"']");
+    if (!card) return { ok:false, error:"Card não encontrado" };
+
+    const ta = qs(card, "textarea[data-page='"+page+"']");
+    if (!ta) return { ok:false, error:"Textarea não encontrada" };
+
+    const raw = String(ta.value || "");
+    const text = normalizeTextInput(raw);
+
+    setPageControlsDisabled(page, true, "⏳ Refazendo…");
+    setPageHint(page, "Gerando nova imagem…", true);
+
+    try{
+      const j = await postJson("/api/regeneratePage", {
+        id: DATA.id,
+        page: Number(page),
+        text
+      });
+
+      if (j && j.url){
+        updatePageImage(page, String(j.url), j.rev || Date.now());
+      }
+
+      setPageHint(page, "Imagem atualizada ✅", true);
+      return { ok:true, j };
+    }catch(e){
+      const msg = (e && e.message) ? e.message : String(e);
+      setPageHint(page, msg, false);
+      return { ok:false, error: msg };
+    }finally{
+      setPageControlsDisabled(page, false);
     }
   }
 
@@ -585,13 +726,24 @@ function renderBookEditorHtml(book) {
     left.appendChild(hint);
 
     const right = document.createElement("div");
+    right.style.display = "flex";
+    right.style.gap = "8px";
 
+    // Botão Refazer (NOVO)
+    const btnRegen = document.createElement("button");
+    btnRegen.className = "btn btnOutline btnTiny"; // estilo outline pequeno
+    btnRegen.textContent = "🔄 Refazer cena";
+    btnRegen.setAttribute("data-regen", String(page));
+    btnRegen.onclick = () => regeneratePage(page);
+
+    // Botão Salvar
     const btnSave = document.createElement("button");
-    btnSave.className = "btn btnPrimary";
+    btnSave.className = "btn btnPrimary btnTiny";
     btnSave.textContent = "💾 Salvar";
     btnSave.setAttribute("data-save", String(page));
     btnSave.onclick = () => savePage(page);
 
+    right.appendChild(btnRegen);
     right.appendChild(btnSave);
 
     head.appendChild(left);
@@ -613,7 +765,6 @@ function renderBookEditorHtml(book) {
       const fg = document.createElement("img");
       fg.className = "imgFg";
       fg.src = url;
-      // guarda base url sem cache-bust (pra updatePageImage)
       fg.setAttribute("data-base-url", url);
 
       frame.appendChild(bg);
@@ -662,7 +813,7 @@ function renderBookEditorHtml(book) {
     const btnSave2 = document.createElement("button");
     btnSave2.className = "btn btnGhost";
     btnSave2.textContent = "💾 Salvar";
-    btnSave2.setAttribute("data-save", String(page)); // ✅ importante: desabilitar os dois juntos
+    btnSave2.setAttribute("data-save", String(page));
     btnSave2.onclick = () => savePage(page);
 
     row.appendChild(btnSave2);

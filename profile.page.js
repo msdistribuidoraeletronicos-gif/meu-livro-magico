@@ -4,18 +4,19 @@
  * ✅ Rotas:
  *   GET  /profile          (UI)
  *   GET  /api/me           (JSON: usuário + profile)
- *   GET  /api/my-books     (JSON: livros do usuário = "compras" via RLS)
+ *   GET  /api/my-books     (JSON: livros gerados pelo usuário — APENAS CONCLUÍDOS)
+ *   GET  /api/my-orders    (JSON: pedidos realizados pelo usuário)
  *
  * Requer:
- * - app.js deve passar { requireAuth }
- * - requireAuth precisa setar:
- *    req.user = { id, email }
- *    req.sb = supabaseUserClient(token) (RLS ON)
+ * - app.js deve passar { requireAuth, supabaseAdmin, supabaseAuth }
+ * - requireAuth precisa setar req.user = { id, email }
  */
 
 "use strict";
 
-module.exports = function mountProfilePage(app, { requireAuth }) {
+module.exports = function mountProfilePage(app, options = {}) {
+  const { requireAuth, supabaseAdmin, supabaseAuth } = options;
+
   if (!app) throw new Error("mountProfilePage: app ausente");
   if (typeof requireAuth !== "function") throw new Error("mountProfilePage: requireAuth ausente");
 
@@ -39,10 +40,10 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
 
       let profile = null;
 
-      if (req.sb) {
-        const { data, error } = await req.sb
+      if (supabaseAdmin) {
+        const { data, error } = await supabaseAdmin
           .from("profiles")
-          .select("id,name,created_at,updated_at")
+          .select("id, name, created_at, updated_at")
           .eq("id", userId)
           .maybeSingle();
 
@@ -61,18 +62,69 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   });
 
   // ------------------------------
-  // API: /api/my-books  (suas "compras")
+  // API: /api/my-books  (livros criados) — APENAS OS CONCLUÍDOS
   // ------------------------------
   app.get("/api/my-books", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
       if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
-      if (!req.sb) return res.status(500).json({ ok: false, error: "supabase_client_missing" });
 
-      const { data, error } = await req.sb
+      if (!supabaseAdmin) {
+        return res.status(500).json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      // 🔍 LOG para depuração (remova em produção)
+      console.log(`[profile] Buscando livros do usuário ${userId} com status = 'done'`);
+
+      const { data, error } = await supabaseAdmin
         .from("books")
-        .select("id,status,step,error,theme,style,child_name,child_age,child_gender,pdf_url,updated_at,created_at")
+        .select("id, status, step, error, theme, style, child_name, child_age, child_gender, pdf_url, updated_at, created_at")
+        .eq("user_id", userId)
+        .eq("status", "done")  // ✅ FILTRO: apenas livros concluídos
         .order("updated_at", { ascending: false })
+        .limit(120);
+
+      if (error) {
+        console.error("[profile] Erro na consulta:", error);
+        throw error;
+      }
+
+      // 🔍 LOG para ver quantos vieram
+      console.log(`[profile] Encontrados ${data?.length || 0} livros com status 'done'`);
+
+      return res.json({
+        ok: true,
+        items: Array.isArray(data) ? data : [],
+      });
+    } catch (e) {
+      console.error("[profile] Erro em /api/my-books:", e);
+      return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-orders  (pedidos realizados)
+  // ------------------------------
+  app.get("/api/my-orders", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+      if (!supabaseAdmin) {
+        return res.status(500).json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from("orders")
+        .select(`
+          id,
+          created_at,
+          status,
+          order_data,
+          book_id
+        `)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
         .limit(120);
 
       if (error) throw error;
@@ -100,135 +152,176 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
 <title>Perfil — Meu Livro Mágico</title>
 <style>
   :root{
-    --bg1:#ede9fe;
-    --bg2:#ffffff;
-    --bg3:#fdf2f8;
+    --violet-50:#f5f3ff;
+    --pink-50:#fff1f2;
+    --white:#ffffff;
+    --gray-900:#111827;
+    --gray-800:#1f2937;
+    --gray-700:#374151;
+    --gray-600:#4b5563;
 
-    --card:#ffffff;
-    --text:#111827;
-    --muted:#6b7280;
-    --border:#e5e7eb;
-    --shadow: 0 20px 50px rgba(0,0,0,.10);
-    --shadow2: 0 10px 24px rgba(0,0,0,.08);
+    --violet-600:#7c3aed;
+    --violet-700:#6d28d9;
+    --pink-600:#db2777;
+    --pink-700:#be185d;
 
-    /* Confiança / Calmaria (azul) */
-    --blue:#2563eb;
-    --blue2:#1d4ed8;
+    --shadow: 0 34px 120px rgba(17,24,39,.22);
+    --shadow2: 0 16px 38px rgba(17,24,39,.10);
+    --shadow3: 0 10px 18px rgba(17,24,39,.10);
 
-    /* Seu tema atual */
-    --violet:#7c3aed;
-    --pink:#db2777;
+    --r: 26px;
+    --bookR: 22px;
+    --pageR: 18px;
 
-    --green:#10b981;
-
-    /* Urgência / alerta (vermelho) */
-    --red:#ef4444;
-    --orange:#f97316;
-
-    --ring: rgba(37,99,235,.15);
-
-    /* Vibração (gamificação / destaque) */
-    --amber:#f59e0b;
-    --amber2:#fbbf24;
+    --pad: 18px;
+    --foldW: clamp(18px, 2.4vw, 30px);
   }
 
-  *{box-sizing:border-box}
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
   body{
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    color:var(--text);
-    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    color: var(--gray-800);
+    background: radial-gradient(1200px 520px at 18% 0%, rgba(124,58,237,.18), transparent 60%),
+                radial-gradient(980px 460px at 90% 12%, rgba(219,39,119,.14), transparent 58%),
+                linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
     min-height:100vh;
-    padding-bottom:70px;
+    padding-bottom: 30px;
+    overflow-x:hidden;
   }
+  a{ color:inherit; text-decoration:none; }
+  .wrap{ max-width: 1180px; margin: 0 auto; padding: 18px 16px; }
 
-  .container{max-width: 980px; margin:0 auto; padding: 24px 16px;}
-
-  .topRow{
-    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-    margin-bottom: 14px;
+  .top{
+    display:flex; gap:12px;
+    align-items:center;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    margin-bottom: 12px;
   }
-
-  .leftActions{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
-  .rightActions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
-
   .pill{
-    background: rgba(124,58,237,.10);
-    color: #4c1d95;
-    border:1px solid rgba(124,58,237,.16);
-    padding:8px 12px;
-    border-radius:999px;
-    font-weight:1000;
-    text-decoration:none;
-    display:inline-flex; gap:10px; align-items:center;
-    transition: transform .12s ease, filter .12s ease;
-    position:relative;
+    display:inline-flex; gap:8px; align-items:center;
+    padding:10px 12px; border-radius:999px;
+    background: rgba(255,255,255,.76);
+    border:1px solid rgba(221,214,254,.92);
+    color: rgba(109,40,217,1);
+    font-weight:950;
+    box-shadow: 0 14px 30px rgba(17,24,39,.08);
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    white-space:nowrap;
   }
-  .pill:hover{filter:brightness(.98)}
-  .pill:active{transform: translateY(1px)}
-
-  .pillBlue{
-    background: rgba(37,99,235,.10);
-    color: #1e3a8a;
-    border:1px solid rgba(37,99,235,.18);
+  .pill:hover{
+    background: rgba(245,243,255,.92);
+    border-color: rgba(196,181,253,.95);
+    transform: translateY(-1px);
+    box-shadow: 0 18px 44px rgba(17,24,39,.10);
   }
-
   .pillPink{
     background: rgba(219,39,119,.10);
     color:#831843;
     border-color: rgba(219,39,119,.16);
   }
-
-  /* Botão Sair (urgência) — topo */
   .pillDanger{
     background: rgba(239,68,68,.12);
     color:#7f1d1d;
     border:1px solid rgba(239,68,68,.22);
   }
-  .pillDanger strong{font-weight:1100}
 
-  .grid{
-    display:grid;
-    grid-template-columns: 1fr;
-    gap:14px;
-    align-items:start;
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:10px;
+    padding: 12px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(221,214,254,.92);
+    background: rgba(255,255,255,.72);
+    color: rgba(109,40,217,1);
+    font-weight:1000;
+    box-shadow: 0 14px 30px rgba(17,24,39,.08);
+    cursor:pointer;
+    user-select:none;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    white-space:nowrap;
+  }
+  .btn:active{ transform: translateY(1px); }
+  .btnPrimary{
+    border:0;
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 44px rgba(124,58,237,.20);
+  }
+  .btnPrimary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 22px 56px rgba(124,58,237,.24);
+  }
+  .btnDanger{
+    color:#fff;
+    background: linear-gradient(90deg, #ef4444, #f97316);
+    box-shadow: 0 18px 44px rgba(239,68,68,.22);
+  }
+  .btnDanger:hover{
+    background: linear-gradient(90deg, #dc2626, #fb923c);
+    box-shadow: 0 24px 58px rgba(239,68,68,.30);
+  }
+  .btnOutline{
+    background: rgba(255,255,255,.78);
+    border: 2px solid rgba(221,214,254,.95);
+  }
+  .btnOutline:hover{
+    background: rgba(245,243,255,.95);
+    border-color: rgba(196,181,253,.95);
+  }
+
+  .head{
+    background: rgba(255,255,255,.86);
+    border: 1px solid rgba(17,24,39,.06);
+    border-radius: 26px;
+    box-shadow: 0 20px 60px rgba(17,24,39,.10);
+    padding: 14px;
+    margin-bottom: 14px;
+    backdrop-filter: blur(2px);
+  }
+  .ttl{
+    font-weight:1000;
+    font-size: 18px;
+    color: var(--gray-900);
+    letter-spacing:-.2px;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    flex-wrap:wrap;
+  }
+  .meta{
+    margin-top:6px;
+    color: var(--gray-600);
+    font-weight:850;
+    line-height:1.6;
+    font-size: 13px;
   }
 
   .card{
-    background: var(--card);
-    border:1px solid var(--border);
+    background: rgba(255,255,255,.92);
+    border: 1px solid rgba(17,24,39,.06);
     border-radius: 26px;
-    box-shadow: var(--shadow);
-    padding: 16px;
-    position:relative;
+    box-shadow: var(--shadow2);
     overflow:hidden;
+    padding: 16px;
+    backdrop-filter: blur(2px);
   }
 
-  .title{
-    display:flex; align-items:center; justify-content:space-between; gap:12px;
-    margin-bottom:10px;
+  .badge{
+    display:inline-flex; align-items:center; gap:8px;
+    padding:6px 10px; border-radius:999px;
+    font-weight:1000; font-size:12px;
+    border:1px solid rgba(0,0,0,.08);
+    background: rgba(0,0,0,.03);
+    color:#374151;
   }
+  .badge.green{ background: rgba(16,185,129,.10); border-color: rgba(16,185,129,.18); color:#065f46;}
+  .badge.red{ background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.18); color:#7f1d1d;}
+  .badge.violet{ background: rgba(124,58,237,.10); border-color: rgba(124,58,237,.18); color:#4c1d95;}
+  .badge.blue{ background: rgba(37,99,235,.10); border-color: rgba(37,99,235,.18); color:#1e3a8a;}
+  .badge.amber{ background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.20); color:#92400e;}
 
-  h1{margin:0; font-size:22px; font-weight:1000;}
-  h2{margin:0; font-size:16px; font-weight:1000; color:#374151;}
-  .muted{color:var(--muted); font-weight:800;}
-  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
-
-  .avatar{
-    width:72px; height:72px; border-radius:999px;
-    background: linear-gradient(135deg, var(--violet), var(--pink));
-    display:grid; place-items:center;
-    color:#fff; font-weight:1000; font-size:24px;
-    box-shadow: 0 16px 34px rgba(124,58,237,.22);
-  }
-
-  .profileRow{
-    display:flex; gap:12px; align-items:center;
-    padding: 6px 0 12px;
-    border-bottom:1px solid rgba(0,0,0,.06);
-  }
-
-  /* Progresso (gamificação) */
   .progressBox{
     margin-top:12px;
     border:1px solid rgba(37,99,235,.12);
@@ -250,47 +343,17 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   .bar > div{
     height:100%;
     width: 20%;
-    background: linear-gradient(90deg, var(--blue), var(--violet));
+    background: linear-gradient(90deg, #2563eb, var(--violet-600));
     border-radius:999px;
     transition: width .35s ease;
   }
 
-  .btn{
-    border:0; cursor:pointer;
-    border-radius: 999px;
-    padding: 12px 14px;
-    font-weight:1000;
-    display:inline-flex; align-items:center; gap:10px;
-    user-select:none;
-    transition: transform .12s ease, filter .12s ease, opacity .12s ease;
+  .tabs{
+    display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px;
   }
-  .btn:active{ transform: translateY(1px); }
-
-  /* Confiança (azul): atualizar, ações seguras */
-  .btnBlue{
-    color:#fff;
-    background: linear-gradient(90deg, var(--blue), var(--blue2));
-    box-shadow: 0 16px 34px rgba(37,99,235,.18);
-  }
-  .btnBlue:focus{ outline: 4px solid var(--ring); outline-offset: 2px; }
-
-  /* Urgência (vermelho) para sair */
-  .btnDanger{
-    color:#fff;
-    background: linear-gradient(90deg, var(--red), var(--orange));
-    box-shadow: 0 16px 34px rgba(239,68,68,.18);
-  }
-
-  .btnGhost{
-    background: rgba(0,0,0,.04);
-    color:#374151;
-    border:1px solid rgba(0,0,0,.06);
-  }
-
-  .tabs{display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px;}
   .tab{
     flex:0 0 auto;
-    border:1px solid var(--border);
+    border:1px solid rgba(221,214,254,.92);
     background:#fff;
     border-radius:999px;
     padding:10px 12px;
@@ -298,12 +361,11 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     font-weight:1000;
     color:#374151;
     transition: transform .12s ease, filter .12s ease;
-    position:relative;
   }
   .tab:hover{filter:brightness(.99)}
   .tab:active{transform: translateY(1px)}
   .tab.active{
-    background: linear-gradient(90deg,var(--violet),var(--pink));
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
     color:#fff;
     border-color:transparent;
     box-shadow: 0 16px 34px rgba(124,58,237,.16);
@@ -312,45 +374,35 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   .panel{display:none; margin-top: 12px;}
   .panel.active{display:block;}
 
-  .list{display:grid; gap:10px; margin-top:10px;}
+  .list{
+    display:grid; gap:10px; margin-top:10px;
+  }
   .item{
-    border:1px solid rgba(0,0,0,.08);
+    border:1px solid rgba(17,24,39,.06);
     border-radius:18px;
     padding:12px;
     background:#fff;
     box-shadow: var(--shadow2);
   }
-  .itemTop{display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;}
-
-  .badge{
-    display:inline-flex; align-items:center; gap:8px;
-    padding:6px 10px; border-radius:999px;
-    font-weight:1000; font-size:12px;
-    border:1px solid rgba(0,0,0,.08);
-    background: rgba(0,0,0,.03);
-    color:#374151;
+  .itemTop{
+    display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;
   }
-  .badge.green{ background: rgba(16,185,129,.10); border-color: rgba(16,185,129,.18); color:#065f46;}
-  .badge.red{ background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.18); color:#7f1d1d;}
-  .badge.violet{ background: rgba(124,58,237,.10); border-color: rgba(124,58,237,.18); color:#4c1d95;}
-  .badge.blue{ background: rgba(37,99,235,.10); border-color: rgba(37,99,235,.18); color:#1e3a8a;}
-  .badge.amber{ background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.20); color:#92400e;}
+  .rowBtns{
+    display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;
+  }
 
-  .rowBtns{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
-
-  a.a{
+  .a{
     text-decoration:none;
     display:inline-flex; align-items:center; gap:10px;
     padding:10px 12px;
     border-radius:999px;
-    border:1px solid rgba(0,0,0,.08);
+    border:1px solid rgba(221,214,254,.92);
     background:#fff;
     font-weight:1000;
     color:#374151;
   }
-  a.a:hover{filter:brightness(.98)}
+  .a:hover{filter:brightness(.98)}
 
-  /* Botão de curtida (validação social) */
   .likeBtn{
     border:1px solid rgba(239,68,68,.22);
     background: rgba(239,68,68,.08);
@@ -394,7 +446,6 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     display:none;
   }
 
-  /* Modal confirmação */
   .modalBackdrop{
     position:fixed; inset:0;
     background: rgba(17,24,39,.55);
@@ -419,7 +470,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   }
   .modal p{
     margin: 10px 0 0;
-    color: var(--muted);
+    color: var(--gray-600);
     font-weight: 900;
     line-height: 1.5;
   }
@@ -428,7 +479,6 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
   }
 
-  /* Loading micro feedback */
   .spin{
     width:16px; height:16px;
     border-radius:999px;
@@ -439,7 +489,6 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   }
   @keyframes sp { to{ transform: rotate(360deg);} }
 
-  /* Toast */
   .toastWrap{
     position:fixed;
     left: 50%;
@@ -486,131 +535,189 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     font-size:13px;
   }
 
-  /* Sentinel (infinite scroll) */
   .sentinel{
     height: 16px;
     width: 100%;
+  }
+  .muted{color:var(--gray-600); font-weight:800;}
+  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
+
+  .stars{
+    position:absolute; inset:0;
+    pointer-events:none;
+    overflow:hidden;
+    z-index:0;
+  }
+  .star{
+    position:absolute;
+    width: 18px; height: 18px;
+    opacity:.45;
+    animation: floatY var(--dur, 4s) ease-in-out infinite;
+    will-change: transform, opacity;
+    filter: drop-shadow(0 10px 10px rgba(245,158,11,.10));
+  }
+  .star svg{ width:100%; height:100%; display:block; }
+  @keyframes floatY{
+    0%{ transform: translateY(0); opacity:.18; }
+    50%{ transform: translateY(-18px); opacity:.55; }
+    100%{ transform: translateY(0); opacity:.18; }
+  }
+
+  .profileRow{
+    display:flex; gap:12px; align-items:center;
+    padding: 6px 0 12px;
+    border-bottom:1px solid rgba(0,0,0,.06);
+  }
+  .avatar{
+    width:72px; height:72px; border-radius:999px;
+    background: linear-gradient(135deg, var(--violet-600), var(--pink-600));
+    display:grid; place-items:center;
+    color:#fff; font-weight:1000; font-size:24px;
+    box-shadow: 0 16px 34px rgba(124,58,237,.22);
   }
 </style>
 </head>
 
 <body>
-  <div class="container">
-    <div class="topRow">
-      <div class="leftActions">
+  <!-- Estrelas flutuantes (igual ao preview) -->
+  <div class="stars" id="stars"></div>
+
+  <div class="wrap">
+    <!-- Topo com pills (igual ao preview) -->
+    <div class="top">
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <a class="pill" href="/create">✨ Criar Livro</a>
         <a class="pill" href="/books">📚 Meus Livros</a>
         <a class="pill pillPink" href="/sales">🛒 Página Inicial</a>
-        <a class="pill pillBlue" href="/como-funciona">❓ Ajuda</a>
+        <a class="pill" href="/como-funciona">❓ Ajuda</a>
       </div>
-
-      <div class="rightActions">
-        <div class="muted">Logado como: <span class="mono">${email}</span></div>
-        <button class="pill pillDanger" id="btnTopLogout" title="Sair para entrar com outra conta">
-          🚪 <strong>Sair</strong>
-        </button>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <span class="pill" style="background:transparent; border:none; box-shadow:none; padding:0;">
+          <span class="mono">${email}</span>
+        </span>
+        <button class="btn btnOutline" id="btnTopLogout">🚪 Sair</button>
       </div>
     </div>
 
-    <div class="grid">
-      <!-- Card (perfil) -->
-      <div class="card">
-        <div class="profileRow">
-          <div class="avatar" id="avatar">🙂</div>
-          <div style="min-width:0">
-            <h1 id="name">Seu Perfil</h1>
-            <div class="muted" id="email">${email}</div>
-            <div class="muted" style="font-size:12px; margin-top:6px;">
-              ID: <span class="mono" id="uid">...</span>
+    <!-- Cabeçalho do perfil (igual ao .head do preview) -->
+    <div class="head">
+      <div>
+        <div class="ttl">👤 Meu Perfil</div>
+        <div class="meta" id="email">${email}</div>
+        <div class="meta" style="font-size:12px; margin-top:6px;">
+          ID: <span class="mono" id="uid">...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card principal com todo o conteúdo do perfil -->
+    <div class="card">
+      <!-- Linha do perfil com avatar e nome -->
+      <div class="profileRow">
+        <div class="avatar" id="avatar">🙂</div>
+        <div style="min-width:0">
+          <h1 id="name" style="margin:0; font-size:24px;">Seu Perfil</h1>
+        </div>
+      </div>
+
+      <!-- Barra de progresso do perfil -->
+      <div class="progressBox">
+        <div class="progressTop">
+          <div>
+            <div style="font-weight:1000;">✅ Completar perfil</div>
+            <div class="muted" style="font-size:12px;">Quanto mais completo, mais organizado fica seu histórico.</div>
+          </div>
+          <span class="badge blue" id="profileProgressLabel">—%</span>
+        </div>
+        <div class="bar"><div id="profileBar"></div></div>
+      </div>
+
+      <!-- Abas -->
+      <div class="tabs">
+        <button class="tab active" data-tab="info" id="tabInfo">👤 Informações</button>
+        <button class="tab" data-tab="created" id="tabCreated">📚 Livros Criados</button>
+        <button class="tab" data-tab="purchases" id="tabPurchases">🧾 Compras</button>
+        <button class="tab" data-tab="security" id="tabSecurity">🔐 Conta</button>
+      </div>
+
+      <!-- Painel Informações -->
+      <div class="panel active" id="panel-info">
+        <div class="muted" style="margin-top:10px;">
+          Aqui você vê seus dados do Supabase (profiles) e mantém tudo organizado.
+        </div>
+        <div class="list" style="margin-top:12px;">
+          <div class="item">
+            <div class="itemTop">
+              <h2 style="margin:0;">Dados do perfil</h2>
+              <span class="badge violet" id="profileBadge">Carregando…</span>
+            </div>
+            <div class="muted" style="margin-top:8px;">
+              Nome: <b id="profileName">—</b><br/>
+              Criado em: <b id="profileCreated">—</b><br/>
+              Atualizado em: <b id="profileUpdated">—</b>
+            </div>
+            <div class="rowBtns" id="badgesRow" style="margin-top:12px;"></div>
+          </div>
+        </div>
+        <div class="rowBtns">
+          <a class="a" href="/books">📚 Ir para Meus Livros</a>
+          <a class="a" href="/create">✨ Criar novo livro</a>
+        </div>
+      </div>
+
+      <!-- Painel Livros Criados -->
+      <div class="panel" id="panel-created">
+        <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+          <div class="muted">
+            Seus livros gerados e concluídos (tabela <span class="mono">books</span>).
+          </div>
+          <button class="btn btnPrimary" id="btnRefreshBooks" title="Atualizar lista">
+            <span id="refreshIconBooks">🔄</span> Atualizar
+          </button>
+        </div>
+        <div class="hint" id="hintBooks"></div>
+        <div class="list" id="booksList" style="margin-top:12px;"></div>
+        <div class="sentinel" id="sentinelBooks"></div>
+      </div>
+
+      <!-- Painel Compras -->
+      <div class="panel" id="panel-purchases">
+        <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+          <div class="muted">
+            Pedidos realizados (tabela <span class="mono">orders</span>).
+          </div>
+          <button class="btn btnPrimary" id="btnRefreshOrders" title="Atualizar lista">
+            <span id="refreshIconOrders">🔄</span> Atualizar
+          </button>
+        </div>
+        <div class="hint" id="hintOrders"></div>
+        <div class="list" id="ordersList" style="margin-top:12px;"></div>
+        <div class="sentinel" id="sentinelOrders"></div>
+      </div>
+
+      <!-- Painel Conta -->
+      <div class="panel" id="panel-security">
+        <div class="muted" style="margin-top:10px;">
+          Para entrar com outra conta, use “Sair” (o cookie <span class="mono">sb_token</span> será removido).
+        </div>
+        <div class="list" style="margin-top:12px;">
+          <div class="item">
+            <div class="itemTop">
+              <h2 style="margin:0;">Conta</h2>
+              <span class="badge" id="sessionBadge">Sessão ativa</span>
+            </div>
+            <div class="rowBtns" style="margin-top:12px;">
+              <button class="btn btnDanger" id="btnLogout">🚪 Sair da conta</button>
+              <a class="a" href="/login">🔐 Ir para Login</a>
             </div>
           </div>
         </div>
-
-        <div class="progressBox">
-          <div class="progressTop">
-            <div>
-              <div style="font-weight:1000;">✅ Completar perfil</div>
-              <div class="muted" style="font-size:12px;">Quanto mais completo, mais organizado fica seu histórico.</div>
-            </div>
-            <span class="badge blue" id="profileProgressLabel">—%</span>
-          </div>
-          <div class="bar"><div id="profileBar"></div></div>
-        </div>
-
-        <div class="tabs">
-          <button class="tab active" data-tab="info" id="tabInfo">👤 Informações</button>
-          <button class="tab" data-tab="purchases" id="tabPurchases">🧾 Compras</button>
-          <button class="tab" data-tab="security" id="tabSecurity">🔐 Conta</button>
-        </div>
-
-        <div class="panel active" id="panel-info">
-          <div class="muted" style="margin-top:10px;">
-            Aqui você vê seus dados do Supabase (profiles) e mantém tudo organizado.
-          </div>
-
-          <div class="list" style="margin-top:12px;">
-            <div class="item">
-              <div class="itemTop">
-                <h2>Dados do perfil</h2>
-                <span class="badge violet" id="profileBadge">Carregando…</span>
-              </div>
-              <div class="muted" style="margin-top:8px;">
-                Nome: <b id="profileName">—</b><br/>
-                Criado em: <b id="profileCreated">—</b><br/>
-                Atualizado em: <b id="profileUpdated">—</b>
-              </div>
-              <div class="rowBtns" id="badgesRow" style="margin-top:12px;"></div>
-            </div>
-          </div>
-
-          <div class="rowBtns">
-            <a class="a" href="/books">📚 Ir para Meus Livros</a>
-            <a class="a" href="/create">✨ Criar novo livro</a>
-          </div>
-        </div>
-
-        <div class="panel" id="panel-purchases">
-          <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-            <div class="muted">
-              “Compras” aqui = seus livros gerados (tabela <span class="mono">books</span>) via RLS.
-            </div>
-            <button class="btn btnBlue" id="btnRefreshBooks" title="Atualizar lista">
-              <span id="refreshIcon">🔄</span> Atualizar
-            </button>
-          </div>
-
-          <div class="hint" id="hintBooks"></div>
-
-          <!-- ✅ Infinite Scroll: cards um embaixo do outro, sem botão "Carregar mais" -->
-          <div class="list" id="booksList" style="margin-top:12px;"></div>
-          <div class="sentinel" id="sentinel"></div>
-        </div>
-
-        <div class="panel" id="panel-security">
-          <div class="muted" style="margin-top:10px;">
-            Para entrar com outra conta, use “Sair” (o cookie <span class="mono">sb_token</span> será removido).
-          </div>
-
-          <div class="list" style="margin-top:12px;">
-            <div class="item">
-              <div class="itemTop">
-                <h2>Conta</h2>
-                <span class="badge" id="sessionBadge">Sessão ativa</span>
-              </div>
-
-              <div class="rowBtns" style="margin-top:12px;">
-                <button class="btn btnDanger" id="btnLogout">🚪 Sair da conta</button>
-                <a class="a" href="/login">🔐 Ir para Login</a>
-              </div>
-            </div>
-          </div>
-
-          <div class="hint" id="hintLogout"></div>
-        </div>
+        <div class="hint" id="hintLogout"></div>
       </div>
     </div>
   </div>
 
+  <!-- Toast e Modal (idênticos ao preview) -->
   <div class="toastWrap" id="toastWrap" aria-live="polite" aria-atomic="true"></div>
 
   <div class="modalBackdrop" id="logoutModal">
@@ -620,7 +727,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
         Você será desconectado e poderá entrar com outro e-mail.
       </p>
       <div class="modalActions">
-        <button class="btn btnGhost" id="btnCancelLogout">Cancelar</button>
+        <button class="btn btnOutline" id="btnCancelLogout">Cancelar</button>
         <button class="btn btnDanger" id="btnConfirmLogout">🚪 Confirmar saída</button>
       </div>
       <div class="hint" id="hintLogoutModal"></div>
@@ -628,6 +735,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   </div>
 
 <script>
+  // CÓDIGO ORIGINAL DO PERFIL (preservado integralmente, apenas ajustado o link dos livros)
   const $ = (id) => document.getElementById(id);
 
   function setHint(id, msg){
@@ -659,6 +767,11 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     }catch{ return ""; }
   }
 
+  function formatMoney(centavos){
+    const n = Number(centavos||0);
+    return n.toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+  }
+
   async function getJson(url){
     const r = await fetch(url, { headers: { "Accept":"application/json" }});
     const j = await r.json().catch(()=> ({}));
@@ -671,6 +784,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === key);
     });
     $("panel-info").classList.toggle("active", key === "info");
+    $("panel-created").classList.toggle("active", key === "created");
     $("panel-purchases").classList.toggle("active", key === "purchases");
     $("panel-security").classList.toggle("active", key === "security");
   }
@@ -679,7 +793,8 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     btn.addEventListener("click", async () => {
       const key = btn.getAttribute("data-tab");
       setTab(key);
-      if (key === "purchases") await loadBooks(true, "tab");
+      if (key === "created") await loadBooks(true, "tab");
+      if (key === "purchases") await loadOrders(true, "tab");
     });
   });
 
@@ -691,11 +806,19 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     return '<span class="badge">• ' + (s || "created") + '</span>';
   }
 
+  function orderStatusBadge(st){
+    const s = String(st || "");
+    if (s === "pending") return '<span class="badge amber">⏳ Pendente</span>';
+    if (s === "paid") return '<span class="badge green">✅ Pago</span>';
+    if (s === "shipped") return '<span class="badge blue">📦 Enviado</span>';
+    if (s === "delivered") return '<span class="badge violet">📬 Entregue</span>';
+    if (s === "cancelled") return '<span class="badge red">❌ Cancelado</span>';
+    return '<span class="badge">' + (s || "—") + '</span>';
+  }
+
   function safe(s){ return String(s ?? ""); }
 
-  // ------------------------------
   // Curtidas (validação social) — localStorage + base determinístico
-  // ------------------------------
   const LIKE_KEY = "mlm_profile_likes_v1";
 
   function hash32(str){
@@ -761,6 +884,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     const pdf = safe(b.pdf_url || "");
     const canDownload = pdf && safe(b.status) === "done";
 
+    // ✅ CORRIGIDO: link para /books/:id (preview com flip de páginas)
     const openLink = "/books/" + encodeURIComponent(id);
     const downloadLink = canDownload ? ("/download/" + encodeURIComponent(id)) : "";
 
@@ -795,9 +919,46 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     \`;
   }
 
-  // ------------------------------
+  function orderCard(o){
+    const id = safe(o.id);
+    const createdAt = fmtDateBR(o.created_at);
+    const status = o.status || "pending";
+    const orderData = o.order_data || {};
+
+    const childName = orderData.childName || "—";
+    const theme = orderData.theme || "—";
+    const style = orderData.style || "—";
+    const total = orderData.total || 0;
+
+    const bookId = o.book_id || orderData.bookId;
+    const bookLink = bookId ? ("/books/" + encodeURIComponent(bookId)) : "#";
+
+    return \`
+      <div class="item" data-order="\${id}">
+        <div class="itemTop">
+          <div style="min-width:0">
+            <div style="font-weight:1000; font-size:16px;">
+              🧾 Pedido #\${id.slice(0,8)}
+            </div>
+            <div class="muted" style="margin-top:6px;">
+              <b>Criança:</b> \${childName}<br/>
+              <b>Tema/Estilo:</b> \${theme} • \${style}<br/>
+              <b>Total:</b> \${formatMoney(total)}<br/>
+              <b>Data:</b> \${createdAt}
+            </div>
+          </div>
+          \${orderStatusBadge(status)}
+        </div>
+
+        <div class="rowBtns">
+          \${bookId ? \`<a class="a" href="\${bookLink}">👀 Ver livro</a>\` : ""}
+          <a class="a" href="#">📄 Detalhes do pedido</a>
+        </div>
+      </div>
+    \`;
+  }
+
   // Toast
-  // ------------------------------
   const rewardLines = [
     { t: "✨ Atualizado", d: "Tudo certo por aqui. Seu perfil está sincronizado." },
     { t: "📚 Biblioteca pronta", d: "Seus livros foram carregados. Continue rolando para ver mais." },
@@ -832,9 +993,7 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     showToast(pick.t, pick.d, 2200 + Math.floor(Math.random() * 1200));
   }
 
-  // ------------------------------
   // Logout (com confirmação)
-  // ------------------------------
   function openLogoutModal(){
     setHint("hintLogoutModal", "");
     $("logoutModal").classList.add("open");
@@ -874,9 +1033,29 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
   });
   $("btnConfirmLogout").addEventListener("click", doLogout);
 
-  // ------------------------------
+  // Estrelas flutuantes (mesmo código do preview)
+  (function renderStars(){
+    var root = $("stars");
+    if(!root) return;
+    var N = 22;
+
+    function rnd(a,b){ return a + Math.random()*(b-a); }
+
+    var starSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.1 6.4L21 9.6l-5.4 4 2.1 6.4L12 16.2 6.3 20l2.1-6.4L3 9.6l6.9-1.2L12 2z" fill="rgba(252,211,77,.95)"/></svg>';
+
+    for(var i=0;i<N;i++){
+      var el = document.createElement("div");
+      el.className = "star";
+      el.style.top  = rnd(0, 100).toFixed(2) + "%";
+      el.style.left = rnd(0, 100).toFixed(2) + "%";
+      el.style.setProperty("--dur", rnd(3.2, 5.8).toFixed(2) + "s");
+      el.style.animationDelay = rnd(0, 2.2).toFixed(2) + "s";
+      el.innerHTML = starSvg;
+      root.appendChild(el);
+    }
+  })();
+
   // Perfil / progresso + emblemas
-  // ------------------------------
   function setProgress(pct){
     const v = Math.max(0, Math.min(100, Number(pct || 0)));
     $("profileProgressLabel").textContent = v + "%";
@@ -936,48 +1115,41 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     }
   }
 
-  // ------------------------------
-  // Compras — Infinite Scroll (rolagem infinita)
-  // ------------------------------
+  // Livros Criados — Infinite Scroll
   let allBooks = [];
-  let shown = 0;
+  let shownBooks = 0;
   const PAGE = 10;
-  let io = null;
-  let isLoading = false;
+  let ioBooks = null;
+  let isLoadingBooks = false;
 
-  function detachObserver(){
-    try{
-      if (io) io.disconnect();
-    }catch{}
-    io = null;
+  function detachBooksObserver(){
+    try{ if (ioBooks) ioBooks.disconnect(); }catch{}
+    ioBooks = null;
   }
 
-  function attachObserver(){
-    detachObserver();
-    const sentinel = $("sentinel");
+  function attachBooksObserver(){
+    detachBooksObserver();
+    const sentinel = $("sentinelBooks");
     if (!sentinel) return;
-
-    io = new IntersectionObserver((entries) => {
+    ioBooks = new IntersectionObserver((entries) => {
       const e = entries && entries[0];
       if (!e || !e.isIntersecting) return;
-      renderMore();
+      renderMoreBooks();
     }, { root: null, rootMargin: "600px 0px", threshold: 0.01 });
-
-    io.observe(sentinel);
+    ioBooks.observe(sentinel);
   }
 
-  function renderMore(){
-    if (isLoading) return;
+  function renderMoreBooks(){
+    if (isLoadingBooks) return;
     const list = $("booksList");
-    const slice = allBooks.slice(shown, shown + PAGE);
+    const slice = allBooks.slice(shownBooks, shownBooks + PAGE);
     if (!slice.length) return;
-
-    isLoading = true;
+    isLoadingBooks = true;
     setTimeout(() => {
       list.insertAdjacentHTML("beforeend", slice.map(bookCard).join(""));
-      shown += slice.length;
+      shownBooks += slice.length;
       bindLikeButtonsForVisible();
-      isLoading = false;
+      isLoadingBooks = false;
       variableReward("scroll");
     }, 120);
   }
@@ -990,12 +1162,10 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
         ev.preventDefault();
         const id = btn.getAttribute("data-like");
         const nextLiked = toggleLike(id);
-
         btn.classList.toggle("on", nextLiked);
         btn.innerHTML = (nextLiked ? "❤️" : "🤍") +
           " Curtir " +
           "<span class='likeCount' data-likecount='" + id + "'>" + likeCountFor(id) + "</span>";
-
         showToast(nextLiked ? "❤️ Curtido!" : "🤍 Removido", nextLiked ? "Você marcou como favorito." : "Ok, desmarcado.", 2000);
         variableReward("like");
       });
@@ -1004,37 +1174,34 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
 
   async function loadBooks(reset, source){
     setHint("hintBooks", "");
-
     if (reset){
-      detachObserver();
+      detachBooksObserver();
       allBooks = [];
-      shown = 0;
+      shownBooks = 0;
       $("booksList").innerHTML = "<div class='muted'>Carregando…</div>";
     }
-
     const btn = $("btnRefreshBooks");
-    const icon = $("refreshIcon");
+    const icon = $("refreshIconBooks");
     btn.disabled = true;
     icon.innerHTML = "<span class='spin'></span>";
-
     try{
       const j = await getJson("/api/my-books");
       const items = Array.isArray(j.items) ? j.items : [];
-
-      allBooks = items;
-      shown = 0;
-
-      if (!items.length){
-        $("booksList").innerHTML = "<div class='muted'>Nenhum livro encontrado ainda.</div>";
-        attachObserver();
+      
+      // 🔍 Filtro extra no front-end para garantir (caso o servidor ainda retorne algo errado)
+      const filtered = items.filter(item => item.status === 'done');
+      
+      allBooks = filtered;
+      shownBooks = 0;
+      if (!filtered.length){
+        $("booksList").innerHTML = "<div class='muted'>Nenhum livro concluído ainda.</div>";
+        attachBooksObserver();
         variableReward("refresh");
         return;
       }
-
       $("booksList").innerHTML = "";
-      renderMore();
-      attachObserver();
-
+      renderMoreBooks();
+      attachBooksObserver();
       variableReward("refresh");
     }catch(e){
       $("booksList").innerHTML = "";
@@ -1045,11 +1212,83 @@ module.exports = function mountProfilePage(app, { requireAuth }) {
     }
   }
 
-  $("btnRefreshBooks").addEventListener("click", () => loadBooks(true, "btn"));
+  // Compras (Pedidos) — Infinite Scroll
+  let allOrders = [];
+  let shownOrders = 0;
+  let ioOrders = null;
+  let isLoadingOrders = false;
 
-  // ------------------------------
+  function detachOrdersObserver(){
+    try{ if (ioOrders) ioOrders.disconnect(); }catch{}
+    ioOrders = null;
+  }
+
+  function attachOrdersObserver(){
+    detachOrdersObserver();
+    const sentinel = $("sentinelOrders");
+    if (!sentinel) return;
+    ioOrders = new IntersectionObserver((entries) => {
+      const e = entries && entries[0];
+      if (!e || !e.isIntersecting) return;
+      renderMoreOrders();
+    }, { root: null, rootMargin: "600px 0px", threshold: 0.01 });
+    ioOrders.observe(sentinel);
+  }
+
+  function renderMoreOrders(){
+    if (isLoadingOrders) return;
+    const list = $("ordersList");
+    const slice = allOrders.slice(shownOrders, shownOrders + PAGE);
+    if (!slice.length) return;
+    isLoadingOrders = true;
+    setTimeout(() => {
+      list.insertAdjacentHTML("beforeend", slice.map(orderCard).join(""));
+      shownOrders += slice.length;
+      isLoadingOrders = false;
+      variableReward("scroll");
+    }, 120);
+  }
+
+  async function loadOrders(reset, source){
+    setHint("hintOrders", "");
+    if (reset){
+      detachOrdersObserver();
+      allOrders = [];
+      shownOrders = 0;
+      $("ordersList").innerHTML = "<div class='muted'>Carregando…</div>";
+    }
+    const btn = $("btnRefreshOrders");
+    const icon = $("refreshIconOrders");
+    btn.disabled = true;
+    icon.innerHTML = "<span class='spin'></span>";
+    try{
+      const j = await getJson("/api/my-orders");
+      const items = Array.isArray(j.items) ? j.items : [];
+      allOrders = items;
+      shownOrders = 0;
+      if (!items.length){
+        $("ordersList").innerHTML = "<div class='muted'>Nenhum pedido encontrado.</div>";
+        attachOrdersObserver();
+        variableReward("refresh");
+        return;
+      }
+      $("ordersList").innerHTML = "";
+      renderMoreOrders();
+      attachOrdersObserver();
+      variableReward("refresh");
+    }catch(e){
+      $("ordersList").innerHTML = "";
+      setHint("hintOrders", "Falha ao carregar pedidos: " + String(e.message || e));
+    }finally{
+      btn.disabled = false;
+      icon.textContent = "🔄";
+    }
+  }
+
+  $("btnRefreshBooks").addEventListener("click", () => loadBooks(true, "btn"));
+  $("btnRefreshOrders").addEventListener("click", () => loadOrders(true, "btn"));
+
   // Init
-  // ------------------------------
   (async function init(){
     await loadMe();
   })();

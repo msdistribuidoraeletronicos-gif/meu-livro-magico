@@ -1,33 +1,22 @@
 /**
  * render.preview.html.js
- * Preview (/books/:id) com livro FECHADO (capa realista) + ABERTO (spread realista).
+ * Preview (/books/:id) com livro FECHADO (capa) + ABERTO (spread).
  *
- * ✅ Mantém o layout "livro" (miolo/papel/curva/flip).
- * ✅ PADRÃO NOVO:
- *   - Ao entrar na página, começa FECHADO (mostra capa).
- *   - Botão "Abrir" mostra a capa (FECHADO).
- *   - Ao apertar "Próximo (→)" quando FECHADO: abre e mostra páginas 1/2.
- * ✅ Botão Fechar / ESC volta para o FECHADO e reseta para a 1ª folha.
- * ✅ Próximo/Anterior sem erro.
+ * ✅ Layout igual ao da 2ª imagem (palco central, sem sidebar).
+ * ✅ Começa FECHADO (capa).
+ * ✅ Próximo (→) no FECHADO abre e mostra páginas 1/2.
+ * ✅ ← na 1ª folha volta para CAPA.
+ * ✅ ESC fecha (volta para capa).
+ * ✅ Sem blur/backdrop-filter/3D que embaçam.
  *
- * ✅ IMPORTANTE:
- * - A CAPA aparece APENAS no livro FECHADO.
- * - Ao ABRIR, começa direto nas PÁGINAS (página 1 / 2 / ...).
- *
- * ✅ AJUSTE (NÍTIDO / SEM EMBAÇADO) — IGUAL AO /exemplos:
- * - Remove BG borrado (imgBg) completamente.
- * - Remove filtros/blur/backdrop-filter que podem suavizar a imagem (Safari/Chrome).
- * - Remove transforms 3D nas páginas (rotateY/perspective) e no spreadShell que podem causar “softening”.
- * - Mantém visual do livro com sombras/gradientes (sem blur).
- *
- * ✅ CORREÇÃO (capa branca):
- * - .closedBook pode colapsar (0x0) com filhos absolutos.
- * - FECHADO é dimensionado via JS:
- *   syncClosedBookToSinglePage() calcula o tamanho de 1 página dentro do palco.
- *
- * ✅ AJUSTE PEDIDO (NOVO):
- * - Botão ← NÃO desativa na 1ª folha quando ABERTO.
- * - Se apertar ← na 1ª folha (páginas 1/2), ele volta pra CAPA (mesma função do Fechar).
+ * ✅ Robustez:
+ * - Aceita várias formas de book (coverUrl/cover_url/cover.url/overrides.coverUrl etc.)
+ * - Aceita páginas em:
+ *    - book.images = [{page,url}]  (seu padrão)
+ *    - book.pages = [{page,url}]  (alternativo)
+ *    - book.page_images / book.pageImages
+ *    - book.manifest.images
+ *    - book.data.images
  *
  * Export:
  *   module.exports = { renderBookPreviewHtml }
@@ -54,30 +43,78 @@ function fmtDateBR(iso) {
   return dd + "/" + mm + "/" + yy + " " + hh + ":" + mi;
 }
 
+function pickFirstString(...vals) {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function normalizePageItem(it) {
+  // aceita {page,url} ou {pageNum,url} ou {n,url}
+  const page =
+    Number(it?.page ?? it?.pageNum ?? it?.n ?? it?.index ?? 0) || 0;
+  const url = pickFirstString(it?.url, it?.src, it?.image, it?.imageUrl);
+  if (!url) return null;
+  return { page, url };
+}
+
+function extractCoverUrl(book) {
+  return pickFirstString(
+    book?.overrides?.coverUrl,
+    book?.coverUrl,
+    book?.cover_url,
+    book?.cover?.url,
+    book?.cover?.src,
+    book?.data?.coverUrl,
+    book?.data?.cover_url,
+    book?.manifest?.coverUrl,
+    book?.manifest?.cover_url
+  );
+}
+
+function extractStoryPages(book) {
+  const candidates = [
+    ...asArray(book?.images),
+    ...asArray(book?.pages),
+    ...asArray(book?.page_images),
+    ...asArray(book?.pageImages),
+    ...asArray(book?.manifest?.images),
+    ...asArray(book?.data?.images),
+  ];
+
+  const pages = candidates
+    .map(normalizePageItem)
+    .filter(Boolean)
+    .sort((a, b) => (a.page || 0) - (b.page || 0));
+
+  // remove duplicadas por page (fica a última com URL válida)
+  const map = new Map();
+  for (const p of pages) map.set(Number(p.page), p.url);
+  const out = Array.from(map.entries())
+    .map(([page, url]) => ({ page, url }))
+    .sort((a, b) => a.page - b.page);
+
+  return out;
+}
+
+function guessRatio(book) {
+  const w = Number(book?.coverWidth || book?.imgWidth || book?.width || 1020) || 1020;
+  const h = Number(book?.coverHeight || book?.imgHeight || book?.height || 797) || 797;
+  return { w, h };
+}
+
 function renderBookPreviewHtml(book) {
   const id = String(book?.dirId || book?.id || "");
+  const safeCoverUrl = extractCoverUrl(book);
 
-  const safeCoverUrl =
-    book?.overrides?.coverUrl
-      ? String(book.overrides.coverUrl)
-      : book?.coverUrl
-      ? String(book.coverUrl)
-      : book?.cover?.url
-      ? String(book.cover.url)
-      : "";
-
-  const storyPages = Array.isArray(book?.images)
-    ? book.images
-        .map((it) => ({
-          page: Number(it?.page || 0),
-          url: String(it?.url || ""),
-        }))
-        .filter((it) => it.url)
-        .sort((a, b) => (a.page || 0) - (b.page || 0))
-    : [];
+  const storyPages = extractStoryPages(book);
 
   // ✅ Páginas do livro ABERTO: SOMENTE páginas da história (sem capa).
-  // Spread 0: [página 1, página 2]
   const pages = [];
   for (const p of storyPages) {
     pages.push({
@@ -91,11 +128,15 @@ function renderBookPreviewHtml(book) {
   if (pages.length % 2 !== 0) pages.push({ kind: "blank", label: "", pageNum: null });
 
   const errBox = book?.error ? `<div class="err">❌ Erro: ${escapeHtml(book.error)}</div>` : "";
-  const metaUpdated = book?.updatedAt ? fmtDateBR(book.updatedAt) : "-";
+  const metaUpdated = book?.updatedAt
+    ? fmtDateBR(book.updatedAt)
+    : book?.updated_at
+    ? fmtDateBR(book.updated_at)
+    : "-";
 
-  // ratio do "palco" (se tiver no JSON do livro); senão default do seu layout
-  const ratioNum = Number(book?.coverWidth || book?.imgWidth || 1020) || 1020;
-  const ratioDen = Number(book?.coverHeight || book?.imgHeight || 797) || 797;
+  const ratio = guessRatio(book);
+  const ratioNum = ratio.w;
+  const ratioDen = ratio.h;
 
   const pagesJson = JSON.stringify(pages)
     .replace(/</g, "\\u003c")
@@ -128,7 +169,6 @@ function renderBookPreviewHtml(book) {
 
     --shadow: 0 34px 120px rgba(17,24,39,.22);
     --shadow2: 0 16px 38px rgba(17,24,39,.10);
-    --shadow3: 0 10px 18px rgba(17,24,39,.10);
 
     --r: 26px;
     --bookR: 22px;
@@ -169,7 +209,6 @@ function renderBookPreviewHtml(book) {
     color: rgba(109,40,217,1);
     font-weight:950;
     box-shadow: 0 14px 30px rgba(17,24,39,.08);
-    /* ✅ sem backdrop-filter (evita suavização) */
   }
   .pill:hover{
     background: rgba(245,243,255,.92);
@@ -188,7 +227,6 @@ function renderBookPreviewHtml(book) {
     justify-content:space-between;
     flex-wrap:wrap;
     margin-bottom: 14px;
-    /* ✅ sem backdrop-filter */
   }
   .ttl{
     font-weight:1000;
@@ -217,30 +255,6 @@ function renderBookPreviewHtml(book) {
     color: rgba(220,38,38,1);
   }
 
-  .btn{
-    display:inline-flex; align-items:center; justify-content:center;
-    padding: 12px 14px;
-    border-radius: 999px;
-    border: 1px solid rgba(221,214,254,.92);
-    background: rgba(255,255,255,.72);
-    color: rgba(109,40,217,1);
-    font-weight:1000;
-    box-shadow: 0 14px 30px rgba(17,24,39,.08);
-    cursor:pointer;
-    user-select:none;
-    /* ✅ sem backdrop-filter */
-  }
-  .btn.primary{
-    border:0;
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    box-shadow: 0 18px 44px rgba(124,58,237,.20);
-  }
-  .btn.primary:hover{
-    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-    box-shadow: 0 22px 56px rgba(124,58,237,.24);
-  }
-
   .stage{
     position:relative;
     width: 100%;
@@ -249,7 +263,6 @@ function renderBookPreviewHtml(book) {
     margin-top: 14px;
   }
 
-  /* ====== PALCO ====== */
   .book{
     width: min(1080px, calc(100vw - 18px));
     aspect-ratio: ${ratioNum} / ${ratioDen};
@@ -268,12 +281,10 @@ function renderBookPreviewHtml(book) {
       radial-gradient(820px 340px at 85% 20%, rgba(219,39,119,.18), transparent 55%),
       radial-gradient(700px 320px at 50% 92%, rgba(252,211,77,.14), transparent 60%),
       radial-gradient(1200px 700px at 50% 50%, rgba(17,24,39,.10), transparent 70%);
-    /* ✅ sem blur aqui (só glow, mas blur pode “lavar” em alguns devices) */
     opacity:.94;
     pointer-events:none;
   }
 
-  /* ======= FECHADO ======= */
   .closedWrap{
     position:absolute;
     inset: 0;
@@ -295,7 +306,6 @@ function renderBookPreviewHtml(book) {
     isolation:isolate;
     background: #fff;
   }
-
   .closedBook:hover{
     transform: translateY(-6px) scale(1.005);
     box-shadow: 0 40px 140px rgba(17,24,39,.26);
@@ -309,7 +319,6 @@ function renderBookPreviewHtml(book) {
     object-fit: cover;
     display:block;
     transform: translateZ(0);
-    /* ✅ sem filtros (mais nítido) */
   }
 
   .closedVarnish{
@@ -386,7 +395,6 @@ function renderBookPreviewHtml(book) {
     user-select:none;
   }
 
-  /* ======= ABERTO ======= */
   .openWrap{
     position:absolute;
     inset: 0;
@@ -409,9 +417,7 @@ function renderBookPreviewHtml(book) {
     background: rgba(255,255,255,.10);
     border: 1px solid rgba(17,24,39,.06);
 
-    /* ✅ remove 3D/perspective para evitar “softening” */
-    transform: none;
-    transform-origin: 50% 60%;
+    transform: none; /* sem 3D */
   }
 
   .spreadShell::before{
@@ -426,9 +432,6 @@ function renderBookPreviewHtml(book) {
       inset 0 -28px 60px rgba(0,0,0,.14);
     z-index:1;
   }
-
-  /* ✅ remove texture overlay (pode “lavar”) */
-  .spreadShell::after{ content:none; }
 
   .paperBase{
     position:absolute;
@@ -471,7 +474,6 @@ function renderBookPreviewHtml(book) {
       linear-gradient(90deg, rgba(255,255,255,.02), rgba(255,255,255,.44), rgba(255,255,255,.02)),
       linear-gradient(90deg, rgba(0,0,0,.18), rgba(0,0,0,.02), rgba(0,0,0,.18));
     opacity:.76;
-    /* ✅ sem blur */
   }
   .fold::after{
     content:"";
@@ -573,9 +575,8 @@ function renderBookPreviewHtml(book) {
       inset 0 0 0 1px rgba(17,24,39,.08),
       inset 0 18px 32px rgba(255,255,255,.18),
       inset 0 -22px 28px rgba(17,24,39,.10);
-    transform: none; /* ✅ sem 3D */
+    transform:none;
   }
-
   .page.left{
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -584,11 +585,6 @@ function renderBookPreviewHtml(book) {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
   }
-
-  /* ✅ remove overlays/texture da página (pode suavizar/lavar) */
-  .page::before{ content:none; }
-  .page.left::after{ content:none; }
-  .page.right::after{ content:none; }
 
   .imgFrame{
     position:absolute;
@@ -601,8 +597,6 @@ function renderBookPreviewHtml(book) {
     background: transparent;
   }
 
-  /* ✅ removido COMPLETAMENTE o BG borrado (.imgBg) */
-
   .imgFg{
     position: relative;
     z-index: 2;
@@ -611,7 +605,6 @@ function renderBookPreviewHtml(book) {
     height: 100%;
     object-fit: contain;
     object-position: center;
-    /* ✅ sem drop-shadow via filter (pode reduzir nitidez) */
   }
 
   .blank{
@@ -647,7 +640,6 @@ function renderBookPreviewHtml(book) {
     font-size: 12px;
     box-shadow: 0 18px 44px rgba(17,24,39,.10);
     z-index:30;
-    /* ✅ sem backdrop-filter */
   }
 
   .hide{ display:none !important; }
@@ -669,7 +661,6 @@ function renderBookPreviewHtml(book) {
     font-weight: 1000;
     color: rgba(109,40,217,1);
     z-index: 200;
-    /* ✅ sem backdrop-filter */
   }
   .navBtn:hover{
     background: rgba(245,243,255,.92);
@@ -752,7 +743,6 @@ function renderBookPreviewHtml(book) {
     background:
       radial-gradient(closest-side, rgba(0,0,0,.26), transparent 70%),
       linear-gradient(90deg, rgba(0,0,0,.16), transparent 40%, rgba(0,0,0,.12));
-    /* ✅ sem blur */
     opacity:0;
     transition: opacity .18s ease;
   }
@@ -786,8 +776,6 @@ function renderBookPreviewHtml(book) {
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <a class="pill" href="/create">🪄 Criar novo</a>
         <a class="pill" href="/books/${encodeURIComponent(id)}/edit">✏️ Editar livro</a>
-        <!-- ✅ Botão Sair -->
-        <button class="pill" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
 
@@ -797,7 +785,7 @@ function renderBookPreviewHtml(book) {
         <div class="meta">
           Status: <b>${escapeHtml(book?.status || "-")}</b> •
           Tema: <b>${escapeHtml(book?.themeLabel || book?.theme || "-")}</b> •
-          Criança: <b>${escapeHtml(book?.childName || "-")}</b> •
+          Criança: <b>${escapeHtml(book?.childName || book?.child_name || "-")}</b> •
           Atualizado: <b>${escapeHtml(metaUpdated)}</b>
         </div>
         ${errBox || ""}
@@ -864,7 +852,7 @@ function renderBookPreviewHtml(book) {
   var pages = ${pagesJson};
   var spreadCount = Math.max(1, Math.ceil((pages && pages.length ? pages.length : 0) / 2));
 
-  // ✅ PADRÃO: começa FECHADO (capa)
+  // ✅ começa FECHADO
   var view = "closed";
   var openSpreadIndex = 0;
   var animating = false;
@@ -872,16 +860,6 @@ function renderBookPreviewHtml(book) {
   var coverUrl = ${safeCoverJson};
 
   function $(id){ return document.getElementById(id); }
-
-  // ✅ Logout
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/sales';
-    } catch (e) {
-      alert('Erro ao sair');
-    }
-  });
 
   function getCssPxVar(name, fallback){
     try{
@@ -942,18 +920,15 @@ function renderBookPreviewHtml(book) {
       return;
     }
 
-    // ✅ no FECHADO: não tem anterior, mas tem próximo (para abrir)
     if(view === "closed"){
       if(prev) prev.classList.add("disabled");
       if(next) next.classList.remove("disabled");
       return;
     }
 
-    // ✅ AJUSTE PEDIDO:
-    // - Quando ABERTO, o botão ← NUNCA desativa.
+    // ABERTO: ← nunca desativa (← na primeira folha volta pra capa)
     if(prev) prev.classList.remove("disabled");
 
-    // próximo desativa só no fim
     if(next) next.classList.toggle("disabled", openSpreadIndex >= spreadCount - 1);
   }
 
@@ -985,12 +960,10 @@ function renderBookPreviewHtml(book) {
       return;
     }
 
-    // ✅ SOMENTE FG (sem BG borrado)
     var fg = document.createElement("img");
     fg.className = "imgFg";
     fg.src = item.url;
     fg.alt = item.label || "Página";
-
     root.appendChild(fg);
   }
 
@@ -1072,28 +1045,25 @@ function renderBookPreviewHtml(book) {
       return frame;
     }
 
-    // ✅ SOMENTE FG (sem BG borrado)
     var fg = document.createElement("img");
     fg.className = "imgFg";
     fg.src = item.url;
     fg.alt = item.label || "Página";
-
     frame.appendChild(fg);
+
     return frame;
   }
 
   function doFlip(direction){
     if(animating) return;
 
-    // ✅ se está FECHADO e manda "next": abre
+    // FECHADO + next => abre
     if(view === "closed"){
       if(direction === "next") openBook();
       return;
     }
 
-    // ✅ AJUSTE PEDIDO:
-    // Se estiver ABERTO e o usuário apertar ← na primeira folha,
-    // ao invés de "desativar", volta para a capa.
+    // ABERTO + prev na primeira folha => volta capa
     if(direction !== "next" && openSpreadIndex <= 0){
       closeBook();
       return;
@@ -1172,9 +1142,6 @@ function renderBookPreviewHtml(book) {
 
   var cb = $("closedBook");
   if(cb) cb.addEventListener("click", openBook);
-
-  var bOpen = $("btnOpen");
-  if(bOpen) bOpen.addEventListener("click", showCover);
 
   window.addEventListener("keydown", function(e){
     if(e.key === "ArrowLeft") prev();

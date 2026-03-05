@@ -1,5 +1,5 @@
 // render.books.html.js
-// Página "Meus Livros" (galeria) — HTML completo
+// Página "Meus Livros" (galeria) — HTML completo com layout unificado
 // Export:
 //   module.exports = { renderBooksHtml }
 
@@ -895,7 +895,7 @@ function renderBooksHtml() {
           </svg>
           Criar Livro
         </a>
-        <!-- ✅ Botão Sair com estilo btnOutline (igual ao checkout) -->
+        <!-- Botão Sair com estilo btnOutline (igual ao checkout) -->
         <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
@@ -1385,9 +1385,9 @@ function renderBooksHtml() {
       html +=   '<div class="meta" style="color:rgba(220,38,38,1); font-weight:900;">Erro: ' + esc(b.error) + '</div>';
     }
 
-    // ✅ REMOVIDO: botão de PDF
+    // ✅ CORREÇÃO: link "Abrir" agora aponta para /preview?id=...
     html +=     '<div class="rowBtns">';
-    html +=       '<a class="aBtn primary" href="/books/' + encodeURIComponent(b.dirId || b.id) + '">👀 Abrir</a>';
+    html +=       '<a class="aBtn primary" href="/preview?id=' + encodeURIComponent(b.dirId || b.id) + '">👀 Abrir</a>';
     html +=       '<a class="aBtn order" href="/checkout/' + encodeURIComponent(b.dirId || b.id) + '">🛒 Fazer pedido <span class="tag">PIX</span></a>';
     html +=     '</div>';
 
