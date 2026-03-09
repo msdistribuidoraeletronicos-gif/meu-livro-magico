@@ -189,20 +189,26 @@ try {
         auth: { persistSession: false, autoRefreshToken: false },
         global: { headers: { "X-Client-Info": "mlm-auth" } },
       });
+      console.log("✅ Supabase Auth client inicializado.");
     }
     if (SUPABASE_SERVICE_ROLE_KEY) {
       supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
         auth: { persistSession: false, autoRefreshToken: false },
         global: { headers: { "X-Client-Info": "mlm-admin" } },
       });
+      console.log("✅ Supabase Admin client inicializado (service role).");
     }
   }
-} catch {
-  console.warn("⚠️  @supabase/supabase-js não instalado. Storage e Auth desativados.");
+} catch (err) {
+  console.warn("⚠️ @supabase/supabase-js não instalado ou erro na inicialização:", err.message);
 }
 
 function sbEnabled() {
-  return !!supabaseAdmin;
+  const enabled = !!supabaseAdmin;
+  if (!enabled) {
+    console.warn("⚠️ sbEnabled: Supabase Admin não disponível (service role key ausente ou inválida).");
+  }
+  return enabled;
 }
 
 function sbKeyFor(userId, bookId, fileName) {
@@ -215,31 +221,139 @@ function sbKeyForOwner(manifest, bookId, fileName) {
 }
 
 async function sbUploadBuffer(key, buf, contentType = "application/octet-stream") {
-  if (!sbEnabled()) return { ok: false, key, reason: "supabase_disabled" };
-  const { error } = await supabaseAdmin.storage
-    .from(SUPABASE_STORAGE_BUCKET)
-    .upload(key, buf, { upsert: true, contentType, cacheControl: "3600" });
-  return error ? { ok: false, key, reason: String(error.message || error) } : { ok: true, key };
+  if (!sbEnabled()) {
+    console.log(`[sbUploadBuffer] Supabase desabilitado. Não enviando: ${key}`);
+    return { ok: false, key, reason: "supabase_disabled" };
+  }
+  try {
+    console.log(`[sbUploadBuffer] Iniciando upload para: ${key} (tamanho: ${buf.length} bytes)`);
+    const { error } = await supabaseAdmin.storage
+      .from(SUPABASE_STORAGE_BUCKET)
+      .upload(key, buf, { upsert: true, contentType, cacheControl: "3600" });
+
+    if (error) {
+      console.error(`[sbUploadBuffer] ERRO no upload para ${key}:`, error.message);
+      return { ok: false, key, reason: String(error.message || error) };
+    }
+
+    console.log(`[sbUploadBuffer] Upload concluído com sucesso: ${key}`);
+    return { ok: true, key };
+  } catch (err) {
+    console.error(`[sbUploadBuffer] Exceção no upload para ${key}:`, err.message);
+    return { ok: false, key, reason: err.message };
+  }
 }
 
 async function sbDownloadToBuffer(key) {
-  if (!sbEnabled()) return { ok: false, reason: "supabase_disabled", buf: null };
-  const { data, error } = await supabaseAdmin.storage.from(SUPABASE_STORAGE_BUCKET).download(key);
-  if (error || !data) return { ok: false, reason: String(error?.message || error || "download_failed"), buf: null };
-  const ab = await data.arrayBuffer();
-  return { ok: true, buf: Buffer.from(ab) };
+  if (!sbEnabled()) {
+    console.log(`[sbDownloadToBuffer] Supabase desabilitado. Não baixando: ${key}`);
+    return { ok: false, reason: "supabase_disabled", buf: null };
+  }
+  try {
+    console.log(`[sbDownloadToBuffer] Baixando: ${key}`);
+    const { data, error } = await supabaseAdmin.storage.from(SUPABASE_STORAGE_BUCKET).download(key);
+
+    if (error || !data) {
+      console.error(`[sbDownloadToBuffer] ERRO ao baixar ${key}:`, error?.message || error);
+      return { ok: false, reason: String(error?.message || error || "download_failed"), buf: null };
+    }
+
+    const ab = await data.arrayBuffer();
+    console.log(`[sbDownloadToBuffer] Download concluído: ${key} (${ab.byteLength} bytes)`);
+    return { ok: true, buf: Buffer.from(ab) };
+  } catch (err) {
+    console.error(`[sbDownloadToBuffer] Exceção ao baixar ${key}:`, err.message);
+    return { ok: false, reason: err.message, buf: null };
+  }
 }
 
 async function ensureFileFromStorageIfMissing(localPath, storageKey) {
   if (existsSyncSafe(localPath)) return true;
   if (!storageKey) return false;
+
   const got = await sbDownloadToBuffer(storageKey);
   if (!got.ok || !got.buf) return false;
+
   await ensureDir(path.dirname(localPath));
   await fsp.writeFile(localPath, got.buf);
+  console.log(`[ensureFileFromStorageIfMissing] Arquivo restaurado do storage: ${localPath}`);
   return true;
 }
 
+// ------------------------------
+// Sync da tabela books no Supabase
+// ------------------------------
+async function syncBookRowToSupabase(manifest) {
+  if (!sbEnabled()) {
+    console.warn("Supabase Admin não disponível.");
+    return { ok: false };
+  }
+
+  if (!manifest || !manifest.id) {
+    console.warn("Manifest inválido.");
+    return { ok: false };
+  }
+
+  try {
+
+    const row = {
+      id: manifest.id,
+      user_id: manifest.ownerId || null,
+
+      child_name: manifest.child?.name || "",
+      child_age: manifest.child?.age || 6,
+      child_gender: manifest.child?.gender || "neutral",
+
+      theme: manifest.theme || "space",
+      style: manifest.style || "read",
+
+      status: manifest.status || "created",
+      step: manifest.step || "created",
+
+      message: manifest.message || "",
+      error: manifest.error || "",
+
+      done_steps: manifest.done_steps || 0,
+      total_steps: manifest.total_steps || 11,
+
+      cover_url: manifest.cover?.url || "",
+      pdf_url: manifest.pdf || "",
+
+      images: manifest.images || [],
+
+      manifest: manifest,
+
+      created_at: manifest.createdAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+
+      city: manifest.order?.city || "",
+      partner_id: manifest.partner?.id || null,
+
+      meta: manifest.meta || {}
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("books")
+      .upsert(row, { onConflict: "id" })
+      .select("id")
+      .single();
+
+    if (error) {
+      console.error("Erro ao salvar livro no Supabase:", error);
+      return { ok: false, error };
+    }
+
+    console.log("Livro sincronizado com Supabase:", data.id);
+
+    return { ok: true, data };
+
+  } catch (err) {
+
+    console.error("Falha ao sincronizar livro:", err);
+
+    return { ok: false, error: err };
+  }
+}
 // ------------------------------
 // ADMIN helpers
 // ------------------------------
@@ -248,6 +362,7 @@ function isAdminUser(user) {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+
   const email = String(user?.email || "").trim().toLowerCase();
   return !!email && list.includes(email);
 }
@@ -263,6 +378,7 @@ function canAccessBook(viewerUserId, manifest, reqUser) {
 function parseCookies(req) {
   const header = String(req.headers.cookie || "");
   const out = {};
+
   header.split(";").forEach((part) => {
     const idx = part.indexOf("=");
     if (idx < 0) return;
@@ -271,6 +387,7 @@ function parseCookies(req) {
     if (!k) return;
     out[k] = decodeURIComponent(v);
   });
+
   return out;
 }
 
@@ -279,9 +396,7 @@ function setAuthCookies(res, accessToken, refreshToken) {
   if (process.env.VERCEL) base.push("Secure");
 
   const c1 = [`${AUTH_COOKIE}=${encodeURIComponent(accessToken || "")}`, ...base, `Max-Age=${60 * 60}`].join("; ");
-  const c2 = [`${REFRESH_COOKIE}=${encodeURIComponent(refreshToken || "")}`, ...base, `Max-Age=${60 * 60 * 24 * 30}`].join(
-    "; "
-  );
+  const c2 = [`${REFRESH_COOKIE}=${encodeURIComponent(refreshToken || "")}`, ...base, `Max-Age=${60 * 60 * 24 * 30}`].join("; ");
 
   res.setHeader("Set-Cookie", [c1, c2]);
 }
@@ -425,7 +540,10 @@ async function openaiFetchJson(url, bodyObj, timeoutMs = 180000) {
   try {
     const r = await fetch(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(bodyObj),
       signal: ctrl.signal,
     });
@@ -488,7 +606,9 @@ async function replicateGetLatestVersionId(model) {
   if (replicateVersionCache.has(key)) return replicateVersionCache.get(key);
 
   const parsed = splitReplicateModel(key);
-  if (!parsed) throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name" ou configure REPLICATE_VERSION.`);
+  if (!parsed) {
+    throw new Error(`REPLICATE_MODEL inválido: "${key}". Use "owner/name" ou configure REPLICATE_VERSION.`);
+  }
 
   const info = await fetchJson(`https://api.replicate.com/v1/models/${parsed.owner}/${parsed.name}`, {
     method: "GET",
@@ -497,7 +617,9 @@ async function replicateGetLatestVersionId(model) {
   });
 
   const versionId = info?.latest_version?.id || info?.latest_version?.version || info?.latest_version;
-  if (!versionId) throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente.`);
+  if (!versionId) {
+    throw new Error(`Não consegui obter latest_version do modelo "${key}". Configure REPLICATE_VERSION manualmente.`);
+  }
 
   replicateVersionCache.set(key, String(versionId));
   return String(versionId);
@@ -510,7 +632,10 @@ async function replicateCreatePrediction({ model, input, timeoutMs = 180000 }) {
   return await fetchJson("https://api.replicate.com/v1/predictions", {
     method: "POST",
     timeoutMs,
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Token ${REPLICATE_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ version, input }),
   });
 }
@@ -530,7 +655,9 @@ async function replicateWaitPrediction(predictionId, { timeoutMs = 300000, pollM
 
     const st = String(pred?.status || "");
     if (st === "succeeded") return pred;
-    if (st === "failed" || st === "canceled") throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
+    if (st === "failed" || st === "canceled") {
+      throw new Error(String(pred?.error || "Prediction falhou no Replicate."));
+    }
 
     await sleep(pollMs);
   }
@@ -630,13 +757,20 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
       input.mask_image = maskDataUrl;
     }
 
-    // Se seed for fornecido, adiciona ao input para consistência
     if (seed !== null && Number.isInteger(seed)) {
       input.seed = seed;
     }
 
-    const created = await replicateCreatePrediction({ model: REPLICATE_MODEL, input, timeoutMs: 120000 });
-    const pred = await replicateWaitPrediction(created?.id, { timeoutMs: 300000, pollMs: 1200 });
+    const created = await replicateCreatePrediction({
+      model: REPLICATE_MODEL,
+      input,
+      timeoutMs: 120000,
+    });
+
+    const pred = await replicateWaitPrediction(created?.id, {
+      timeoutMs: 300000,
+      pollMs: 1200,
+    });
 
     let url = "";
     if (typeof pred?.output === "string") url = pred.output;
@@ -648,7 +782,6 @@ async function imageFromReference({ imagePngPath, maskPngPath, prompt, size = "1
     return await sharp(buf).png().toBuffer();
   }
 
-  // OpenAI não tem suporte a seed, então ignoramos
   return await openaiImageEditFallback({ imagePngPath, maskPngPath, prompt, size });
 }
 
@@ -735,9 +868,8 @@ function buildScenePromptFromParagraph({ paragraphText, themeKey, childName, chi
   const txt = String(paragraphText || "").trim();
   const style = String(styleKey || "read").trim();
 
-  // Instruções reforçadas para manter a identidade da criança
   const identityRules = `INSTRUÇÕES CRÍTICAS - IDENTIDADE DA CRIANÇA:
-- A criança na foto de referência é ${name ? name + ', ' : ''}um(a) ${g} de ${age} anos.
+- A criança na foto de referência é ${name ? `${name}, ` : ""}um(a) ${g} de ${age} anos.
 - quero que coloque essa criança na cena. Não invente outra criança.
 - Mantenha os mesmos traços faciais, cor de pele, cabelo e olhos.
 - Você PODE mudar a roupa, o corpo (ex: em pé, sentado), o penteado (desde que não descaracterize) e o cenário para combinar com a cena.
@@ -774,7 +906,7 @@ function buildCoverPrompt({ themeKey, childName, childAge, childGender, styleKey
   const style = String(styleKey || "read").trim();
 
   const identityRules = `INSTRUÇÕES CRÍTICAS - IDENTIDADE DA CRIANÇA:
-- A criança na foto de referência é ${name ? name + ', ' : ''}um(a) ${g} de ${age} anos.
+- A criança na foto de referência é ${name ? `${name}, ` : ""}um(a) ${g} de ${age} anos.
 - Use EXATAMENTE o ROSTO dessa criança. Não invente outra criança.
 - Mantenha os mesmos traços faciais, cor de pele, cabelo e olhos.
 - Você PODE mudar a roupa, o corpo e o cenário para uma pose de capa (ex: olhando para o horizonte, segurando um objeto do tema).
@@ -799,6 +931,7 @@ ${styleRule}
 
 IMPORTANTE: Não escreva textos ou legendas na imagem (o sistema adicionará o título depois).`;
 }
+
 // ------------------------------
 // Fontes e texto nas imagens
 // ------------------------------
@@ -816,7 +949,7 @@ function wrapLines(text, maxCharsPerLine) {
   let cur = "";
 
   for (const w of words) {
-    const next = cur ? cur + " " + w : w;
+    const next = cur ? `${cur} ${w}` : w;
     if (next.length <= maxCharsPerLine) {
       cur = next;
     } else {
@@ -964,7 +1097,14 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     for (let i = 0; i < pack.titleLines.length; i++) {
       const yLineTop = yTop + i * pack.lineGapTitle;
       const yBaseline = yLineTop + titleSize;
-      paths += makeTextPath({ font: bold, text: pack.titleLines[i], x: textX, yBaseline, fontSize: titleSize, fill }) + "\n";
+      paths += makeTextPath({
+        font: bold,
+        text: pack.titleLines[i],
+        x: textX,
+        yBaseline,
+        fontSize: titleSize,
+        fill,
+      }) + "\n";
     }
     yTop += pack.titleLines.length * pack.lineGapTitle + pack.spacer;
   }
@@ -973,7 +1113,14 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     for (let i = 0; i < pack.bodyLines.length; i++) {
       const yLineTop = yTop + i * pack.lineGapBody;
       const yBaseline = yLineTop + textSize;
-      paths += makeTextPath({ font: bold, text: pack.bodyLines[i], x: textX, yBaseline, fontSize: textSize, fill }) + "\n";
+      paths += makeTextPath({
+        font: bold,
+        text: pack.bodyLines[i],
+        x: textX,
+        yBaseline,
+        fontSize: textSize,
+        fill,
+      }) + "\n";
     }
   }
 
@@ -986,7 +1133,11 @@ async function stampStoryTextOnImage({ inputPath, outputPath, title, text }) {
     `<rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}" rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.90"/>` +
     `${paths}</svg>`;
 
-  await sharp(inputPath).composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).png().toFile(outputPath);
+  await sharp(inputPath)
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .png()
+    .toFile(outputPath);
+
   return outputPath;
 }
 
@@ -1028,7 +1179,14 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   for (let i = 0; i < titleLines.length; i++) {
     const yLineTop = yTop + i * lineGapTitle;
     const yBaseline = yLineTop + titleSize;
-    paths += makeTextPath({ font: bold, text: titleLines[i], x: textX, yBaseline, fontSize: titleSize, fill }) + "\n";
+    paths += makeTextPath({
+      font: bold,
+      text: titleLines[i],
+      x: textX,
+      yBaseline,
+      fontSize: titleSize,
+      fill,
+    }) + "\n";
   }
 
   if (titleLines.length) yTop += titleLines.length * lineGapTitle + Math.round(subSize * 0.35);
@@ -1036,7 +1194,14 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
   for (let i = 0; i < subLines.length; i++) {
     const yLineTop = yTop + i * lineGapSub;
     const yBaseline = yLineTop + subSize;
-    paths += makeTextPath({ font: bold, text: subLines[i], x: textX, yBaseline, fontSize: subSize, fill }) + "\n";
+    paths += makeTextPath({
+      font: bold,
+      text: subLines[i],
+      x: textX,
+      yBaseline,
+      fontSize: subSize,
+      fill,
+    }) + "\n";
   }
 
   const shadowDy = Math.round(H * 0.01);
@@ -1048,7 +1213,11 @@ async function stampCoverTextOnImage({ inputPath, outputPath, title, subtitle })
     `<rect x="${bandX}" y="${bandY}" width="${bandW}" height="${bandH}" rx="${rx}" ry="${rx}" fill="#FFFFFF" fill-opacity="0.88"/>` +
     `${paths}</svg>`;
 
-  await sharp(inputPath).composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).png().toFile(outputPath);
+  await sharp(inputPath)
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .png()
+    .toFile(outputPath);
+
   return outputPath;
 }
 
@@ -1069,7 +1238,9 @@ async function makePdfImagesOnly({ bookId, coverPath, pageImagePaths, outputDir 
 
   const all = [];
   if (coverPath && existsSyncSafe(coverPath)) all.push(coverPath);
-  for (const p of pageImagePaths || []) if (p && existsSyncSafe(p)) all.push(p);
+  for (const p of pageImagePaths || []) {
+    if (p && existsSyncSafe(p)) all.push(p);
+  }
 
   for (let i = 0; i < all.length; i++) {
     doc.rect(0, 0, A4_W, A4_H).fill("#FFFFFF");
@@ -1145,8 +1316,20 @@ async function saveManifest(userId, bookId, manifest) {
   if (sbEnabled()) {
     const buf = Buffer.from(JSON.stringify(manifest, null, 2), "utf-8");
     const key = sbKeyForOwner(manifest, bookId, "book.json") || sbKeyFor(userId, bookId, "book.json");
-    await sbUploadBuffer(key, buf, "application/json");
+    const result = await sbUploadBuffer(key, buf, "application/json");
+
+    if (result.ok) {
+      console.log(`[saveManifest] Manifesto enviado com sucesso para ${key}`);
+    } else {
+      console.error(`[saveManifest] Falha ao enviar manifesto para ${key}: ${result.reason}`);
+    }
   }
+
+  const syncResult = await syncBookRowToSupabase(manifest);
+  if (!syncResult.ok) {
+    console.error(`[saveManifest] Falha ao sincronizar livro na tabela books: ${syncResult.reason}`);
+  }
+  console.log("SALVANDO LIVRO NO SUPABASE:", manifest.id);
 }
 
 function makeEmptyManifest(id, ownerId) {
@@ -1185,6 +1368,7 @@ function loadPartnersList() {
       if (Array.isArray(arr)) return arr;
     } catch {}
   }
+
   return [
     { id: "p1", name: "Parceiro 01", city: "Aquidauana", type: "manufacturing" },
     { id: "p2", name: "Parceiro 02", city: "Anastácio", type: "manufacturing" },
@@ -1204,7 +1388,10 @@ function normCity(s) {
 }
 
 function chooseManufacturingPartnerByCity(city) {
-  const list = Array.isArray(PARTNERS) ? PARTNERS.filter((p) => String(p?.type || "manufacturing") === "manufacturing") : [];
+  const list = Array.isArray(PARTNERS)
+    ? PARTNERS.filter((p) => String(p?.type || "manufacturing") === "manufacturing")
+    : [];
+
   if (!list.length) return null;
 
   const target = normCity(city);
@@ -1212,6 +1399,7 @@ function chooseManufacturingPartnerByCity(city) {
     const same = list.find((p) => normCity(p.city) === target);
     if (same) return same;
   }
+
   return list[0];
 }
 
@@ -1223,13 +1411,16 @@ function ensureOrderFields(m) {
 }
 
 function ensurePartnerFields(m) {
-  if (!m.partner) m.partner = { id: "", name: "", city: "", type: "manufacturing", assignedAt: "", rule: "" };
+  if (!m.partner) {
+    m.partner = { id: "", name: "", city: "", type: "manufacturing", assignedAt: "", rule: "" };
+  }
   return m;
 }
 
 function assignPartnerIfMissing(m) {
   m = ensureOrderFields(m);
   m = ensurePartnerFields(m);
+
   if (m.partner?.id) return m;
 
   const p = chooseManufacturingPartnerByCity(m.order?.city || "");
@@ -1251,7 +1442,7 @@ function assignPartnerIfMissing(m) {
 function requirePartnerToken(req, res) {
   if (!PARTNER_API_TOKEN) return true;
 
-  const header = String(req.headers["authorization"] || "");
+  const header = String(req.headers.authorization || "");
   const q = String(req.query?.token || "");
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : q.trim();
 
@@ -1259,6 +1450,7 @@ function requirePartnerToken(req, res) {
     res.status(401).json({ ok: false, error: "invalid_partner_token" });
     return false;
   }
+
   return true;
 }
 
@@ -1318,7 +1510,9 @@ async function ensureBasesOrThrow(userId, id, m) {
         const origPath = path.join(bookDir, origName);
         const kOrig = String(m.photo.storageKey || sbKeyForOwner(m, id, origName) || sbKeyFor(userId, id, origName));
         await ensureFileFromStorageIfMissing(origPath, kOrig);
-        if (existsSyncSafe(origPath)) await sharp(origPath).png().toFile(photoPngPath);
+        if (existsSyncSafe(origPath)) {
+          await sharp(origPath).png().toFile(photoPngPath);
+        }
       }
     }
 
@@ -1331,11 +1525,16 @@ async function ensureBasesOrThrow(userId, id, m) {
       const meta = await sharp(photoPngPath).metadata();
       const ww = meta?.width || 1024;
       const hh = meta?.height || 1024;
+
       const transparent = await sharp({
-        create: { width: ww, height: hh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-      })
-        .png()
-        .toBuffer();
+        create: {
+          width: ww,
+          height: hh,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        },
+      }).png().toBuffer();
+
       await fsp.writeFile(maskFullPath, transparent);
     }
 
@@ -1349,8 +1548,16 @@ async function ensureBasesOrThrow(userId, id, m) {
         const w = Math.max(1, Math.round(w0 * scale));
         const h = Math.max(1, Math.round(h0 * scale));
 
-        await sharp(photoPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).png().toFile(imagePngPath);
-        await sharp(maskFullPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskPngPath);
+        await sharp(photoPngPath)
+          .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+          .png()
+          .toFile(imagePngPath);
+
+        await sharp(maskFullPath)
+          .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+          .ensureAlpha()
+          .png()
+          .toFile(maskPngPath);
 
         const mi = await sharp(imagePngPath).metadata();
         const mm = await sharp(maskPngPath).metadata();
@@ -1409,6 +1616,11 @@ function isTransientError(msg) {
   );
 }
 
+const mercadopagoPixApi = require("./api/mercadopago/pix");
+const mercadopagoStatusApi = require("./api/mercadopago/status");
+const mercadopagoWebhookApi = require("./api/webhooks/mercadopago");
+const checkoutApi = require("./api/checkout");
+
 // ------------------------------
 // API Router
 // ------------------------------
@@ -1417,6 +1629,10 @@ apiRouter.use(express.json({ limit: JSON_LIMIT }));
 
 // ✅ IMPORTANTE: sem isso, req.cookies fica undefined
 apiRouter.use(cookieParser());
+apiRouter.all("/mercadopago/pix", (req, res) => mercadopagoPixApi(req, res));
+apiRouter.all("/mercadopago/status", (req, res) => mercadopagoStatusApi(req, res));
+apiRouter.all("/webhooks/mercadopago", (req, res) => mercadopagoWebhookApi(req, res));
+apiRouter.all("/checkout", (req, res) => checkoutApi(req, res));
 
 // Middleware de parceiro ref (para todas as rotas, mas só usado em algumas)
 apiRouter.use((req, res, next) => {
@@ -1443,6 +1659,7 @@ apiRouter.get("/partners", async (req, res) => {
       city: String(p.city || ""),
       type: String(p.type || "manufacturing"),
     }));
+
     return res.json({ ok: true, partners: list });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
@@ -1567,42 +1784,6 @@ apiRouter.get("/admin/partner-orders", requireAuth, async (req, res) => {
   }
 });
 
-apiRouter.post("/checkout", requireAuth, async (req, res) => {
-  try {
-    if (!supabaseAdmin) return res.status(500).json({ error: "Supabase não configurado" });
-
-    const userId = req.user.id;
-    const { bookId, name, whatsapp, email, address, pack, giftwrap, total, obs, partnerRef } = req.body;
-
-    if (!bookId || !name || !whatsapp || !email || !address) {
-      return res.status(400).json({ error: "Campos obrigatórios ausentes" });
-    }
-
-    let partnerId = null;
-    if (partnerRef) {
-      const { data: partner } = await supabaseAdmin.from("partners").select("id").eq("id", partnerRef).maybeSingle();
-      if (partner) partnerId = partner.id;
-    }
-
-    const orderData = { bookId, name, whatsapp, email, address, pack, giftwrap, total, obs };
-
-    const { data, error } = await supabaseAdmin
-      .from("orders")
-      .insert({ user_id: userId, partner_id: partnerId, order_data: orderData, status: "pending" })
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Erro ao inserir pedido:", error);
-      return res.status(500).json({ error: "Erro ao salvar pedido" });
-    }
-
-    res.json({ ok: true, orderId: data.id });
-  } catch (e) {
-    console.error("checkout error:", e);
-    res.status(500).json({ error: "Erro interno" });
-  }
-});
 
 apiRouter.get("/partner/sales", async (req, res) => {
   if (!requirePartnerToken(req, res)) return;
@@ -1611,7 +1792,12 @@ apiRouter.get("/partner/sales", async (req, res) => {
   const partnerId = String(req.query?.partnerId || "").trim();
   if (!partnerId) return res.status(400).json({ error: "partnerId required" });
 
-  const { data, error } = await supabaseAdmin.from("orders").select("*").eq("partner_id", partnerId).order("created_at", { ascending: false });
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("*")
+    .eq("partner_id", partnerId)
+    .order("created_at", { ascending: false });
+
   if (error) {
     console.error(error);
     return res.status(500).json({ error: "Erro ao buscar pedidos" });
@@ -1623,7 +1809,12 @@ apiRouter.get("/partner/sales", async (req, res) => {
 // Auth
 apiRouter.post("/auth/signup", async (req, res) => {
   try {
-    if (!supabaseAuth) return res.status(500).json({ ok: false, error: "Supabase Auth não configurado (SUPABASE_ANON_KEY)." });
+    if (!supabaseAuth) {
+      return res.status(500).json({
+        ok: false,
+        error: "Supabase Auth não configurado (SUPABASE_ANON_KEY).",
+      });
+    }
 
     const name = String(req.body?.name || "").trim();
     const email = normalizeEmail(req.body?.email);
@@ -1631,9 +1822,16 @@ apiRouter.post("/auth/signup", async (req, res) => {
 
     if (!name || name.length < 2) return res.status(400).json({ ok: false, error: "Nome inválido." });
     if (!email || !email.includes("@")) return res.status(400).json({ ok: false, error: "E-mail inválido." });
-    if (!password || password.length < 6) return res.status(400).json({ ok: false, error: "Senha deve ter no mínimo 6 caracteres." });
+    if (!password || password.length < 6) {
+      return res.status(400).json({ ok: false, error: "Senha deve ter no mínimo 6 caracteres." });
+    }
 
-    const { data, error } = await supabaseAuth.auth.signUp({ email, password, options: { data: { name } } });
+    const { data, error } = await supabaseAuth.auth.signUp({
+      email,
+      password,
+      options: { data: { name } },
+    });
+
     if (error) return res.status(400).json({ ok: false, error: String(error.message || error) });
 
     if (data?.session?.access_token && data?.session?.refresh_token) {
@@ -1649,7 +1847,12 @@ apiRouter.post("/auth/signup", async (req, res) => {
 
 apiRouter.post("/auth/login", async (req, res) => {
   try {
-    if (!supabaseAuth) return res.status(500).json({ ok: false, error: "Supabase Auth não configurado (SUPABASE_ANON_KEY)." });
+    if (!supabaseAuth) {
+      return res.status(500).json({
+        ok: false,
+        error: "Supabase Auth não configurado (SUPABASE_ANON_KEY).",
+      });
+    }
 
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
@@ -1659,8 +1862,12 @@ apiRouter.post("/auth/login", async (req, res) => {
 
     const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
     if (error) return res.status(401).json({ ok: false, error: "E-mail ou senha incorretos." });
+
     if (!data?.session?.access_token || !data?.session?.refresh_token) {
-      return res.status(401).json({ ok: false, error: "Sem sessão. Verifique confirmação de e-mail no Supabase." });
+      return res.status(401).json({
+        ok: false,
+        error: "Sem sessão. Verifique confirmação de e-mail no Supabase.",
+      });
     }
 
     setAuthCookies(res, data.session.access_token, data.session.refresh_token);
@@ -1712,7 +1919,9 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
     const mask = req.body?.mask;
 
     if (!id) return res.status(400).json({ ok: false, error: "id ausente" });
-    if (!photo || !isDataUrl(photo)) return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
+    if (!photo || !isDataUrl(photo)) {
+      return res.status(400).json({ ok: false, error: "photo ausente ou inválida (dataURL)" });
+    }
 
     const buf = dataUrlToBuffer(photo);
     let maskBuf = mask && isDataUrl(mask) ? dataUrlToBuffer(mask) : null;
@@ -1729,7 +1938,7 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
     const bookDir = bookDirOf(userId, id);
     await ensureDir(bookDir);
 
-    const originalName = "photo." + ext;
+    const originalName = `photo.${ext}`;
     const originalPath = path.join(bookDir, originalName);
     await fsp.writeFile(originalPath, buf);
 
@@ -1746,11 +1955,16 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
       const meta = await sharp(photoPngPath).metadata();
       const ww = meta?.width || 1024;
       const hh = meta?.height || 1024;
+
       const transparent = await sharp({
-        create: { width: ww, height: hh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-      })
-        .png()
-        .toBuffer();
+        create: {
+          width: ww,
+          height: hh,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        },
+      }).png().toBuffer();
+
       await fsp.writeFile(maskPngPath, transparent);
     }
 
@@ -1765,11 +1979,18 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
 
     const editBaseName = "edit_base.png";
     const editBasePath = path.join(bookDir, editBaseName);
-    await sharp(photoPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).png().toFile(editBasePath);
+    await sharp(photoPngPath)
+      .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+      .png()
+      .toFile(editBasePath);
 
     const maskBaseName = "mask_base.png";
     const maskBasePath = path.join(bookDir, maskBaseName);
-    await sharp(maskPngPath).resize({ width: w, height: h, fit: "fill", withoutEnlargement: true }).ensureAlpha().png().toFile(maskBasePath);
+    await sharp(maskPngPath)
+      .resize({ width: w, height: h, fit: "fill", withoutEnlargement: true })
+      .ensureAlpha()
+      .png()
+      .toFile(maskBasePath);
 
     const mi = await sharp(editBasePath).metadata();
     const mm = await sharp(maskBasePath).metadata();
@@ -1788,14 +2009,36 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
       maskKey = sbKeyFor(userId, id, maskPngName);
       maskBaseKey = sbKeyFor(userId, id, maskBaseName);
 
-      await sbUploadBuffer(photoKey, buf, mime);
-      await sbUploadBuffer(editBaseKey, await fsp.readFile(editBasePath), "image/png");
-      await sbUploadBuffer(maskKey, await fsp.readFile(maskPngPath), "image/png");
-      await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
+      let result;
+      result = await sbUploadBuffer(photoKey, buf, mime);
+      if (!result.ok) console.error(`[uploadPhoto] Falha no upload de photo: ${result.reason}`);
+
+      result = await sbUploadBuffer(editBaseKey, await fsp.readFile(editBasePath), "image/png");
+      if (!result.ok) console.error(`[uploadPhoto] Falha no upload de editBase: ${result.reason}`);
+
+      result = await sbUploadBuffer(maskKey, await fsp.readFile(maskPngPath), "image/png");
+      if (!result.ok) console.error(`[uploadPhoto] Falha no upload de mask: ${result.reason}`);
+
+      result = await sbUploadBuffer(maskBaseKey, await fsp.readFile(maskBasePath), "image/png");
+      if (!result.ok) console.error(`[uploadPhoto] Falha no upload de maskBase: ${result.reason}`);
     }
 
-    m.photo = { ok: true, file: originalName, mime, editBase: editBaseName, storageKey: photoKey, editBaseKey };
-    m.mask = { ok: true, file: maskPngName, editBase: maskBaseName, storageKey: maskKey, editBaseKey: maskBaseKey };
+    m.photo = {
+      ok: true,
+      file: originalName,
+      mime,
+      editBase: editBaseName,
+      storageKey: photoKey,
+      editBaseKey,
+    };
+
+    m.mask = {
+      ok: true,
+      file: maskPngName,
+      editBase: maskBaseName,
+      storageKey: maskKey,
+      editBaseKey: maskBaseKey,
+    };
 
     m.status = m.status === "done" ? "done" : "created";
     m.step = m.status === "done" ? "done" : "created";
@@ -1824,7 +2067,9 @@ apiRouter.get("/status/:id", requireAuth, async (req, res) => {
     const m = await loadManifestAsViewer(viewerId, id, req.user);
 
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
-    if (!canAccessBook(viewerId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(viewerId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
 
     const images = (m.images || []).map((it) => ({ page: it.page, url: it.url || "" }));
     const coverUrl = m.cover?.ok ? m.cover?.url || "" : "";
@@ -1858,7 +2103,9 @@ apiRouter.post("/generate", requireAuth, async (req, res) => {
   try {
     const m = await loadManifestAsViewer(userId, id, req.user);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
-    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(userId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
 
     const childName = String(req.body?.childName || m.child?.name || "").trim();
     const childAge = Number(req.body?.childAge ?? m.child?.age ?? 6);
@@ -1867,7 +2114,9 @@ apiRouter.post("/generate", requireAuth, async (req, res) => {
     const style = String(req.body?.style || m.style || "read");
     const city = String(req.body?.city || m.order?.city || "").trim();
 
-    if (!childName || childName.length < 2) return res.status(400).json({ ok: false, error: "childName inválido" });
+    if (!childName || childName.length < 2) {
+      return res.status(400).json({ ok: false, error: "childName inválido" });
+    }
     if (!theme) return res.status(400).json({ ok: false, error: "theme inválido" });
 
     m.child = { name: childName, age: clamp(childAge, 2, 12), gender: childGender };
@@ -1911,7 +2160,9 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
     let m = await loadManifest(userId, id);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
 
-    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(userId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
     if (m.status === "done" || m.step === "done") return res.json({ ok: true, step: "done" });
     if (m.status === "failed" || m.step === "failed") return res.json({ ok: true, step: "failed" });
 
@@ -1945,12 +2196,10 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
     const childGender = String(m.child?.gender || "neutral");
     const theme = String(m.theme || "space");
 
-    // Gerar um seed fixo para este livro (usado no Replicate para consistência)
-    const seed = parseInt(crypto.createHash('md5').update(id).digest('hex').slice(0, 8), 16);
+    // Gerar um seed fixo para este livro
+    const seed = parseInt(crypto.createHash("md5").update(id).digest("hex").slice(0, 8), 16);
 
-    // ---------------------
     // STORY
-    // ---------------------
     if (m.step === "story") {
       if (Array.isArray(m.pages) && m.pages.length >= 4) {
         m.step = "cover";
@@ -1977,9 +2226,7 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       return res.json({ ok: true, step: "story_done" });
     }
 
-    // ---------------------
     // COVER
-    // ---------------------
     if (m.step === "cover") {
       const coverBaseName = "cover.png";
       const coverBasePath = path.join(bookDir, coverBaseName);
@@ -2002,8 +2249,21 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
         return res.json({ ok: true, step: "cover_skipped" });
       }
 
-      const coverPrompt = buildCoverPrompt({ themeKey: theme, childName, childAge, childGender, styleKey });
-      const coverBuf = await imageFromReference({ imagePngPath, maskPngPath, prompt: coverPrompt, size: "1024x1024", seed });
+      const coverPrompt = buildCoverPrompt({
+        themeKey: theme,
+        childName,
+        childAge,
+        childGender,
+        styleKey,
+      });
+
+      const coverBuf = await imageFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt: coverPrompt,
+        size: "1024x1024",
+        seed,
+      });
 
       await fsp.writeFile(coverBasePath, coverBuf);
 
@@ -2021,7 +2281,13 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       let coverKey = "";
       if (sbEnabled()) {
         coverKey = sbKeyFor(userId, id, coverFinalName);
-        await sbUploadBuffer(coverKey, await fsp.readFile(coverFinalPath), "image/png");
+        const uploadResult = await sbUploadBuffer(coverKey, await fsp.readFile(coverFinalPath), "image/png");
+        if (!uploadResult.ok) {
+          console.error(`[generateNext] Falha no upload da capa: ${uploadResult.reason}`);
+          m.error = `Upload da capa falhou: ${uploadResult.reason}`;
+        } else {
+          console.log(`[generateNext] Capa enviada com sucesso: ${coverKey}`);
+        }
       }
 
       m.cover = {
@@ -2040,9 +2306,7 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       return res.json({ ok: true, step: "cover_done" });
     }
 
-    // ---------------------
-    // IMAGES (páginas)
-    // ---------------------
+    // IMAGES
     if (String(m.step || "").startsWith("image_")) {
       const n = Number(String(m.step).split("_")[1] || "1");
       const pages = Array.isArray(m.pages) ? m.pages : [];
@@ -2099,7 +2363,14 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
         styleKey,
       });
 
-      const imgBuf = await imageFromReference({ imagePngPath, maskPngPath, prompt, size: "1024x1024", seed });
+      const imgBuf = await imageFromReference({
+        imagePngPath,
+        maskPngPath,
+        prompt,
+        size: "1024x1024",
+        seed,
+      });
+
       await fsp.writeFile(basePath, imgBuf);
 
       await stampStoryTextOnImage({
@@ -2116,7 +2387,13 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       let pageKey = "";
       if (sbEnabled()) {
         pageKey = sbKeyFor(userId, id, finalName);
-        await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+        const uploadResult = await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+        if (!uploadResult.ok) {
+          console.error(`[generateNext] Falha no upload da página ${p.page}: ${uploadResult.reason}`);
+          m.error = `Upload da página ${p.page} falhou: ${uploadResult.reason}`;
+        } else {
+          console.log(`[generateNext] Página ${p.page} enviada com sucesso: ${pageKey}`);
+        }
       }
 
       const images = Array.isArray(m.images) ? m.images : [];
@@ -2141,9 +2418,7 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       return res.json({ ok: true, step: `image_${n}_done` });
     }
 
-    // ---------------------
     // PDF
-    // ---------------------
     if (m.step === "pdf") {
       const pdfName = `book-${id}.pdf`;
       const pdfPath = path.join(bookDir, pdfName);
@@ -2185,12 +2460,23 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
       const coverPath = path.join(bookDir, "cover_final.png");
       const pageImagePaths = (m.images || []).map((it) => it.path).filter(Boolean);
 
-      const outPdfPath = await makePdfImagesOnly({ bookId: id, coverPath, pageImagePaths, outputDir: bookDir });
+      const outPdfPath = await makePdfImagesOnly({
+        bookId: id,
+        coverPath,
+        pageImagePaths,
+        outputDir: bookDir,
+      });
 
       let pdfKey = "";
       if (sbEnabled()) {
         pdfKey = sbKeyFor(userId, id, pdfName);
-        await sbUploadBuffer(pdfKey, await fsp.readFile(outPdfPath), "application/pdf");
+        const uploadResult = await sbUploadBuffer(pdfKey, await fsp.readFile(outPdfPath), "application/pdf");
+        if (!uploadResult.ok) {
+          console.error(`[generateNext] Falha no upload do PDF: ${uploadResult.reason}`);
+          m.error = `Upload do PDF falhou: ${uploadResult.reason}`;
+        } else {
+          console.log(`[generateNext] PDF enviado com sucesso: ${pdfKey}`);
+        }
       }
 
       m.status = "done";
@@ -2222,7 +2508,9 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
         const m = await loadManifest(userId, id);
         if (m && m.status !== "done") {
           let cooldownMs = 6000;
-          if (msg.includes("rate limit") || msg.includes("429") || msg.includes("Request was throttled")) cooldownMs = 30000;
+          if (msg.includes("rate limit") || msg.includes("429") || msg.includes("Request was throttled")) {
+            cooldownMs = 30000;
+          }
 
           if (isTransientError(msg)) {
             setCooldown(m, cooldownMs, msg);
@@ -2270,7 +2558,7 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
 
     id = String(req.body?.id || "").trim();
     page = Number(req.body?.page);
-    textInput = String(req.body?.text || "").trim(); // texto editado (pode ser vazio)
+    textInput = String(req.body?.text || "").trim();
 
     if (!id || !Number.isFinite(page) || page < 1) {
       return res.status(400).json({ ok: false, error: "id ou page inválidos" });
@@ -2278,32 +2566,28 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
 
     let m = await loadManifest(userId, id);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
-    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(userId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
 
-    // Se o livro estiver gerando, pode regenerar? Vamos permitir se existir.
-    // Mas não pode estar em lock.
     if (!acquireLock(userId, id)) {
       return res.status(409).json({ ok: false, error: "operação já em andamento" });
     }
 
-    // Recarrega manifesto após lock
     m = await loadManifest(userId, id);
     if (!m) throw new Error("Manifest sumiu");
 
-    // Verifica se a página existe no manifesto
     const pages = Array.isArray(m.pages) ? m.pages : [];
-    const pageData = pages.find(p => Number(p.page) === page);
+    const pageData = pages.find((p) => Number(p.page) === page);
     if (!pageData) {
       return res.status(404).json({ ok: false, error: "página não encontrada no manifesto" });
     }
 
-    // Usa o texto enviado (editado) ou o texto salvo
     const pageText = textInput || String(pageData.text || "").trim();
     if (!pageText) {
       return res.status(400).json({ ok: false, error: "texto da página está vazio" });
     }
 
-    // Garante que temos as bases
     const { imagePngPath, maskPngPath } = await ensureBasesOrThrow(userId, id, m);
 
     const styleKey = String(m.style || "read").trim();
@@ -2312,7 +2596,6 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
     const childGender = String(m.child?.gender || "neutral");
     const theme = String(m.theme || "space");
 
-    // Constrói o prompt igual ao da geração inicial
     const prompt = buildScenePromptFromParagraph({
       paragraphText: pageText,
       themeKey: theme,
@@ -2322,27 +2605,23 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
       styleKey,
     });
 
-    // Gera nova imagem SEM seed (para variar)
     const imgBuf = await imageFromReference({
       imagePngPath,
       maskPngPath,
       prompt,
       size: "1024x1024",
-      seed: null, // null = aleatório
+      seed: null,
     });
 
-    // Caminhos dos arquivos da página
     const bookDir = bookDirOf(userId, id);
     const pageNumberPadded = String(page).padStart(2, "0");
-    const baseName = `page_${pageNumberPadded}.png`; // imagem sem texto
+    const baseName = `page_${pageNumberPadded}.png`;
     const basePath = path.join(bookDir, baseName);
-    const finalName = `page_${pageNumberPadded}_final.png`; // imagem com texto
+    const finalName = `page_${pageNumberPadded}_final.png`;
     const finalPath = path.join(bookDir, finalName);
 
-    // Salva a imagem base (sem texto)
     await fsp.writeFile(basePath, imgBuf);
 
-    // Aplica o texto na imagem
     await stampStoryTextOnImage({
       inputPath: basePath,
       outputPath: finalPath,
@@ -2350,20 +2629,23 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
       text: pageText,
     });
 
-    // Remove a imagem base (opcional)
-    try { await fsp.unlink(basePath); } catch {}
+    try {
+      await fsp.unlink(basePath);
+    } catch {}
 
-    // Atualiza storage (se habilitado)
     let storageKey = "";
     if (sbEnabled()) {
       storageKey = sbKeyFor(userId, id, finalName);
-      await sbUploadBuffer(storageKey, await fsp.readFile(finalPath), "image/png");
+      const uploadResult = await sbUploadBuffer(storageKey, await fsp.readFile(finalPath), "image/png");
+      if (!uploadResult.ok) {
+        console.error(`[regeneratePage] Falha no upload da página ${page}: ${uploadResult.reason}`);
+      }
     }
 
-    // Atualiza a entrada da página no array images do manifesto
     const images = Array.isArray(m.images) ? m.images : [];
-    const idx = images.findIndex(img => Number(img.page) === page);
+    const idx = images.findIndex((img) => Number(img.page) === page);
     const newUrl = `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`;
+
     if (idx >= 0) {
       images[idx].url = newUrl;
       images[idx].storageKey = storageKey;
@@ -2379,23 +2661,19 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
         storageKey,
       });
     }
-    m.images = images;
 
-    // Reseta contadores de erro (opcional)
+    m.images = images;
     m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
     m.updatedAt = nowISO();
 
     await saveManifest(userId, id, m);
 
-    // Retorna a nova URL com timestamp para cache busting
-    const bustedUrl = newUrl + "?v=" + Date.now();
-
+    const bustedUrl = `${newUrl}?v=${Date.now()}`;
     return res.json({ ok: true, url: bustedUrl, rev: Date.now() });
   } catch (e) {
     const msg = String(e?.message || e || "Erro");
     console.error(`[regeneratePage] Erro: ${msg}`);
 
-    // Tratamento de erro transitório (cooldown)
     if (userId && id) {
       try {
         const m = await loadManifest(userId, id);
@@ -2410,7 +2688,7 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
             message: "Limitação de taxa. Tentaremos novamente em alguns segundos.",
           });
         }
-      } catch (inner) {}
+      } catch {}
     }
 
     return res.status(500).json({ ok: false, error: msg });
@@ -2437,23 +2715,22 @@ apiRouter.post("/editPageText", requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "id ou page inválidos" });
     }
 
-    let m = await loadManifest(userId, id);
+    const m = await loadManifest(userId, id);
     if (!m) return res.status(404).json({ ok: false, error: "book não existe" });
-    if (!canAccessBook(userId, m, req.user)) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!canAccessBook(userId, m, req.user)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
 
-    // Inicializa overrides se necessário
     if (!m.overrides) m.overrides = {};
     if (!m.overrides.pagesText) m.overrides.pagesText = {};
 
-    // Salva o texto editado no overrides (pode ser um objeto ou array, aqui usamos objeto)
     m.overrides.pagesText[String(page)] = text;
-
     m.updatedAt = nowISO();
+
     await saveManifest(userId, id, m);
 
-    // Retorna a URL da imagem atual (para possível refresh)
     const images = Array.isArray(m.images) ? m.images : [];
-    const img = images.find(img => Number(img.page) === page);
+    const img = images.find((im) => Number(im.page) === page);
     const url = img?.url ? String(img.url) : "";
 
     return res.json({ ok: true, url, rev: Date.now() });
@@ -2472,7 +2749,14 @@ apiRouter.get("/image/:id/:file", requireAuth, async (req, res) => {
     const file = String(req.params?.file || "").trim();
 
     if (!id || !file) return res.status(400).send("bad request");
-    if (id.includes("..") || id.includes("/") || id.includes("\\") || file.includes("..") || file.includes("/") || file.includes("\\")) {
+    if (
+      id.includes("..") ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      file.includes("..") ||
+      file.includes("/") ||
+      file.includes("\\")
+    ) {
       return res.status(400).send("bad request");
     }
 
@@ -2514,7 +2798,6 @@ apiRouter.get("/download/:id", requireAuth, async (req, res) => {
     if (m.status !== "done") return res.status(409).send("PDF ainda não está pronto");
 
     const ownerId = String(m.ownerId || viewerId);
-
     const pdfName = `book-${id}.pdf`;
     const pdfPath = path.join(bookDirOf(ownerId, id), pdfName);
 
@@ -2573,7 +2856,7 @@ module.exports = {
 
   // Para o módulo admin / gerais
   OUT_DIR,
-  USERS_DIR, 
+  USERS_DIR,
   USERS_FILE,
   JSON_LIMIT,
 };

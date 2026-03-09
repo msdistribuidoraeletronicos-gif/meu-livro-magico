@@ -1,14 +1,6 @@
 /**
  * partners.shared.js — Helpers compartilhados (Supabase + Auth + Layout + Reset + Email)
  * UNIFICADO: agora usa JWT com cookie 'partner_token' (path='/') para todas as autenticações.
- *
- * ✅ ALTERAÇÃO pedida:
- * - O layout agora aceita um "slot" à esquerda do brand:
- *     layout(title, innerHtml, navRightHtml, navLeftHtml)
- *   Assim você consegue colocar o botão "Voltar" ao lado esquerdo de "🤝 Parceiros • Meu Livro Mágico".
- *
- * - Mantém compatibilidade: se você continuar chamando layout(title, innerHtml, navRightHtml),
- *   funciona igual (navLeft fica vazio).
  */
 "use strict";
 
@@ -526,9 +518,9 @@ function buildPartnersShared(app, opts = {}) {
     COOKIE_SECRET,
     setPartnerCookie,
     clearPartnerCookie,
-    getPartnerIdFromToken, // NOVA FUNÇÃO
+    getPartnerIdFromToken,
     requirePartner,
-    requirePartnerAuthForId,
+    requirePartnerAuthForId, // <-- ESSA FUNÇÃO É FUNDAMENTAL
     verifyPassword,
     hashPassword,
 

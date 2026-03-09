@@ -2,24 +2,77 @@
  * profile.page.js — Página /profile (Perfil do usuário)
  *
  * ✅ Rotas:
- *   GET  /profile          (UI)
- *   GET  /api/me           (JSON: usuário + profile)
- *   GET  /api/my-books     (JSON: livros gerados pelo usuário — APENAS CONCLUÍDOS)
- *   GET  /api/my-orders    (JSON: pedidos realizados pelo usuário)
+ *   GET  /profile
+ *   GET  /api/me
+ *   GET  /api/my-books
+ *   GET  /api/my-orders
+ *
+ *   GET  /api/my-wallet
+ *   POST /api/my-wallet/checkin
+ *   POST /api/my-wallet/withdraw
+ *   POST /api/my-wallet/buy
+ *
+ *   GET  /api/my-account
+ *   POST /api/my-account/verify-password
+ *   POST /api/my-account/update
  *
  * Requer:
  * - app.js deve passar { requireAuth, supabaseAdmin, supabaseAuth }
  * - requireAuth precisa setar req.user = { id, email }
+ *
+ * Tabelas esperadas:
+ * - profiles
+ * - books
+ * - orders
+ * - user_wallets
+ * - user_wallet_activities
  */
 
 "use strict";
+
+const SibApiV3Sdk = require("sib-api-v3-sdk");
+const { renderProfilePage } = require("./profile.page.view");
+const {
+  PROFILE_PAGE_CSS,
+  buildProfilePageJS,
+} = require("./profile.page.assets");
 
 module.exports = function mountProfilePage(app, options = {}) {
   const { requireAuth, supabaseAdmin, supabaseAuth } = options;
 
   if (!app) throw new Error("mountProfilePage: app ausente");
-  if (typeof requireAuth !== "function") throw new Error("mountProfilePage: requireAuth ausente");
+  if (typeof requireAuth !== "function") {
+    throw new Error("mountProfilePage: requireAuth ausente");
+  }
 
+  // ---------------------------------------------------
+  // Brevo / Email admin
+  // ---------------------------------------------------
+  const BREVO_API_KEY = String(process.env.BREVO_API_KEY || "").trim();
+  const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS || "").trim();
+  const WITHDRAW_FROM_EMAIL = String(
+    process.env.WITHDRAW_FROM_EMAIL ||
+      process.env.PARTNER_RESET_FROM ||
+      process.env.EMAIL_FROM ||
+      ""
+  ).trim();
+  const WITHDRAW_FROM_NAME = String(
+    process.env.WITHDRAW_FROM_NAME ||
+      process.env.PARTNER_RESET_FROM_NAME ||
+      "Meu Livro Mágico"
+  ).trim();
+
+  let brevoClient = null;
+  if (BREVO_API_KEY) {
+    const client = SibApiV3Sdk.ApiClient.instance;
+    const apiKey = client.authentications["api-key"];
+    apiKey.apiKey = BREVO_API_KEY;
+    brevoClient = new SibApiV3Sdk.TransactionalEmailsApi();
+  }
+
+  // ---------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------
   function escapeHtml(s) {
     return String(s ?? "")
       .replace(/&/g, "&amp;")
@@ -29,6 +82,906 @@ module.exports = function mountProfilePage(app, options = {}) {
       .replace(/'/g, "&#39;");
   }
 
+  function toNum(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function clamp(v, min, max) {
+    const n = Number(v || 0);
+    if (n < min) return min;
+    if (n > max) return max;
+    return n;
+  }
+
+  function safeTrim(v, max = 300) {
+    return String(v == null ? "" : v).trim().slice(0, max);
+  }
+
+  function onlyDigits(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  }
+
+  function normalizeEmail(v) {
+    return safeTrim(v, 180).toLowerCase();
+  }
+
+  function isValidEmail(v) {
+    const s = normalizeEmail(v);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);
+  }
+
+  function normalizePixType(v) {
+    const raw = safeTrim(v, 40).toLowerCase();
+    const map = {
+      cpf: "cpf",
+      cnpj: "cnpj",
+      email: "email",
+      telefone: "telefone",
+      phone: "telefone",
+      celular: "telefone",
+      aleatoria: "aleatoria",
+      aleatório: "aleatoria",
+      random: "aleatoria",
+    };
+    return map[raw] || raw;
+  }
+
+  function isValidPixType(v) {
+    return ["cpf", "cnpj", "email", "telefone", "aleatoria"].includes(
+      normalizePixType(v)
+    );
+  }
+
+  function normalizeUF(v) {
+    return safeTrim(v, 2).toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  }
+
+  function normalizeCep(v) {
+    return onlyDigits(v).slice(0, 8);
+  }
+
+  function normalizePhone(v) {
+    return onlyDigits(v).slice(0, 20);
+  }
+
+  function startOfDayLocal(d = new Date()) {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  }
+
+  function ymdLocal(d = new Date()) {
+    const x = new Date(d);
+    const yyyy = x.getFullYear();
+    const mm = String(x.getMonth() + 1).padStart(2, "0");
+    const dd = String(x.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function daysDiff(a, b) {
+    const aa = startOfDayLocal(a).getTime();
+    const bb = startOfDayLocal(b).getTime();
+    return Math.round((aa - bb) / 86400000);
+  }
+
+  function fmtCoins(v) {
+    const n = toNum(v, 0);
+    return `${n.toLocaleString("pt-BR", {
+      minimumFractionDigits: n % 1 ? 2 : 0,
+      maximumFractionDigits: 2,
+    })} moedas`;
+  }
+
+  function parseAdminEmails() {
+    return String(ADMIN_EMAILS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  async function sendAdminEmail({ subject, html, text }) {
+    const admins = parseAdminEmails();
+
+    if (!admins.length) {
+      return { ok: false, error: "ADMIN_EMAILS não configurado" };
+    }
+
+    if (!brevoClient) {
+      return {
+        ok: false,
+        error: "Brevo não configurado. Defina BREVO_API_KEY.",
+      };
+    }
+
+    if (!WITHDRAW_FROM_EMAIL) {
+      return {
+        ok: false,
+        error:
+          "WITHDRAW_FROM_EMAIL/PARTNER_RESET_FROM/EMAIL_FROM não configurado",
+      };
+    }
+
+    try {
+      const response = await brevoClient.sendTransacEmail({
+        sender: {
+          email: WITHDRAW_FROM_EMAIL,
+          name: WITHDRAW_FROM_NAME,
+        },
+        to: admins.map((email) => ({ email })),
+        subject: String(subject || "Notificação"),
+        htmlContent: String(html || ""),
+        textContent: String(text || ""),
+      });
+
+      return { ok: true, id: response?.messageId || null };
+    } catch (err) {
+      const msg = err?.response?.body?.message || err?.message || String(err);
+      return { ok: false, error: msg };
+    }
+  }
+
+  function getUserLevelByOrders(completedOrders) {
+    const total = toNum(completedOrders, 0);
+
+    if (total >= 20) {
+      return {
+        key: "ouro",
+        name: "Ouro",
+        icon: "🥇",
+        buyBonusPct: 0.12,
+        checkinBase: 1.0,
+        checkinBoost: 1.35,
+      };
+    }
+
+    if (total >= 8) {
+      return {
+        key: "prata",
+        name: "Prata",
+        icon: "🥈",
+        buyBonusPct: 0.08,
+        checkinBase: 0.75,
+        checkinBoost: 1.15,
+      };
+    }
+
+    return {
+      key: "bronze",
+      name: "Bronze",
+      icon: "🥉",
+      buyBonusPct: 0.05,
+      checkinBase: 0.5,
+      checkinBoost: 1.0,
+    };
+  }
+
+  function getUserLevelProgress(completedOrders) {
+    const total = toNum(completedOrders, 0);
+
+    if (total >= 20) {
+      return {
+        pct: 100,
+        nextAt: 20,
+        nextName: "Nível máximo",
+      };
+    }
+
+    if (total >= 8) {
+      const base = 8;
+      const nextAt = 20;
+      const pct = Math.round(((total - base) / (nextAt - base)) * 100);
+      return {
+        pct: clamp(pct, 0, 100),
+        nextAt,
+        nextName: "Ouro",
+      };
+    }
+
+    const nextAt = 8;
+    const pct = Math.round((total / nextAt) * 100);
+    return {
+      pct: clamp(pct, 0, 100),
+      nextAt,
+      nextName: "Prata",
+    };
+  }
+
+  function normalizeProfileRow(row = {}) {
+    return {
+      id: safeTrim(row.id || "", 120),
+      name: safeTrim(row.name || row.full_name || row.nome || "", 180),
+      email: normalizeEmail(row.email || ""),
+      phone: normalizePhone(row.phone || row.telefone || row.whatsapp || ""),
+      pix_key: safeTrim(
+        row.pix_key ||
+          row.pixKey ||
+          row.chave_pix ||
+          row.chavePix ||
+          row.pix ||
+          row.pix_email ||
+          row.pixEmail ||
+          row.pix_phone ||
+          row.pixPhone ||
+          row.pix_document ||
+          row.pixDocument ||
+          "",
+        180
+      ),
+      pix_type: normalizePixType(
+        row.pix_type || row.pixType || row.tipo_pix || row.tipoPix || ""
+      ),
+      pix_holder_name: safeTrim(
+        row.pix_holder_name || row.pixHolderName || row.nome_titular || "",
+        180
+      ),
+      pix_bank_name: safeTrim(
+        row.pix_bank_name || row.pixBankName || row.instituicao_conta || row.banco || "",
+        180
+      ),
+      pix_holder_document: onlyDigits(
+        row.pix_holder_document ||
+          row.pixHolderDocument ||
+          row.cpf_titular ||
+          row.documento_titular ||
+          ""
+      ).slice(0, 20),
+
+      address_street: safeTrim(
+        row.address_street || row.rua || row.street || "",
+        180
+      ),
+      address_number: safeTrim(
+        row.address_number || row.numero || row.number || "",
+        40
+      ),
+      address_district: safeTrim(
+        row.address_district || row.bairro || row.district || "",
+        120
+      ),
+      address_city: safeTrim(
+        row.address_city || row.cidade || row.city || "",
+        120
+      ),
+      address_state: normalizeUF(
+        row.address_state || row.uf || row.state || ""
+      ),
+      address_zip: normalizeCep(
+        row.address_zip || row.cep || row.zip || ""
+      ),
+      address_complement: safeTrim(
+        row.address_complement || row.complemento || row.comp || "",
+        180
+      ),
+
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    };
+  }
+
+  function getProfilePixInfo(profile = {}) {
+    const p = normalizeProfileRow(profile);
+
+    return {
+      key: p.pix_key,
+      type: p.pix_type,
+      holderName: p.pix_holder_name,
+      bankName: p.pix_bank_name,
+      holderDocument: p.pix_holder_document,
+      isComplete:
+        !!p.pix_key &&
+        !!p.pix_type &&
+        !!p.pix_holder_name &&
+        !!p.pix_bank_name &&
+        !!p.pix_holder_document,
+    };
+  }
+
+  function buildProfileUpdatePayloadFromInput(input = {}, fallback = {}) {
+    const current = normalizeProfileRow(fallback);
+
+    return {
+      name: safeTrim(input.name ?? current.name, 180),
+      email: normalizeEmail(input.email ?? current.email),
+      phone: normalizePhone(input.phone ?? current.phone),
+
+      pix_key: safeTrim(input.pix_key ?? current.pix_key, 180),
+      pix_type: normalizePixType(input.pix_type ?? current.pix_type),
+      pix_holder_name: safeTrim(
+        input.pix_holder_name ?? current.pix_holder_name,
+        180
+      ),
+      pix_bank_name: safeTrim(
+        input.pix_bank_name ?? current.pix_bank_name,
+        180
+      ),
+      pix_holder_document: onlyDigits(
+        input.pix_holder_document ?? current.pix_holder_document
+      ).slice(0, 20),
+
+      address_street: safeTrim(
+        input.address_street ?? current.address_street,
+        180
+      ),
+      address_number: safeTrim(
+        input.address_number ?? current.address_number,
+        40
+      ),
+      address_district: safeTrim(
+        input.address_district ?? current.address_district,
+        120
+      ),
+      address_city: safeTrim(
+        input.address_city ?? current.address_city,
+        120
+      ),
+      address_state: normalizeUF(
+        input.address_state ?? current.address_state
+      ),
+      address_zip: normalizeCep(
+        input.address_zip ?? current.address_zip
+      ),
+      address_complement: safeTrim(
+        input.address_complement ?? current.address_complement,
+        180
+      ),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  function validatePixFields(data = {}) {
+    const key = safeTrim(data.pix_key, 180);
+    const type = normalizePixType(data.pix_type);
+    const holderName = safeTrim(data.pix_holder_name, 180);
+    const bankName = safeTrim(data.pix_bank_name, 180);
+    const holderDocument = onlyDigits(data.pix_holder_document).slice(0, 20);
+
+    if (!isValidPixType(type)) {
+      return { ok: false, error: "invalid_pix_type" };
+    }
+
+    if (!key) {
+      return { ok: false, error: "pix_key_required" };
+    }
+
+    if (!holderName) {
+      return { ok: false, error: "pix_holder_name_required" };
+    }
+
+    if (!bankName) {
+      return { ok: false, error: "pix_bank_name_required" };
+    }
+
+    if (!holderDocument) {
+      return { ok: false, error: "pix_holder_document_required" };
+    }
+
+    if (type === "email" && !isValidEmail(key)) {
+      return { ok: false, error: "invalid_pix_key_email" };
+    }
+
+    if (type === "cpf" && onlyDigits(key).length !== 11) {
+      return { ok: false, error: "invalid_pix_key_cpf" };
+    }
+
+    if (type === "cnpj" && onlyDigits(key).length !== 14) {
+      return { ok: false, error: "invalid_pix_key_cnpj" };
+    }
+
+    if (type === "telefone") {
+      const phone = onlyDigits(key);
+      if (phone.length < 10 || phone.length > 13) {
+        return { ok: false, error: "invalid_pix_key_phone" };
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        pix_key: key,
+        pix_type: type,
+        pix_holder_name: holderName,
+        pix_bank_name: bankName,
+        pix_holder_document: holderDocument,
+      },
+    };
+  }
+
+  async function getProfileByUserId(userId) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data || null;
+  }
+
+  async function upsertUserProfile(userId, payload = {}) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const row = {
+      id: userId,
+      ...payload,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("profiles")
+      .upsert(row, { onConflict: "id" })
+      .select("*")
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async function countCompletedUserOrders(userId) {
+    if (!supabaseAdmin) return 0;
+
+    const paidStatuses = ["paid", "shipped", "delivered", "finalizado", "done"];
+
+    const { count, error } = await supabaseAdmin
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .in("status", paidStatuses);
+
+    if (error) return 0;
+    return Number(count || 0);
+  }
+
+  async function ensureUserWallet(userId) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const { data: existing, error: findErr } = await supabaseAdmin
+      .from("user_wallets")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+    if (existing) return existing;
+
+    const payload = {
+      user_id: userId,
+      bonus_coins: 0,
+      purchased_coins: 0,
+      withdrawn_coins: 0,
+      streak_days: 0,
+      cycle_count: 0,
+      last_checkin_date: null,
+    };
+
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from("user_wallets")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (insertErr) throw insertErr;
+    return inserted;
+  }
+
+  async function addWalletActivity(userId, payload = {}) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const row = {
+      user_id: userId,
+      type: String(payload.type || "info"),
+      title: String(payload.title || "Movimentação"),
+      amount: toNum(payload.amount, 0),
+      meta: payload.meta != null ? String(payload.meta) : null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabaseAdmin
+      .from("user_wallet_activities")
+      .insert(row);
+
+    if (error) throw error;
+  }
+
+  async function getWalletBaseCoinsFromOrders(userId) {
+    if (!supabaseAdmin) return 0;
+
+    const paidStatuses = ["paid", "shipped", "delivered", "finalizado", "done"];
+
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("status, order_data")
+      .eq("user_id", userId)
+      .in("status", paidStatuses)
+      .limit(500);
+
+    if (error) throw error;
+
+    let total = 0;
+    for (const row of data || []) {
+      const od = row?.order_data || {};
+      total += toNum(od.wallet_bonus_coins, 0);
+    }
+    return total;
+  }
+
+  async function getMyWalletSummary(userId) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const wallet = await ensureUserWallet(userId);
+    const completedOrders = await countCompletedUserOrders(userId);
+    const level = getUserLevelByOrders(completedOrders);
+    const progress = getUserLevelProgress(completedOrders);
+    const baseCoins = await getWalletBaseCoinsFromOrders(userId);
+
+    const bonus = toNum(wallet.bonus_coins, 0);
+    const purchased = toNum(wallet.purchased_coins, 0);
+    const withdrawn = toNum(wallet.withdrawn_coins, 0);
+
+    const available = Math.max(0, baseCoins + bonus + purchased - withdrawn);
+
+    const { data: activities, error: actErr } = await supabaseAdmin
+      .from("user_wallet_activities")
+      .select("id, type, title, amount, meta, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (actErr) throw actErr;
+
+    return {
+      wallet,
+      baseCoins,
+      completedOrders,
+      level,
+      progress,
+      available,
+      activities: Array.isArray(activities) ? activities : [],
+    };
+  }
+
+  async function verifyCurrentPassword(email, password) {
+    const cleanEmail = normalizeEmail(email);
+    const cleanPassword = String(password || "");
+
+    if (!cleanEmail || !cleanPassword) {
+      return { ok: false, error: "email_or_password_missing" };
+    }
+
+    if (!supabaseAuth || !supabaseAuth.auth?.signInWithPassword) {
+      return { ok: false, error: "supabase_auth_missing" };
+    }
+
+    try {
+      const { error } = await supabaseAuth.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPassword,
+      });
+
+      if (error) {
+        return { ok: false, error: "invalid_password" };
+      }
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || "invalid_password" };
+    }
+  }
+
+  async function updateAuthIdentity(userId, changes = {}) {
+    if (!supabaseAdmin?.auth?.admin?.updateUserById) {
+      return { ok: false, error: "supabase_admin_auth_missing" };
+    }
+
+    const authPayload = {};
+
+    if (changes.email) {
+      authPayload.email = normalizeEmail(changes.email);
+      authPayload.email_confirm = true;
+    }
+
+    if (changes.password) {
+      authPayload.password = String(changes.password || "");
+    }
+
+    if (!Object.keys(authPayload).length) {
+      return { ok: true, skipped: true };
+    }
+
+    const { data, error } = await supabaseAdmin.auth.admin.updateUserById(
+      userId,
+      authPayload
+    );
+
+    if (error) {
+      return { ok: false, error: error.message || "auth_update_failed" };
+    }
+
+    return { ok: true, data };
+  }
+
+  async function getUserFullAdminData(userId, sessionEmail, requestedAmount, note) {
+    if (!supabaseAdmin) throw new Error("supabase_client_missing");
+
+    const [profileRes, walletSummary, booksRes, ordersRes] = await Promise.all([
+      supabaseAdmin.from("profiles").select("*").eq("id", userId).maybeSingle(),
+      getMyWalletSummary(userId),
+      supabaseAdmin
+        .from("books")
+        .select(
+          "id,status,child_name,theme,style,created_at,updated_at",
+          { count: "exact" }
+        )
+        .eq("user_id", userId)
+        .limit(10),
+      supabaseAdmin
+        .from("orders")
+        .select("id,status,order_data,created_at,book_id", { count: "exact" })
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
+
+    const profile = profileRes?.data || null;
+    const wallet = walletSummary?.wallet || {};
+    const level = walletSummary?.level || {};
+    const progress = walletSummary?.progress || {};
+    const recentOrders = Array.isArray(ordersRes?.data) ? ordersRes.data : [];
+    const recentBooks = Array.isArray(booksRes?.data) ? booksRes.data : [];
+    const totalOrders = Number(ordersRes?.count || 0);
+    const totalBooks = Number(booksRes?.count || 0);
+    const pix = getProfilePixInfo(profile || {});
+    const normalizedProfile = normalizeProfileRow(profile || {});
+
+    return {
+      userId,
+      email: String(sessionEmail || profile?.email || "").trim(),
+      name:
+        String(
+          profile?.name || profile?.full_name || profile?.nome || ""
+        ).trim() || "Não informado",
+      requestedAmount: toNum(requestedAmount, 0),
+      requestedAmountFormatted: fmtCoins(requestedAmount),
+      note: String(note || "").trim(),
+      pixKey: pix.key || "Não informado",
+      pixType: pix.type || "Não informado",
+      pixHolderName: pix.holderName || "Não informado",
+      pixBankName: pix.bankName || "Não informado",
+      pixHolderDocument: pix.holderDocument || "Não informado",
+
+      walletAvailable: toNum(walletSummary?.available, 0),
+      walletAvailableFormatted: fmtCoins(walletSummary?.available || 0),
+      baseCoins: toNum(walletSummary?.baseCoins, 0),
+      baseCoinsFormatted: fmtCoins(walletSummary?.baseCoins || 0),
+      bonusCoins: toNum(wallet?.bonus_coins, 0),
+      bonusCoinsFormatted: fmtCoins(wallet?.bonus_coins || 0),
+      purchasedCoins: toNum(wallet?.purchased_coins, 0),
+      purchasedCoinsFormatted: fmtCoins(wallet?.purchased_coins || 0),
+      withdrawnCoins: toNum(wallet?.withdrawn_coins, 0),
+      withdrawnCoinsFormatted: fmtCoins(wallet?.withdrawn_coins || 0),
+
+      streakDays: toNum(wallet?.streak_days, 0),
+      cycleCount: toNum(wallet?.cycle_count, 0),
+      lastCheckinDate: wallet?.last_checkin_date || "",
+      completedOrders: toNum(walletSummary?.completedOrders, 0),
+      totalOrders,
+      totalBooks,
+
+      levelName: String(level?.name || "Bronze"),
+      levelIcon: String(level?.icon || "🥉"),
+      levelKey: String(level?.key || "bronze"),
+      nextLevelName: String(progress?.nextName || "Nível máximo"),
+      nextLevelAt: toNum(progress?.nextAt, 0),
+      levelPct: toNum(progress?.pct, 0),
+
+      profileCreatedAt: profile?.created_at || "",
+      profileUpdatedAt: profile?.updated_at || "",
+      profileRaw: profile || {},
+      recentOrders,
+      recentBooks,
+      generatedAt: new Date().toISOString(),
+
+      phone: normalizedProfile.phone,
+      addressStreet: normalizedProfile.address_street,
+      addressNumber: normalizedProfile.address_number,
+      addressDistrict: normalizedProfile.address_district,
+      addressCity: normalizedProfile.address_city,
+      addressState: normalizedProfile.address_state,
+      addressZip: normalizedProfile.address_zip,
+      addressComplement: normalizedProfile.address_complement,
+    };
+  }
+
+  function buildWithdrawAdminEmail(data) {
+    const subject = `[SAQUE] ${data.name} solicitou ${data.requestedAmountFormatted}`;
+
+    const recentOrdersHtml = (data.recentOrders || []).length
+      ? `
+        <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; font-size:14px;">
+          <thead>
+            <tr>
+              <th align="left">Pedido</th>
+              <th align="left">Status</th>
+              <th align="left">Data</th>
+              <th align="left">Livro</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(data.recentOrders || [])
+              .map((o) => {
+                return `
+                  <tr>
+                    <td>${escapeHtml(String(o.id || ""))}</td>
+                    <td>${escapeHtml(String(o.status || ""))}</td>
+                    <td>${escapeHtml(String(o.created_at || ""))}</td>
+                    <td>${escapeHtml(String(o.book_id || ""))}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      `
+      : `<div>Nenhum pedido recente encontrado.</div>`;
+
+    const recentBooksHtml = (data.recentBooks || []).length
+      ? `
+        <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; font-size:14px;">
+          <thead>
+            <tr>
+              <th align="left">Livro</th>
+              <th align="left">Status</th>
+              <th align="left">Criança</th>
+              <th align="left">Tema</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(data.recentBooks || [])
+              .map((b) => {
+                return `
+                  <tr>
+                    <td>${escapeHtml(String(b.id || ""))}</td>
+                    <td>${escapeHtml(String(b.status || ""))}</td>
+                    <td>${escapeHtml(String(b.child_name || ""))}</td>
+                    <td>${escapeHtml(String(b.theme || ""))}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      `
+      : `<div>Nenhum livro recente encontrado.</div>`;
+
+    const html = `
+      <div style="font-family:Arial,Helvetica,sans-serif; color:#111; line-height:1.6; font-size:14px;">
+        <h2 style="margin:0 0 14px;">Solicitação de saque de moedas</h2>
+
+        <p>Um usuário solicitou saque na plataforma.</p>
+
+        <h3>Dados principais</h3>
+        <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; font-size:14px;">
+          <tbody>
+            <tr><td><b>Nome</b></td><td>${escapeHtml(data.name)}</td></tr>
+            <tr><td><b>E-mail</b></td><td>${escapeHtml(data.email)}</td></tr>
+            <tr><td><b>User ID</b></td><td>${escapeHtml(data.userId)}</td></tr>
+            <tr><td><b>Valor solicitado</b></td><td>${escapeHtml(data.requestedAmountFormatted)}</td></tr>
+            <tr><td><b>Saldo disponível</b></td><td>${escapeHtml(data.walletAvailableFormatted)}</td></tr>
+            <tr><td><b>Chave PIX</b></td><td>${escapeHtml(data.pixKey)}</td></tr>
+            <tr><td><b>Tipo da chave PIX</b></td><td>${escapeHtml(data.pixType)}</td></tr>
+            <tr><td><b>Titular</b></td><td>${escapeHtml(data.pixHolderName)}</td></tr>
+            <tr><td><b>Instituição</b></td><td>${escapeHtml(data.pixBankName)}</td></tr>
+            <tr><td><b>Documento do titular</b></td><td>${escapeHtml(data.pixHolderDocument)}</td></tr>
+            <tr><td><b>Telefone</b></td><td>${escapeHtml(data.phone || "—")}</td></tr>
+            <tr><td><b>Endereço</b></td><td>${escapeHtml(
+              [
+                data.addressStreet,
+                data.addressNumber,
+                data.addressDistrict,
+                data.addressCity,
+                data.addressState,
+                data.addressZip,
+                data.addressComplement,
+              ]
+                .filter(Boolean)
+                .join(" | ") || "—"
+            )}</td></tr>
+            <tr><td><b>Observação</b></td><td>${escapeHtml(data.note || "—")}</td></tr>
+            <tr><td><b>Gerado em</b></td><td>${escapeHtml(data.generatedAt)}</td></tr>
+          </tbody>
+        </table>
+
+        <h3 style="margin-top:20px;">Carteira</h3>
+        <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; font-size:14px;">
+          <tbody>
+            <tr><td><b>Moedas vindas de pedidos</b></td><td>${escapeHtml(data.baseCoinsFormatted)}</td></tr>
+            <tr><td><b>Moedas extras</b></td><td>${escapeHtml(data.bonusCoinsFormatted)}</td></tr>
+            <tr><td><b>Moedas adicionadas</b></td><td>${escapeHtml(data.purchasedCoinsFormatted)}</td></tr>
+            <tr><td><b>Moedas já sacadas</b></td><td>${escapeHtml(data.withdrawnCoinsFormatted)}</td></tr>
+            <tr><td><b>Saldo disponível atual</b></td><td>${escapeHtml(data.walletAvailableFormatted)}</td></tr>
+          </tbody>
+        </table>
+
+        <h3 style="margin-top:20px;">Atividade da conta</h3>
+        <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; font-size:14px;">
+          <tbody>
+            <tr><td><b>Nível atual</b></td><td>${escapeHtml(data.levelIcon + " " + data.levelName)}</td></tr>
+            <tr><td><b>Progresso do nível</b></td><td>${escapeHtml(String(data.levelPct) + "%")}</td></tr>
+            <tr><td><b>Próximo nível</b></td><td>${escapeHtml(data.nextLevelName)}</td></tr>
+            <tr><td><b>Meta do próximo nível</b></td><td>${escapeHtml(String(data.nextLevelAt))}</td></tr>
+            <tr><td><b>Pedidos concluídos</b></td><td>${escapeHtml(String(data.completedOrders))}</td></tr>
+            <tr><td><b>Total de pedidos</b></td><td>${escapeHtml(String(data.totalOrders))}</td></tr>
+            <tr><td><b>Total de livros</b></td><td>${escapeHtml(String(data.totalBooks))}</td></tr>
+            <tr><td><b>Sequência de check-in</b></td><td>${escapeHtml(String(data.streakDays) + " dia(s)")}</td></tr>
+            <tr><td><b>Ciclo atual</b></td><td>${escapeHtml(String(data.cycleCount) + " / 7")}</td></tr>
+            <tr><td><b>Último check-in</b></td><td>${escapeHtml(data.lastCheckinDate || "—")}</td></tr>
+          </tbody>
+        </table>
+
+        <h3 style="margin-top:20px;">Últimos pedidos</h3>
+        ${recentOrdersHtml}
+
+        <h3 style="margin-top:20px;">Últimos livros</h3>
+        ${recentBooksHtml}
+
+        <h3 style="margin-top:20px;">Perfil bruto</h3>
+        <pre style="white-space:pre-wrap; word-break:break-word; background:#f8fafc; border:1px solid #e5e7eb; padding:12px; border-radius:8px;">${escapeHtml(
+          JSON.stringify(data.profileRaw || {}, null, 2)
+        )}</pre>
+      </div>
+    `;
+
+    const text = [
+      "Solicitação de saque de moedas",
+      "",
+      `Nome: ${data.name}`,
+      `E-mail: ${data.email}`,
+      `User ID: ${data.userId}`,
+      `Valor solicitado: ${data.requestedAmountFormatted}`,
+      `Saldo disponível: ${data.walletAvailableFormatted}`,
+      `Chave PIX: ${data.pixKey}`,
+      `Tipo PIX: ${data.pixType}`,
+      `Titular PIX: ${data.pixHolderName}`,
+      `Instituição: ${data.pixBankName}`,
+      `Documento titular: ${data.pixHolderDocument}`,
+      `Telefone: ${data.phone || "—"}`,
+      `Endereço: ${
+        [
+          data.addressStreet,
+          data.addressNumber,
+          data.addressDistrict,
+          data.addressCity,
+          data.addressState,
+          data.addressZip,
+          data.addressComplement,
+        ]
+          .filter(Boolean)
+          .join(" | ") || "—"
+      }`,
+      `Observação: ${data.note || "—"}`,
+      "",
+      `Nível: ${data.levelIcon} ${data.levelName}`,
+      `Progresso do nível: ${data.levelPct}%`,
+      `Pedidos concluídos: ${data.completedOrders}`,
+      `Total de pedidos: ${data.totalOrders}`,
+      `Total de livros: ${data.totalBooks}`,
+      `Sequência check-in: ${data.streakDays} dia(s)`,
+      `Ciclo: ${data.cycleCount}/7`,
+      `Último check-in: ${data.lastCheckinDate || "—"}`,
+      "",
+      `Base coins: ${data.baseCoinsFormatted}`,
+      `Bonus coins: ${data.bonusCoinsFormatted}`,
+      `Purchased coins: ${data.purchasedCoinsFormatted}`,
+      `Withdrawn coins: ${data.withdrawnCoinsFormatted}`,
+      "",
+      `Gerado em: ${data.generatedAt}`,
+    ].join("\n");
+
+    return { subject, html, text };
+  }
+
   // ------------------------------
   // API: /api/me
   // ------------------------------
@@ -36,7 +989,10 @@ module.exports = function mountProfilePage(app, options = {}) {
     try {
       const userId = String(req.user?.id || "");
       const email = String(req.user?.email || "");
-      if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
 
       let profile = null;
 
@@ -57,61 +1013,67 @@ module.exports = function mountProfilePage(app, options = {}) {
         server_time: new Date().toISOString(),
       });
     } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
     }
   });
 
   // ------------------------------
-  // API: /api/my-books  (livros criados) — APENAS OS CONCLUÍDOS
+  // API: /api/my-books
   // ------------------------------
   app.get("/api/my-books", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
-      if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
 
-      if (!supabaseAdmin) {
-        return res.status(500).json({ ok: false, error: "supabase_client_missing" });
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
       }
 
-      // 🔍 LOG para depuração (remova em produção)
-      console.log(`[profile] Buscando livros do usuário ${userId} com status = 'done'`);
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
 
       const { data, error } = await supabaseAdmin
         .from("books")
-        .select("id, status, step, error, theme, style, child_name, child_age, child_gender, pdf_url, updated_at, created_at")
+        .select(
+          "id, status, step, error, theme, style, child_name, child_age, child_gender, pdf_url, updated_at, created_at"
+        )
         .eq("user_id", userId)
-        .eq("status", "done")  // ✅ FILTRO: apenas livros concluídos
+        .eq("status", "done")
         .order("updated_at", { ascending: false })
         .limit(120);
 
-      if (error) {
-        console.error("[profile] Erro na consulta:", error);
-        throw error;
-      }
-
-      // 🔍 LOG para ver quantos vieram
-      console.log(`[profile] Encontrados ${data?.length || 0} livros com status 'done'`);
+      if (error) throw error;
 
       return res.json({
         ok: true,
         items: Array.isArray(data) ? data : [],
       });
     } catch (e) {
-      console.error("[profile] Erro em /api/my-books:", e);
-      return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
     }
   });
 
   // ------------------------------
-  // API: /api/my-orders  (pedidos realizados)
+  // API: /api/my-orders
   // ------------------------------
   app.get("/api/my-orders", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
-      if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
 
       if (!supabaseAdmin) {
-        return res.status(500).json({ ok: false, error: "supabase_client_missing" });
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
       }
 
       const { data, error } = await supabaseAdmin
@@ -134,7 +1096,594 @@ module.exports = function mountProfilePage(app, options = {}) {
         items: Array.isArray(data) ? data : [],
       });
     } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-wallet
+  // ------------------------------
+  app.get("/api/my-wallet", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const summary = await getMyWalletSummary(userId);
+      const profile = await getProfileByUserId(userId);
+      const pix = getProfilePixInfo(profile || {});
+
+      return res.json({
+        ok: true,
+        wallet: summary.wallet,
+        level: summary.level,
+        levelProgress: summary.progress,
+        completedOrders: summary.completedOrders,
+        baseCoins: summary.baseCoins,
+        availableCoins: summary.available,
+        activities: summary.activities,
+        hasPixKey: pix.isComplete,
+        pixSummary: {
+          hasPixKey: pix.isComplete,
+          pix_type: pix.type || "",
+          pix_key_masked: pix.key
+            ? pix.type === "email"
+              ? pix.key.replace(/^(.{2}).*(@.*)$/, "$1***$2")
+              : pix.key.slice(0, 4) + "***"
+            : "",
+          pix_holder_name: pix.holderName || "",
+          pix_bank_name: pix.bankName || "",
+          pix_holder_document_masked: pix.holderDocument
+            ? pix.holderDocument.slice(0, 3) + "***"
+            : "",
+        },
+        nextCheckinReward:
+          Number(summary.wallet?.streak_days || 0) >= 3
+            ? summary.level.checkinBoost
+            : summary.level.checkinBase,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-wallet/checkin
+  // ------------------------------
+  app.post("/api/my-wallet/checkin", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const wallet = await ensureUserWallet(userId);
+      const completedOrders = await countCompletedUserOrders(userId);
+      const level = getUserLevelByOrders(completedOrders);
+
+      const today = ymdLocal(new Date());
+      const last = wallet?.last_checkin_date
+        ? ymdLocal(new Date(wallet.last_checkin_date))
+        : null;
+
+      if (last === today) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "checkin_already_done_today" });
+      }
+
+      let streak = toNum(wallet?.streak_days, 0);
+
+      if (last) {
+        const diff = daysDiff(new Date(today), new Date(last));
+        if (diff === 1) streak += 1;
+        else streak = 1;
+      } else {
+        streak = 1;
+      }
+
+      let cycleCount = toNum(wallet?.cycle_count, 0);
+      cycleCount += 1;
+
+      const reward = streak >= 3 ? level.checkinBoost : level.checkinBase;
+
+      let nextCycleCount = cycleCount;
+      let nextStreak = streak;
+
+      if (cycleCount >= 7) {
+        nextCycleCount = 0;
+        nextStreak = 0;
+      }
+
+      const nextBonus = toNum(wallet?.bonus_coins, 0) + reward;
+
+      const { data: updated, error: updErr } = await supabaseAdmin
+        .from("user_wallets")
+        .update({
+          bonus_coins: nextBonus,
+          streak_days: nextStreak,
+          cycle_count: nextCycleCount,
+          last_checkin_date: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+
+      if (updErr) throw updErr;
+
+      await addWalletActivity(userId, {
+        type: "checkin",
+        title: "Check-in diário",
+        amount: reward,
+        meta: `Recompensa diária do usuário (${level.name})`,
+      });
+
+      const summary = await getMyWalletSummary(userId);
+
+      return res.json({
+        ok: true,
+        reward,
+        wallet: updated,
+        availableCoins: summary.available,
+        level: summary.level,
+        levelProgress: summary.progress,
+        activities: summary.activities,
+        nextCheckinReward:
+          Number(updated?.streak_days || 0) >= 3
+            ? summary.level.checkinBoost
+            : summary.level.checkinBase,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-wallet/withdraw
+  // ------------------------------
+  app.post("/api/my-wallet/withdraw", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      const userEmail = String(req.user?.email || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const amount = clamp(toNum(req.body?.amount, 0), 0, 9999999);
+      const note = String(req.body?.note || "").trim();
+
+      if (amount <= 0) {
+        return res.status(400).json({ ok: false, error: "invalid_amount" });
+      }
+
+      const summaryBefore = await getMyWalletSummary(userId);
+      if (amount > summaryBefore.available) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "insufficient_balance" });
+      }
+
+      const currentProfile = await getProfileByUserId(userId);
+      const currentPix = getProfilePixInfo(currentProfile || {});
+
+      if (!currentPix.isComplete) {
+        const pixCheck = validatePixFields({
+          pix_key: req.body?.pix_key,
+          pix_type: req.body?.pix_type,
+          pix_holder_name: req.body?.pix_holder_name,
+          pix_bank_name: req.body?.pix_bank_name,
+          pix_holder_document: req.body?.pix_holder_document,
+        });
+
+        if (!pixCheck.ok) {
+          return res.status(400).json({ ok: false, error: pixCheck.error });
+        }
+
+        const mergedProfilePayload = buildProfileUpdatePayloadFromInput(
+          {
+            pix_key: pixCheck.data.pix_key,
+            pix_type: pixCheck.data.pix_type,
+            pix_holder_name: pixCheck.data.pix_holder_name,
+            pix_bank_name: pixCheck.data.pix_bank_name,
+            pix_holder_document: pixCheck.data.pix_holder_document,
+          },
+          currentProfile || {}
+        );
+
+        await upsertUserProfile(userId, mergedProfilePayload);
+      }
+
+      const wallet = await ensureUserWallet(userId);
+      const nextWithdrawn = toNum(wallet.withdrawn_coins, 0) + amount;
+
+      const { data: updated, error: updErr } = await supabaseAdmin
+        .from("user_wallets")
+        .update({
+          withdrawn_coins: nextWithdrawn,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+
+      if (updErr) throw updErr;
+
+      await addWalletActivity(userId, {
+        type: "withdraw",
+        title: "Solicitação de saque",
+        amount: -amount,
+        meta: note || "Saque solicitado pelo usuário",
+      });
+
+      try {
+        const adminData = await getUserFullAdminData(
+          userId,
+          userEmail,
+          amount,
+          note
+        );
+        const mailPayload = buildWithdrawAdminEmail(adminData);
+        const mailResult = await sendAdminEmail(mailPayload);
+
+        if (!mailResult?.ok) {
+          console.error(
+            "[profile] falha ao enviar email de saque para admin:",
+            mailResult?.error || mailResult
+          );
+        } else {
+          console.log(
+            "[profile] email de saque enviado para admins:",
+            parseAdminEmails().join(", ")
+          );
+        }
+      } catch (mailErr) {
+        console.error(
+          "[profile] erro ao preparar/enviar email de saque:",
+          mailErr?.message || mailErr
+        );
+      }
+
+      const summary = await getMyWalletSummary(userId);
+      const profileAfter = await getProfileByUserId(userId);
+      const pixAfter = getProfilePixInfo(profileAfter || {});
+
+      return res.json({
+        ok: true,
+        wallet: updated,
+        availableCoins: summary.available,
+        activities: summary.activities,
+        hasPixKey: pixAfter.isComplete,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-wallet/buy
+  // ------------------------------
+  app.post("/api/my-wallet/buy", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const pack = clamp(toNum(req.body?.pack, 0), 0, 9999999);
+
+      if (!pack || pack <= 0) {
+        return res.status(400).json({ ok: false, error: "invalid_pack" });
+      }
+
+      const allowed = [10, 25, 50, 100];
+      if (!allowed.includes(pack)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "invalid_pack_option" });
+      }
+
+      const completedOrders = await countCompletedUserOrders(userId);
+      const level = getUserLevelByOrders(completedOrders);
+      const wallet = await ensureUserWallet(userId);
+
+      const bonus = Number((pack * level.buyBonusPct).toFixed(2));
+      const credit = pack + bonus;
+
+      const nextPurchased = toNum(wallet.purchased_coins, 0) + credit;
+
+      const { data: updated, error: updErr } = await supabaseAdmin
+        .from("user_wallets")
+        .update({
+          purchased_coins: nextPurchased,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+
+      if (updErr) throw updErr;
+
+      await addWalletActivity(userId, {
+        type: "buy",
+        title: "Compra de moedas",
+        amount: credit,
+        meta: `Pacote ${pack} + bônus ${bonus.toLocaleString("pt-BR", {
+          minimumFractionDigits: bonus % 1 ? 2 : 0,
+          maximumFractionDigits: 2,
+        })}`,
+      });
+
+      const summary = await getMyWalletSummary(userId);
+
+      return res.json({
+        ok: true,
+        credit,
+        bonus,
+        wallet: updated,
+        level: summary.level,
+        availableCoins: summary.available,
+        activities: summary.activities,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-account
+  // ------------------------------
+  app.get("/api/my-account", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      const sessionEmail = normalizeEmail(req.user?.email || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      const rawProfile = await getProfileByUserId(userId);
+      const profile = normalizeProfileRow({
+        ...(rawProfile || {}),
+        email: sessionEmail || rawProfile?.email || "",
+      });
+      const pix = getProfilePixInfo(profile);
+
+      return res.json({
+        ok: true,
+        account: {
+          id: userId,
+          email: sessionEmail || profile.email || "",
+          name: profile.name || "",
+          phone: profile.phone || "",
+          pix_key: profile.pix_key || "",
+          pix_type: profile.pix_type || "",
+          pix_holder_name: profile.pix_holder_name || "",
+          pix_bank_name: profile.pix_bank_name || "",
+          pix_holder_document: profile.pix_holder_document || "",
+          address_street: profile.address_street || "",
+          address_number: profile.address_number || "",
+          address_district: profile.address_district || "",
+          address_city: profile.address_city || "",
+          address_state: profile.address_state || "",
+          address_zip: profile.address_zip || "",
+          address_complement: profile.address_complement || "",
+          has_pix_key: pix.isComplete,
+          created_at: profile.created_at || "",
+          updated_at: profile.updated_at || "",
+        },
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-account/verify-password
+  // ------------------------------
+  app.post("/api/my-account/verify-password", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      const email = normalizeEmail(req.user?.email || "");
+      const password = String(req.body?.password || "");
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!password) {
+        return res.status(400).json({ ok: false, error: "password_required" });
+      }
+
+      const verified = await verifyCurrentPassword(email, password);
+      if (!verified.ok) {
+        return res.status(400).json({ ok: false, error: verified.error });
+      }
+
+      return res.json({ ok: true });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
+    }
+  });
+
+  // ------------------------------
+  // API: /api/my-account/update
+  // ------------------------------
+  app.post("/api/my-account/update", requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      const sessionEmail = normalizeEmail(req.user?.email || "");
+      const currentPassword = String(req.body?.current_password || "");
+      const nextPassword = String(req.body?.new_password || "");
+      const nextEmail = normalizeEmail(req.body?.email || sessionEmail);
+
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "supabase_client_missing" });
+      }
+
+      if (!currentPassword) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "current_password_required" });
+      }
+
+      const verified = await verifyCurrentPassword(sessionEmail, currentPassword);
+      if (!verified.ok) {
+        return res.status(400).json({ ok: false, error: verified.error });
+      }
+
+      if (!isValidEmail(nextEmail)) {
+        return res.status(400).json({ ok: false, error: "invalid_email" });
+      }
+
+      if (nextPassword && String(nextPassword).length < 6) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "password_too_short" });
+      }
+
+      const currentProfile = await getProfileByUserId(userId);
+      const profilePayload = buildProfileUpdatePayloadFromInput(
+        {
+          name: req.body?.name,
+          email: nextEmail,
+          phone: req.body?.phone,
+
+          pix_key: req.body?.pix_key,
+          pix_type: req.body?.pix_type,
+          pix_holder_name: req.body?.pix_holder_name,
+          pix_bank_name: req.body?.pix_bank_name,
+          pix_holder_document: req.body?.pix_holder_document,
+
+          address_street: req.body?.address_street,
+          address_number: req.body?.address_number,
+          address_district: req.body?.address_district,
+          address_city: req.body?.address_city,
+          address_state: req.body?.address_state,
+          address_zip: req.body?.address_zip,
+          address_complement: req.body?.address_complement,
+        },
+        currentProfile || {}
+      );
+
+      const hasAnyPixField =
+        !!profilePayload.pix_key ||
+        !!profilePayload.pix_type ||
+        !!profilePayload.pix_holder_name ||
+        !!profilePayload.pix_bank_name ||
+        !!profilePayload.pix_holder_document;
+
+      if (hasAnyPixField) {
+        const pixCheck = validatePixFields(profilePayload);
+        if (!pixCheck.ok) {
+          return res.status(400).json({ ok: false, error: pixCheck.error });
+        }
+
+        profilePayload.pix_key = pixCheck.data.pix_key;
+        profilePayload.pix_type = pixCheck.data.pix_type;
+        profilePayload.pix_holder_name = pixCheck.data.pix_holder_name;
+        profilePayload.pix_bank_name = pixCheck.data.pix_bank_name;
+        profilePayload.pix_holder_document = pixCheck.data.pix_holder_document;
+      }
+
+      const authResult = await updateAuthIdentity(userId, {
+        email: nextEmail !== sessionEmail ? nextEmail : "",
+        password: nextPassword || "",
+      });
+
+      if (!authResult.ok) {
+        return res.status(400).json({ ok: false, error: authResult.error });
+      }
+
+      const savedProfile = await upsertUserProfile(userId, profilePayload);
+      const normalized = normalizeProfileRow(savedProfile || {});
+      const pix = getProfilePixInfo(normalized);
+
+      return res.json({
+        ok: true,
+        account: {
+          id: userId,
+          email: nextEmail,
+          name: normalized.name || "",
+          phone: normalized.phone || "",
+          pix_key: normalized.pix_key || "",
+          pix_type: normalized.pix_type || "",
+          pix_holder_name: normalized.pix_holder_name || "",
+          pix_bank_name: normalized.pix_bank_name || "",
+          pix_holder_document: normalized.pix_holder_document || "",
+          address_street: normalized.address_street || "",
+          address_number: normalized.address_number || "",
+          address_district: normalized.address_district || "",
+          address_city: normalized.address_city || "",
+          address_state: normalized.address_state || "",
+          address_zip: normalized.address_zip || "",
+          address_complement: normalized.address_complement || "",
+          has_pix_key: pix.isComplete,
+          created_at: normalized.created_at || "",
+          updated_at: normalized.updated_at || "",
+        },
+        email_changed: nextEmail !== sessionEmail,
+        password_changed: !!nextPassword,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(e?.message || e || "Erro") });
     }
   });
 
@@ -142,1158 +1691,25 @@ module.exports = function mountProfilePage(app, options = {}) {
   // UI: /profile
   // ------------------------------
   app.get("/profile", requireAuth, async (req, res) => {
-    const email = escapeHtml(req.user?.email || "");
-
-    res.type("html").send(`<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Perfil — Meu Livro Mágico</title>
-<style>
-  :root{
-    --violet-50:#f5f3ff;
-    --pink-50:#fff1f2;
-    --white:#ffffff;
-    --gray-900:#111827;
-    --gray-800:#1f2937;
-    --gray-700:#374151;
-    --gray-600:#4b5563;
-
-    --violet-600:#7c3aed;
-    --violet-700:#6d28d9;
-    --pink-600:#db2777;
-    --pink-700:#be185d;
-
-    --shadow: 0 34px 120px rgba(17,24,39,.22);
-    --shadow2: 0 16px 38px rgba(17,24,39,.10);
-    --shadow3: 0 10px 18px rgba(17,24,39,.10);
-
-    --r: 26px;
-    --bookR: 22px;
-    --pageR: 18px;
-
-    --pad: 18px;
-    --foldW: clamp(18px, 2.4vw, 30px);
-  }
-
-  *{ box-sizing:border-box; }
-  html,body{ height:100%; }
-  body{
-    margin:0;
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    color: var(--gray-800);
-    background: radial-gradient(1200px 520px at 18% 0%, rgba(124,58,237,.18), transparent 60%),
-                radial-gradient(980px 460px at 90% 12%, rgba(219,39,119,.14), transparent 58%),
-                linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
-    min-height:100vh;
-    padding-bottom: 30px;
-    overflow-x:hidden;
-  }
-  a{ color:inherit; text-decoration:none; }
-  .wrap{ max-width: 1180px; margin: 0 auto; padding: 18px 16px; }
-
-  .top{
-    display:flex; gap:12px;
-    align-items:center;
-    justify-content:space-between;
-    flex-wrap:wrap;
-    margin-bottom: 12px;
-  }
-  .pill{
-    display:inline-flex; gap:8px; align-items:center;
-    padding:10px 12px; border-radius:999px;
-    background: rgba(255,255,255,.76);
-    border:1px solid rgba(221,214,254,.92);
-    color: rgba(109,40,217,1);
-    font-weight:950;
-    box-shadow: 0 14px 30px rgba(17,24,39,.08);
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
-    white-space:nowrap;
-  }
-  .pill:hover{
-    background: rgba(245,243,255,.92);
-    border-color: rgba(196,181,253,.95);
-    transform: translateY(-1px);
-    box-shadow: 0 18px 44px rgba(17,24,39,.10);
-  }
-  .pillPink{
-    background: rgba(219,39,119,.10);
-    color:#831843;
-    border-color: rgba(219,39,119,.16);
-  }
-  .pillDanger{
-    background: rgba(239,68,68,.12);
-    color:#7f1d1d;
-    border:1px solid rgba(239,68,68,.22);
-  }
-
-  .btn{
-    display:inline-flex; align-items:center; justify-content:center; gap:10px;
-    padding: 12px 14px;
-    border-radius: 999px;
-    border: 1px solid rgba(221,214,254,.92);
-    background: rgba(255,255,255,.72);
-    color: rgba(109,40,217,1);
-    font-weight:1000;
-    box-shadow: 0 14px 30px rgba(17,24,39,.08);
-    cursor:pointer;
-    user-select:none;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
-    white-space:nowrap;
-  }
-  .btn:active{ transform: translateY(1px); }
-  .btnPrimary{
-    border:0;
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    box-shadow: 0 18px 44px rgba(124,58,237,.20);
-  }
-  .btnPrimary:hover{
-    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-    box-shadow: 0 22px 56px rgba(124,58,237,.24);
-  }
-  .btnDanger{
-    color:#fff;
-    background: linear-gradient(90deg, #ef4444, #f97316);
-    box-shadow: 0 18px 44px rgba(239,68,68,.22);
-  }
-  .btnDanger:hover{
-    background: linear-gradient(90deg, #dc2626, #fb923c);
-    box-shadow: 0 24px 58px rgba(239,68,68,.30);
-  }
-  .btnOutline{
-    background: rgba(255,255,255,.78);
-    border: 2px solid rgba(221,214,254,.95);
-  }
-  .btnOutline:hover{
-    background: rgba(245,243,255,.95);
-    border-color: rgba(196,181,253,.95);
-  }
-
-  .head{
-    background: rgba(255,255,255,.86);
-    border: 1px solid rgba(17,24,39,.06);
-    border-radius: 26px;
-    box-shadow: 0 20px 60px rgba(17,24,39,.10);
-    padding: 14px;
-    margin-bottom: 14px;
-    backdrop-filter: blur(2px);
-  }
-  .ttl{
-    font-weight:1000;
-    font-size: 18px;
-    color: var(--gray-900);
-    letter-spacing:-.2px;
-    display:flex;
-    gap:8px;
-    align-items:center;
-    flex-wrap:wrap;
-  }
-  .meta{
-    margin-top:6px;
-    color: var(--gray-600);
-    font-weight:850;
-    line-height:1.6;
-    font-size: 13px;
-  }
-
-  .card{
-    background: rgba(255,255,255,.92);
-    border: 1px solid rgba(17,24,39,.06);
-    border-radius: 26px;
-    box-shadow: var(--shadow2);
-    overflow:hidden;
-    padding: 16px;
-    backdrop-filter: blur(2px);
-  }
-
-  .badge{
-    display:inline-flex; align-items:center; gap:8px;
-    padding:6px 10px; border-radius:999px;
-    font-weight:1000; font-size:12px;
-    border:1px solid rgba(0,0,0,.08);
-    background: rgba(0,0,0,.03);
-    color:#374151;
-  }
-  .badge.green{ background: rgba(16,185,129,.10); border-color: rgba(16,185,129,.18); color:#065f46;}
-  .badge.red{ background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.18); color:#7f1d1d;}
-  .badge.violet{ background: rgba(124,58,237,.10); border-color: rgba(124,58,237,.18); color:#4c1d95;}
-  .badge.blue{ background: rgba(37,99,235,.10); border-color: rgba(37,99,235,.18); color:#1e3a8a;}
-  .badge.amber{ background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.20); color:#92400e;}
-
-  .progressBox{
-    margin-top:12px;
-    border:1px solid rgba(37,99,235,.12);
-    background: rgba(37,99,235,.06);
-    border-radius:18px;
-    padding:12px;
-  }
-  .progressTop{
-    display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
-  }
-  .bar{
-    margin-top:10px;
-    height:12px;
-    background: rgba(0,0,0,.06);
-    border-radius:999px;
-    overflow:hidden;
-    border:1px solid rgba(0,0,0,.06);
-  }
-  .bar > div{
-    height:100%;
-    width: 20%;
-    background: linear-gradient(90deg, #2563eb, var(--violet-600));
-    border-radius:999px;
-    transition: width .35s ease;
-  }
-
-  .tabs{
-    display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px;
-  }
-  .tab{
-    flex:0 0 auto;
-    border:1px solid rgba(221,214,254,.92);
-    background:#fff;
-    border-radius:999px;
-    padding:10px 12px;
-    cursor:pointer;
-    font-weight:1000;
-    color:#374151;
-    transition: transform .12s ease, filter .12s ease;
-  }
-  .tab:hover{filter:brightness(.99)}
-  .tab:active{transform: translateY(1px)}
-  .tab.active{
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    color:#fff;
-    border-color:transparent;
-    box-shadow: 0 16px 34px rgba(124,58,237,.16);
-  }
-
-  .panel{display:none; margin-top: 12px;}
-  .panel.active{display:block;}
-
-  .list{
-    display:grid; gap:10px; margin-top:10px;
-  }
-  .item{
-    border:1px solid rgba(17,24,39,.06);
-    border-radius:18px;
-    padding:12px;
-    background:#fff;
-    box-shadow: var(--shadow2);
-  }
-  .itemTop{
-    display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;
-  }
-  .rowBtns{
-    display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;
-  }
-
-  .a{
-    text-decoration:none;
-    display:inline-flex; align-items:center; gap:10px;
-    padding:10px 12px;
-    border-radius:999px;
-    border:1px solid rgba(221,214,254,.92);
-    background:#fff;
-    font-weight:1000;
-    color:#374151;
-  }
-  .a:hover{filter:brightness(.98)}
-
-  .likeBtn{
-    border:1px solid rgba(239,68,68,.22);
-    background: rgba(239,68,68,.08);
-    color:#7f1d1d;
-    padding:10px 12px;
-    border-radius:999px;
-    font-weight:1100;
-    cursor:pointer;
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    user-select:none;
-    transition: transform .12s ease, filter .12s ease;
-  }
-  .likeBtn:hover{filter:brightness(.98)}
-  .likeBtn:active{transform: translateY(1px)}
-  .likeBtn.on{
-    background: rgba(239,68,68,.14);
-    border-color: rgba(239,68,68,.30);
-  }
-  .likeCount{
-    display:inline-flex;
-    padding:4px 8px;
-    border-radius:999px;
-    background: rgba(0,0,0,.06);
-    border:1px solid rgba(0,0,0,.06);
-    color:#111827;
-    font-weight:1100;
-    font-size:12px;
-  }
-
-  .hint{
-    margin-top:10px;
-    padding:12px;
-    border-radius: 14px;
-    background: rgba(239,68,68,.08);
-    border: 1px solid rgba(239,68,68,.16);
-    color:#7f1d1d;
-    font-weight:900;
-    white-space:pre-wrap;
-    display:none;
-  }
-
-  .modalBackdrop{
-    position:fixed; inset:0;
-    background: rgba(17,24,39,.55);
-    display:none;
-    align-items:center; justify-content:center;
-    padding: 18px;
-    z-index: 50;
-  }
-  .modalBackdrop.open{display:flex;}
-  .modal{
-    width:min(520px, 100%);
-    background:#fff;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius: 22px;
-    box-shadow: 0 30px 70px rgba(0,0,0,.25);
-    padding: 16px;
-  }
-  .modal h3{
-    margin: 0;
-    font-size: 18px;
-    font-weight: 1000;
-  }
-  .modal p{
-    margin: 10px 0 0;
-    color: var(--gray-600);
-    font-weight: 900;
-    line-height: 1.5;
-  }
-  .modalActions{
-    margin-top: 14px;
-    display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
-  }
-
-  .spin{
-    width:16px; height:16px;
-    border-radius:999px;
-    border:2px solid rgba(255,255,255,.55);
-    border-top-color: rgba(255,255,255,.0);
-    display:inline-block;
-    animation: sp 0.8s linear infinite;
-  }
-  @keyframes sp { to{ transform: rotate(360deg);} }
-
-  .toastWrap{
-    position:fixed;
-    left: 50%;
-    bottom: 18px;
-    transform: translateX(-50%);
-    z-index: 60;
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-    pointer-events:none;
-  }
-  .toast{
-    pointer-events:none;
-    min-width: min(560px, calc(100vw - 26px));
-    background: #111827;
-    color:#fff;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius: 16px;
-    padding: 12px 12px;
-    box-shadow: 0 20px 50px rgba(0,0,0,.25);
-    display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    gap:10px;
-    opacity:0;
-    transform: translateY(8px);
-    transition: opacity .18s ease, transform .18s ease;
-  }
-  .toast.show{
-    opacity:1;
-    transform: translateY(0);
-  }
-  .toastTitle{
-    font-weight:1000;
-    display:flex;
-    align-items:center;
-    gap:10px;
-  }
-  .toastText{
-    margin-top:6px;
-    color: rgba(255,255,255,.88);
-    font-weight:900;
-    line-height:1.35;
-    font-size:13px;
-  }
-
-  .sentinel{
-    height: 16px;
-    width: 100%;
-  }
-  .muted{color:var(--gray-600); font-weight:800;}
-  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
-
-  .stars{
-    position:absolute; inset:0;
-    pointer-events:none;
-    overflow:hidden;
-    z-index:0;
-  }
-  .star{
-    position:absolute;
-    width: 18px; height: 18px;
-    opacity:.45;
-    animation: floatY var(--dur, 4s) ease-in-out infinite;
-    will-change: transform, opacity;
-    filter: drop-shadow(0 10px 10px rgba(245,158,11,.10));
-  }
-  .star svg{ width:100%; height:100%; display:block; }
-  @keyframes floatY{
-    0%{ transform: translateY(0); opacity:.18; }
-    50%{ transform: translateY(-18px); opacity:.55; }
-    100%{ transform: translateY(0); opacity:.18; }
-  }
-
-  .profileRow{
-    display:flex; gap:12px; align-items:center;
-    padding: 6px 0 12px;
-    border-bottom:1px solid rgba(0,0,0,.06);
-  }
-  .avatar{
-    width:72px; height:72px; border-radius:999px;
-    background: linear-gradient(135deg, var(--violet-600), var(--pink-600));
-    display:grid; place-items:center;
-    color:#fff; font-weight:1000; font-size:24px;
-    box-shadow: 0 16px 34px rgba(124,58,237,.22);
-  }
-</style>
-</head>
-
-<body>
-  <!-- Estrelas flutuantes (igual ao preview) -->
-  <div class="stars" id="stars"></div>
-
-  <div class="wrap">
-    <!-- Topo com pills (igual ao preview) -->
-    <div class="top">
-      <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <a class="pill" href="/create">✨ Criar Livro</a>
-        <a class="pill" href="/books">📚 Meus Livros</a>
-        <a class="pill pillPink" href="/sales">🛒 Página Inicial</a>
-        <a class="pill" href="/como-funciona">❓ Ajuda</a>
-      </div>
-      <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <span class="pill" style="background:transparent; border:none; box-shadow:none; padding:0;">
-          <span class="mono">${email}</span>
-        </span>
-        <button class="btn btnOutline" id="btnTopLogout">🚪 Sair</button>
-      </div>
-    </div>
-
-    <!-- Cabeçalho do perfil (igual ao .head do preview) -->
-    <div class="head">
-      <div>
-        <div class="ttl">👤 Meu Perfil</div>
-        <div class="meta" id="email">${email}</div>
-        <div class="meta" style="font-size:12px; margin-top:6px;">
-          ID: <span class="mono" id="uid">...</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Card principal com todo o conteúdo do perfil -->
-    <div class="card">
-      <!-- Linha do perfil com avatar e nome -->
-      <div class="profileRow">
-        <div class="avatar" id="avatar">🙂</div>
-        <div style="min-width:0">
-          <h1 id="name" style="margin:0; font-size:24px;">Seu Perfil</h1>
-        </div>
-      </div>
-
-      <!-- Barra de progresso do perfil -->
-      <div class="progressBox">
-        <div class="progressTop">
-          <div>
-            <div style="font-weight:1000;">✅ Completar perfil</div>
-            <div class="muted" style="font-size:12px;">Quanto mais completo, mais organizado fica seu histórico.</div>
-          </div>
-          <span class="badge blue" id="profileProgressLabel">—%</span>
-        </div>
-        <div class="bar"><div id="profileBar"></div></div>
-      </div>
-
-      <!-- Abas -->
-      <div class="tabs">
-        <button class="tab active" data-tab="info" id="tabInfo">👤 Informações</button>
-        <button class="tab" data-tab="created" id="tabCreated">📚 Livros Criados</button>
-        <button class="tab" data-tab="purchases" id="tabPurchases">🧾 Compras</button>
-        <button class="tab" data-tab="security" id="tabSecurity">🔐 Conta</button>
-      </div>
-
-      <!-- Painel Informações -->
-      <div class="panel active" id="panel-info">
-        <div class="muted" style="margin-top:10px;">
-          Aqui você vê seus dados do Supabase (profiles) e mantém tudo organizado.
-        </div>
-        <div class="list" style="margin-top:12px;">
-          <div class="item">
-            <div class="itemTop">
-              <h2 style="margin:0;">Dados do perfil</h2>
-              <span class="badge violet" id="profileBadge">Carregando…</span>
-            </div>
-            <div class="muted" style="margin-top:8px;">
-              Nome: <b id="profileName">—</b><br/>
-              Criado em: <b id="profileCreated">—</b><br/>
-              Atualizado em: <b id="profileUpdated">—</b>
-            </div>
-            <div class="rowBtns" id="badgesRow" style="margin-top:12px;"></div>
-          </div>
-        </div>
-        <div class="rowBtns">
-          <a class="a" href="/books">📚 Ir para Meus Livros</a>
-          <a class="a" href="/create">✨ Criar novo livro</a>
-        </div>
-      </div>
-
-      <!-- Painel Livros Criados -->
-      <div class="panel" id="panel-created">
-        <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-          <div class="muted">
-            Seus livros gerados e concluídos (tabela <span class="mono">books</span>).
-          </div>
-          <button class="btn btnPrimary" id="btnRefreshBooks" title="Atualizar lista">
-            <span id="refreshIconBooks">🔄</span> Atualizar
-          </button>
-        </div>
-        <div class="hint" id="hintBooks"></div>
-        <div class="list" id="booksList" style="margin-top:12px;"></div>
-        <div class="sentinel" id="sentinelBooks"></div>
-      </div>
-
-      <!-- Painel Compras -->
-      <div class="panel" id="panel-purchases">
-        <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-          <div class="muted">
-            Pedidos realizados (tabela <span class="mono">orders</span>).
-          </div>
-          <button class="btn btnPrimary" id="btnRefreshOrders" title="Atualizar lista">
-            <span id="refreshIconOrders">🔄</span> Atualizar
-          </button>
-        </div>
-        <div class="hint" id="hintOrders"></div>
-        <div class="list" id="ordersList" style="margin-top:12px;"></div>
-        <div class="sentinel" id="sentinelOrders"></div>
-      </div>
-
-      <!-- Painel Conta -->
-      <div class="panel" id="panel-security">
-        <div class="muted" style="margin-top:10px;">
-          Para entrar com outra conta, use “Sair” (o cookie <span class="mono">sb_token</span> será removido).
-        </div>
-        <div class="list" style="margin-top:12px;">
-          <div class="item">
-            <div class="itemTop">
-              <h2 style="margin:0;">Conta</h2>
-              <span class="badge" id="sessionBadge">Sessão ativa</span>
-            </div>
-            <div class="rowBtns" style="margin-top:12px;">
-              <button class="btn btnDanger" id="btnLogout">🚪 Sair da conta</button>
-              <a class="a" href="/login">🔐 Ir para Login</a>
-            </div>
-          </div>
-        </div>
-        <div class="hint" id="hintLogout"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Toast e Modal (idênticos ao preview) -->
-  <div class="toastWrap" id="toastWrap" aria-live="polite" aria-atomic="true"></div>
-
-  <div class="modalBackdrop" id="logoutModal">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="logoutTitle">
-      <h3 id="logoutTitle">Sair da conta?</h3>
-      <p>
-        Você será desconectado e poderá entrar com outro e-mail.
-      </p>
-      <div class="modalActions">
-        <button class="btn btnOutline" id="btnCancelLogout">Cancelar</button>
-        <button class="btn btnDanger" id="btnConfirmLogout">🚪 Confirmar saída</button>
-      </div>
-      <div class="hint" id="hintLogoutModal"></div>
-    </div>
-  </div>
-
-<script>
-  // CÓDIGO ORIGINAL DO PERFIL (preservado integralmente, apenas ajustado o link dos livros)
-  const $ = (id) => document.getElementById(id);
-
-  function setHint(id, msg){
-    const el = $(id);
-    el.textContent = msg || "";
-    el.style.display = msg ? "block" : "none";
-  }
-
-  function initialsFromEmail(email){
-    const s = String(email || "").trim();
-    if (!s) return "🙂";
-    const left = s.split("@")[0] || s;
-    const parts = left.split(/[._-]+/).filter(Boolean);
-    const a = (parts[0] || left)[0] || "U";
-    const b = (parts[1] || "")[0] || "";
-    return (a + b).toUpperCase();
-  }
-
-  function fmtDateBR(iso){
-    try{
-      const d = new Date(String(iso||""));
-      if (!Number.isFinite(d.getTime())) return "";
-      const dd = String(d.getDate()).padStart(2,"0");
-      const mm = String(d.getMonth()+1).padStart(2,"0");
-      const yy = d.getFullYear();
-      const hh = String(d.getHours()).padStart(2,"0");
-      const mi = String(d.getMinutes()).padStart(2,"0");
-      return dd + "/" + mm + "/" + yy + " " + hh + ":" + mi;
-    }catch{ return ""; }
-  }
-
-  function formatMoney(centavos){
-    const n = Number(centavos||0);
-    return n.toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
-  }
-
-  async function getJson(url){
-    const r = await fetch(url, { headers: { "Accept":"application/json" }});
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || "Falha");
-    return j;
-  }
-
-  function setTab(key){
-    document.querySelectorAll(".tab").forEach(btn => {
-      btn.classList.toggle("active", btn.getAttribute("data-tab") === key);
-    });
-    $("panel-info").classList.toggle("active", key === "info");
-    $("panel-created").classList.toggle("active", key === "created");
-    $("panel-purchases").classList.toggle("active", key === "purchases");
-    $("panel-security").classList.toggle("active", key === "security");
-  }
-
-  document.querySelectorAll(".tab").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const key = btn.getAttribute("data-tab");
-      setTab(key);
-      if (key === "created") await loadBooks(true, "tab");
-      if (key === "purchases") await loadOrders(true, "tab");
-    });
-  });
-
-  function statusBadge(st){
-    const s = String(st || "");
-    if (s === "done") return '<span class="badge green">✅ Pronto</span>';
-    if (s === "failed") return '<span class="badge red">❌ Falhou</span>';
-    if (s === "generating") return '<span class="badge violet">⏳ Gerando</span>';
-    return '<span class="badge">• ' + (s || "created") + '</span>';
-  }
-
-  function orderStatusBadge(st){
-    const s = String(st || "");
-    if (s === "pending") return '<span class="badge amber">⏳ Pendente</span>';
-    if (s === "paid") return '<span class="badge green">✅ Pago</span>';
-    if (s === "shipped") return '<span class="badge blue">📦 Enviado</span>';
-    if (s === "delivered") return '<span class="badge violet">📬 Entregue</span>';
-    if (s === "cancelled") return '<span class="badge red">❌ Cancelado</span>';
-    return '<span class="badge">' + (s || "—") + '</span>';
-  }
-
-  function safe(s){ return String(s ?? ""); }
-
-  // Curtidas (validação social) — localStorage + base determinístico
-  const LIKE_KEY = "mlm_profile_likes_v1";
-
-  function hash32(str){
-    str = String(str||"");
-    let h = 2166136261;
-    for (let i=0;i<str.length;i++){
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  }
-
-  function readLikes(){
-    try{
-      const raw = localStorage.getItem(LIKE_KEY);
-      if (!raw) return {};
-      const j = JSON.parse(raw);
-      return (j && typeof j === "object") ? j : {};
-    }catch{
-      return {};
-    }
-  }
-
-  function writeLikes(map){
-    try{ localStorage.setItem(LIKE_KEY, JSON.stringify(map || {})); }catch{}
-  }
-
-  function baseLikeCount(id){
-    const h = hash32(id);
-    return 3 + (h % 25);
-  }
-
-  function getLikeState(id){
-    const map = readLikes();
-    const v = map[String(id)] || null;
-    const liked = !!(v && v.liked);
-    return { liked };
-  }
-
-  function toggleLike(id){
-    const key = String(id);
-    const map = readLikes();
-    const cur = map[key] || {};
-    const nextLiked = !cur.liked;
-    map[key] = { liked: nextLiked };
-    writeLikes(map);
-    return nextLiked;
-  }
-
-  function likeCountFor(id){
-    const base = baseLikeCount(id);
-    const st = getLikeState(id);
-    return base + (st.liked ? 1 : 0);
-  }
-
-  function bookCard(b){
-    const id = safe(b.id);
-    const title = safe(b.child_name || "Criança");
-    const theme = safe(b.theme || "");
-    const style = safe(b.style || "");
-    const upd = fmtDateBR(b.updated_at || b.created_at || "");
-    const err = safe(b.error || "");
-    const pdf = safe(b.pdf_url || "");
-    const canDownload = pdf && safe(b.status) === "done";
-
-    // ✅ CORRIGIDO: link para /books/:id (preview com flip de páginas)
-    const openLink = "/books/" + encodeURIComponent(id);
-    const downloadLink = canDownload ? ("/download/" + encodeURIComponent(id)) : "";
-
-    const st = getLikeState(id);
-    const cnt = likeCountFor(id);
-
-    return \`
-      <div class="item" data-book="\${id}">
-        <div class="itemTop">
-          <div style="min-width:0">
-            <div style="font-weight:1000; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-              📘 Livro: \${title} \${theme ? "• " + theme : ""} \${style ? "• " + style : ""}
-            </div>
-            <div class="muted" style="margin-top:6px;">
-              Atualizado: <b>\${upd || "—"}</b><br/>
-              ID: <span class="mono">\${id}</span>
-              \${err ? "<br/><span style='color:#7f1d1d; font-weight:1000;'>Erro: " + err + "</span>" : ""}
-            </div>
-          </div>
-          \${statusBadge(b.status)}
-        </div>
-
-        <div class="rowBtns">
-          <a class="a" href="\${openLink}">👀 Abrir</a>
-          \${canDownload ? \`<a class="a" href="\${downloadLink}">⬇️ Baixar PDF</a>\` : \`<span class="badge">PDF indisponível</span>\`}
-
-          <button class="likeBtn \${st.liked ? "on" : ""}" data-like="\${id}" title="Curtir este livro">
-            \${st.liked ? "❤️" : "🤍"} Curtir <span class="likeCount" data-likecount="\${id}">\${cnt}</span>
-          </button>
-        </div>
-      </div>
-    \`;
-  }
-
-  function orderCard(o){
-    const id = safe(o.id);
-    const createdAt = fmtDateBR(o.created_at);
-    const status = o.status || "pending";
-    const orderData = o.order_data || {};
-
-    const childName = orderData.childName || "—";
-    const theme = orderData.theme || "—";
-    const style = orderData.style || "—";
-    const total = orderData.total || 0;
-
-    const bookId = o.book_id || orderData.bookId;
-    const bookLink = bookId ? ("/books/" + encodeURIComponent(bookId)) : "#";
-
-    return \`
-      <div class="item" data-order="\${id}">
-        <div class="itemTop">
-          <div style="min-width:0">
-            <div style="font-weight:1000; font-size:16px;">
-              🧾 Pedido #\${id.slice(0,8)}
-            </div>
-            <div class="muted" style="margin-top:6px;">
-              <b>Criança:</b> \${childName}<br/>
-              <b>Tema/Estilo:</b> \${theme} • \${style}<br/>
-              <b>Total:</b> \${formatMoney(total)}<br/>
-              <b>Data:</b> \${createdAt}
-            </div>
-          </div>
-          \${orderStatusBadge(status)}
-        </div>
-
-        <div class="rowBtns">
-          \${bookId ? \`<a class="a" href="\${bookLink}">👀 Ver livro</a>\` : ""}
-          <a class="a" href="#">📄 Detalhes do pedido</a>
-        </div>
-      </div>
-    \`;
-  }
-
-  // Toast
-  const rewardLines = [
-    { t: "✨ Atualizado", d: "Tudo certo por aqui. Seu perfil está sincronizado." },
-    { t: "📚 Biblioteca pronta", d: "Seus livros foram carregados. Continue rolando para ver mais." },
-    { t: "✅ Boa!", d: "Mais um passo concluído. Seu progresso está ficando top." },
-    { t: "🧠 Achado", d: "Você pode curtir seus livros para marcar os favoritos." },
-  ];
-
-  function showToast(title, desc, ms){
-    const wrap = $("toastWrap");
-    const el = document.createElement("div");
-    el.className = "toast";
-    el.innerHTML = \`
-      <div style="min-width:0">
-        <div class="toastTitle">\${title}</div>
-        <div class="toastText">\${desc}</div>
-      </div>
-      <div class="mono" style="opacity:.75">agora</div>
-    \`;
-    wrap.appendChild(el);
-    requestAnimationFrame(() => el.classList.add("show"));
-    const ttl = Math.max(1400, Math.min(4200, Number(ms || 2200)));
-    setTimeout(() => {
-      el.classList.remove("show");
-      setTimeout(() => el.remove(), 240);
-    }, ttl);
-  }
-
-  function variableReward(kind){
-    const chance = kind === "refresh" ? 0.70 : 0.45;
-    if (Math.random() > chance) return;
-    const pick = rewardLines[Math.floor(Math.random() * rewardLines.length)];
-    showToast(pick.t, pick.d, 2200 + Math.floor(Math.random() * 1200));
-  }
-
-  // Logout (com confirmação)
-  function openLogoutModal(){
-    setHint("hintLogoutModal", "");
-    $("logoutModal").classList.add("open");
-  }
-  function closeLogoutModal(){
-    $("logoutModal").classList.remove("open");
-  }
-
-  async function doLogout(){
-    setHint("hintLogout", "");
-    setHint("hintLogoutModal", "");
-    try{
-      const r = await fetch("/api/auth/logout", {
-        method:"POST",
-        headers: { "Content-Type":"application/json" },
-        body:"{}"
+    try {
+      const email = escapeHtml(req.user?.email || "");
+
+      const html = renderProfilePage({
+        email,
+        pageCss: PROFILE_PAGE_CSS(),
+        pageJs: buildProfilePageJS(),
       });
-      const j = await r.json().catch(()=> ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao sair");
-      window.location.href = "/login";
-    }catch(e){
-      const msg = String(e.message || e);
-      setHint("hintLogout", msg);
-      setHint("hintLogoutModal", msg);
+
+      res.type("html").send(html);
+    } catch (e) {
+      res
+        .status(500)
+        .type("html")
+        .send(
+          `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><title>Erro</title></head><body><pre>${escapeHtml(
+            String(e?.message || e || "Erro ao renderizar /profile")
+          )}</pre></body></html>`
+        );
     }
-  }
-
-  $("btnTopLogout").addEventListener("click", openLogoutModal);
-  $("btnLogout").addEventListener("click", openLogoutModal);
-
-  $("btnCancelLogout").addEventListener("click", closeLogoutModal);
-  $("logoutModal").addEventListener("click", (e) => {
-    if (e.target === $("logoutModal")) closeLogoutModal();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeLogoutModal();
-  });
-  $("btnConfirmLogout").addEventListener("click", doLogout);
-
-  // Estrelas flutuantes (mesmo código do preview)
-  (function renderStars(){
-    var root = $("stars");
-    if(!root) return;
-    var N = 22;
-
-    function rnd(a,b){ return a + Math.random()*(b-a); }
-
-    var starSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.1 6.4L21 9.6l-5.4 4 2.1 6.4L12 16.2 6.3 20l2.1-6.4L3 9.6l6.9-1.2L12 2z" fill="rgba(252,211,77,.95)"/></svg>';
-
-    for(var i=0;i<N;i++){
-      var el = document.createElement("div");
-      el.className = "star";
-      el.style.top  = rnd(0, 100).toFixed(2) + "%";
-      el.style.left = rnd(0, 100).toFixed(2) + "%";
-      el.style.setProperty("--dur", rnd(3.2, 5.8).toFixed(2) + "s");
-      el.style.animationDelay = rnd(0, 2.2).toFixed(2) + "s";
-      el.innerHTML = starSvg;
-      root.appendChild(el);
-    }
-  })();
-
-  // Perfil / progresso + emblemas
-  function setProgress(pct){
-    const v = Math.max(0, Math.min(100, Number(pct || 0)));
-    $("profileProgressLabel").textContent = v + "%";
-    $("profileBar").style.width = v + "%";
-  }
-
-  function setBadges(progressPct, hasProfileName){
-    const row = $("badgesRow");
-    const badges = [];
-
-    if (progressPct >= 40) badges.push("<span class='badge blue'>✅ Conta ok</span>");
-    if (progressPct >= 70) badges.push("<span class='badge violet'>⭐ Perfil quase lá</span>");
-    if (hasProfileName) badges.push("<span class='badge green'>🏷️ Nome definido</span>");
-    if (progressPct >= 100) badges.push("<span class='badge amber'>🏆 Perfil completo</span>");
-
-    row.innerHTML = badges.length ? badges.join(" ") : "<span class='muted'>Complete mais um passo para ganhar emblemas.</span>";
-  }
-
-  async function loadMe(){
-    try{
-      const me = await getJson("/api/me");
-      const u = me.user || {};
-      const p = me.profile || null;
-
-      $("uid").textContent = u.id || "—";
-      $("avatar").textContent = initialsFromEmail(u.email || "");
-
-      let score = 0;
-      if (u.id) score += 40;
-      if (u.email) score += 30;
-      if (p && p.name) score += 30;
-      setProgress(score);
-
-      const hasName = !!(p && p.name);
-
-      if (hasName){
-        $("name").textContent = p.name;
-        $("profileName").textContent = p.name;
-        $("profileCreated").textContent = fmtDateBR(p.created_at || "") || "—";
-        $("profileUpdated").textContent = fmtDateBR(p.updated_at || "") || "—";
-        $("profileBadge").textContent = "profiles OK";
-      } else {
-        $("name").textContent = "Seu Perfil";
-        $("profileName").textContent = "—";
-        $("profileCreated").textContent = "—";
-        $("profileUpdated").textContent = "—";
-        $("profileBadge").textContent = "sem profile";
-      }
-
-      setBadges(score, hasName);
-      variableReward("me");
-    }catch(e){
-      $("profileBadge").textContent = "erro";
-      setHint("hintLogout", "Falha ao carregar /api/me: " + String(e.message || e));
-      setProgress(20);
-      setBadges(20, false);
-    }
-  }
-
-  // Livros Criados — Infinite Scroll
-  let allBooks = [];
-  let shownBooks = 0;
-  const PAGE = 10;
-  let ioBooks = null;
-  let isLoadingBooks = false;
-
-  function detachBooksObserver(){
-    try{ if (ioBooks) ioBooks.disconnect(); }catch{}
-    ioBooks = null;
-  }
-
-  function attachBooksObserver(){
-    detachBooksObserver();
-    const sentinel = $("sentinelBooks");
-    if (!sentinel) return;
-    ioBooks = new IntersectionObserver((entries) => {
-      const e = entries && entries[0];
-      if (!e || !e.isIntersecting) return;
-      renderMoreBooks();
-    }, { root: null, rootMargin: "600px 0px", threshold: 0.01 });
-    ioBooks.observe(sentinel);
-  }
-
-  function renderMoreBooks(){
-    if (isLoadingBooks) return;
-    const list = $("booksList");
-    const slice = allBooks.slice(shownBooks, shownBooks + PAGE);
-    if (!slice.length) return;
-    isLoadingBooks = true;
-    setTimeout(() => {
-      list.insertAdjacentHTML("beforeend", slice.map(bookCard).join(""));
-      shownBooks += slice.length;
-      bindLikeButtonsForVisible();
-      isLoadingBooks = false;
-      variableReward("scroll");
-    }, 120);
-  }
-
-  function bindLikeButtonsForVisible(){
-    document.querySelectorAll("[data-like]").forEach(btn => {
-      if (btn.__boundLike) return;
-      btn.__boundLike = true;
-      btn.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        const id = btn.getAttribute("data-like");
-        const nextLiked = toggleLike(id);
-        btn.classList.toggle("on", nextLiked);
-        btn.innerHTML = (nextLiked ? "❤️" : "🤍") +
-          " Curtir " +
-          "<span class='likeCount' data-likecount='" + id + "'>" + likeCountFor(id) + "</span>";
-        showToast(nextLiked ? "❤️ Curtido!" : "🤍 Removido", nextLiked ? "Você marcou como favorito." : "Ok, desmarcado.", 2000);
-        variableReward("like");
-      });
-    });
-  }
-
-  async function loadBooks(reset, source){
-    setHint("hintBooks", "");
-    if (reset){
-      detachBooksObserver();
-      allBooks = [];
-      shownBooks = 0;
-      $("booksList").innerHTML = "<div class='muted'>Carregando…</div>";
-    }
-    const btn = $("btnRefreshBooks");
-    const icon = $("refreshIconBooks");
-    btn.disabled = true;
-    icon.innerHTML = "<span class='spin'></span>";
-    try{
-      const j = await getJson("/api/my-books");
-      const items = Array.isArray(j.items) ? j.items : [];
-      
-      // 🔍 Filtro extra no front-end para garantir (caso o servidor ainda retorne algo errado)
-      const filtered = items.filter(item => item.status === 'done');
-      
-      allBooks = filtered;
-      shownBooks = 0;
-      if (!filtered.length){
-        $("booksList").innerHTML = "<div class='muted'>Nenhum livro concluído ainda.</div>";
-        attachBooksObserver();
-        variableReward("refresh");
-        return;
-      }
-      $("booksList").innerHTML = "";
-      renderMoreBooks();
-      attachBooksObserver();
-      variableReward("refresh");
-    }catch(e){
-      $("booksList").innerHTML = "";
-      setHint("hintBooks", "Falha ao carregar livros: " + String(e.message || e));
-    }finally{
-      btn.disabled = false;
-      icon.textContent = "🔄";
-    }
-  }
-
-  // Compras (Pedidos) — Infinite Scroll
-  let allOrders = [];
-  let shownOrders = 0;
-  let ioOrders = null;
-  let isLoadingOrders = false;
-
-  function detachOrdersObserver(){
-    try{ if (ioOrders) ioOrders.disconnect(); }catch{}
-    ioOrders = null;
-  }
-
-  function attachOrdersObserver(){
-    detachOrdersObserver();
-    const sentinel = $("sentinelOrders");
-    if (!sentinel) return;
-    ioOrders = new IntersectionObserver((entries) => {
-      const e = entries && entries[0];
-      if (!e || !e.isIntersecting) return;
-      renderMoreOrders();
-    }, { root: null, rootMargin: "600px 0px", threshold: 0.01 });
-    ioOrders.observe(sentinel);
-  }
-
-  function renderMoreOrders(){
-    if (isLoadingOrders) return;
-    const list = $("ordersList");
-    const slice = allOrders.slice(shownOrders, shownOrders + PAGE);
-    if (!slice.length) return;
-    isLoadingOrders = true;
-    setTimeout(() => {
-      list.insertAdjacentHTML("beforeend", slice.map(orderCard).join(""));
-      shownOrders += slice.length;
-      isLoadingOrders = false;
-      variableReward("scroll");
-    }, 120);
-  }
-
-  async function loadOrders(reset, source){
-    setHint("hintOrders", "");
-    if (reset){
-      detachOrdersObserver();
-      allOrders = [];
-      shownOrders = 0;
-      $("ordersList").innerHTML = "<div class='muted'>Carregando…</div>";
-    }
-    const btn = $("btnRefreshOrders");
-    const icon = $("refreshIconOrders");
-    btn.disabled = true;
-    icon.innerHTML = "<span class='spin'></span>";
-    try{
-      const j = await getJson("/api/my-orders");
-      const items = Array.isArray(j.items) ? j.items : [];
-      allOrders = items;
-      shownOrders = 0;
-      if (!items.length){
-        $("ordersList").innerHTML = "<div class='muted'>Nenhum pedido encontrado.</div>";
-        attachOrdersObserver();
-        variableReward("refresh");
-        return;
-      }
-      $("ordersList").innerHTML = "";
-      renderMoreOrders();
-      attachOrdersObserver();
-      variableReward("refresh");
-    }catch(e){
-      $("ordersList").innerHTML = "";
-      setHint("hintOrders", "Falha ao carregar pedidos: " + String(e.message || e));
-    }finally{
-      btn.disabled = false;
-      icon.textContent = "🔄";
-    }
-  }
-
-  $("btnRefreshBooks").addEventListener("click", () => loadBooks(true, "btn"));
-  $("btnRefreshOrders").addEventListener("click", () => loadOrders(true, "btn"));
-
-  // Init
-  (async function init(){
-    await loadMe();
-  })();
-</script>
-</body>
-</html>`);
   });
 };
