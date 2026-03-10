@@ -1326,9 +1326,9 @@ async function saveManifest(userId, bookId, manifest) {
   }
 
   const syncResult = await syncBookRowToSupabase(manifest);
-  if (!syncResult.ok) {
-    console.error(`[saveManifest] Falha ao sincronizar livro na tabela books: ${syncResult.reason}`);
-  }
+if (!syncResult.ok) {
+  console.error("[saveManifest] Falha ao sincronizar livro na tabela books:", syncResult.error);
+}
   console.log("SALVANDO LIVRO NO SUPABASE:", manifest.id);
 }
 

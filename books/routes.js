@@ -1,15 +1,12 @@
 // books/routes.js
 // Rotas do módulo /books (galeria + preview + editor + checkout)
 //
-// ✅ Agora consulta os livros no SUPABASE
+// ✅ Consulta os livros no SUPABASE (tabela: books)
 // ✅ Usuário comum vê somente os próprios livros
 // ✅ Admin pode ver todos
 // ✅ Preview / editor / checkout também validam acesso no banco
-//
-// Requer em opts:
-//   - requireAuth
-//   - supabaseAdmin   (service role, backend)
-//   - OUT_DIR         (ainda usado por outras telas se necessário)
+// ✅ Não derruba a aplicação inteira se faltar renderer ou opts opcionais
+// ✅ Suporte a /preview?id=... (compatível com seu render.books.html.js)
 
 "use strict";
 
@@ -24,6 +21,15 @@ function pickFn(mod, names = []) {
   }
 
   return null;
+}
+
+function tryRequire(p) {
+  try {
+    return require(p);
+  } catch (err) {
+    console.error(`[books/routes] Falha ao carregar módulo ${p}:`, err?.message || err);
+    return null;
+  }
 }
 
 function normalizeEmail(s) {
@@ -43,22 +49,20 @@ function getAdminAllowlist() {
 }
 
 function isAdmin(req) {
-  const email = normalizeEmail(req.user?.email || "");
+  const email = normalizeEmail(req?.user?.email || "");
   if (!email) return false;
 
   const allow = getAdminAllowlist();
-
-  // Em produção, o ideal é SEMPRE configurar ADMIN_EMAILS
   if (!allow.length) return false;
 
   return allow.includes(email);
 }
 
 function getPartnerRefFromReq(req) {
-  const q = String(req.query?.ref || "").trim();
+  const q = String(req?.query?.ref || "").trim();
   if (q) return q;
 
-  const c = String(req.cookies?.partner_ref || "").trim();
+  const c = String(req?.cookies?.partner_ref || "").trim();
   if (c) return c;
 
   return null;
@@ -67,6 +71,7 @@ function getPartnerRefFromReq(req) {
 function parseJsonSafe(value, fallback) {
   if (value == null) return fallback;
   if (typeof value === "object") return value;
+
   try {
     return JSON.parse(String(value));
   } catch {
@@ -87,116 +92,153 @@ function toIso(v) {
 
 function inferCoverUrl(row) {
   return String(
-    row.cover_url ||
-      row.capa_url ||
-      row.coverUrl ||
-      row.capa ||
-      ""
+    row?.cover_url ||
+    row?.capa_url ||
+    row?.coverUrl ||
+    row?.capa ||
+    row?.manifest?.cover?.url ||
+    ""
   );
 }
 
 function inferPdfUrl(row) {
   return String(
-    row.pdf_url ||
-      row.arquivo_pdf ||
-      row.pdf ||
-      ""
+    row?.pdf_url ||
+    row?.arquivo_pdf ||
+    row?.pdf ||
+    row?.manifest?.pdf ||
+    ""
   );
 }
 
+function inferManifest(row) {
+  return row?.manifest && typeof row.manifest === "object"
+    ? row.manifest
+    : parseJsonSafe(row?.manifest, {});
+}
+
 function inferPages(row) {
+  const manifest = inferManifest(row);
+
   const a =
-    row.pages ??
-    row.paginas ??
-    row.pages_json ??
-    row.paginas_json ??
+    row?.pages ??
+    row?.paginas ??
+    row?.pages_json ??
+    row?.paginas_json ??
+    manifest?.pages ??
     [];
+
   return Array.isArray(a) ? a : parseJsonSafe(a, []);
 }
 
 function inferImages(row) {
+  const manifest = inferManifest(row);
+
   const a =
-    row.images ??
-    row.imagens ??
-    row.images_json ??
-    row.imagens_json ??
+    row?.images ??
+    row?.imagens ??
+    row?.images_json ??
+    row?.imagens_json ??
+    manifest?.images ??
     [];
+
   return Array.isArray(a) ? a : parseJsonSafe(a, []);
 }
 
 function inferChild(row) {
+  const manifest = inferManifest(row);
+
   const raw =
-    row.child ??
-    row.crianca ??
-    row.child_json ??
-    row.crianca_json ??
+    row?.child ??
+    row?.crianca ??
+    row?.child_json ??
+    row?.crianca_json ??
+    manifest?.child ??
     null;
 
   const parsed = raw && typeof raw === "object" ? raw : parseJsonSafe(raw, null);
 
   return {
     name: String(
-      row.nome_da_crianca ||
-        parsed?.name ||
-        parsed?.nome ||
-        ""
+      row?.child_name ||
+      row?.nome_da_crianca ||
+      parsed?.name ||
+      parsed?.nome ||
+      ""
     ),
     age: Number(
-      row.idade_da_crianca ||
-        parsed?.age ||
-        parsed?.idade ||
-        0
+      row?.child_age ||
+      row?.idade_da_crianca ||
+      parsed?.age ||
+      parsed?.idade ||
+      0
     ),
     gender: String(
-      row.genero_da_crianca ||
-        row.gênero_da_crianca ||
-        parsed?.gender ||
-        parsed?.genero ||
-        parsed?.gênero ||
-        "neutral"
+      row?.child_gender ||
+      row?.genero_da_crianca ||
+      row?.gênero_da_crianca ||
+      parsed?.gender ||
+      parsed?.genero ||
+      parsed?.gênero ||
+      "neutral"
     ),
   };
 }
 
 function toListItem(row) {
+  const manifest = inferManifest(row);
   const pages = inferPages(row);
   const images = inferImages(row);
   const child = inferChild(row);
   const pdfUrl = inferPdfUrl(row);
 
   return {
-    id: String(row.id || ""),
-    bookId: String(row.id || ""),
-    dirId: String(row.id || ""),
+    id: String(row?.id || manifest?.id || ""),
+    bookId: String(row?.id || manifest?.id || ""),
+    dirId: String(row?.id || manifest?.id || ""),
 
-    ownerId: String(row.user_id || row.owner_id || ""),
-    status: String(row.status || "created"),
-    step: String(row.step || ""),
-    error: String(row.error || ""),
+    ownerId: String(row?.user_id || row?.owner_id || manifest?.ownerId || ""),
+    status: String(row?.status || manifest?.status || "created"),
+    step: String(row?.step || manifest?.step || ""),
+    error: String(row?.error || manifest?.error || ""),
 
-    theme: String(row.tema || row.theme || ""),
-    themeLabel: String(row.tema || row.theme || ""),
-    style: String(row.estilo || row.style || "read"),
-    styleLabel: String(row.estilo || row.style || "read"),
+    theme: String(row?.theme || row?.tema || manifest?.theme || ""),
+    themeLabel: String(row?.theme || row?.tema || manifest?.theme || ""),
+    style: String(row?.style || row?.estilo || manifest?.style || "read"),
+    styleLabel: String(row?.style || row?.estilo || manifest?.style || "read"),
 
     child,
     childName: String(child.name || ""),
 
-    pagesCount: Number(row.total_paginas || pages.length || 0),
-    imagesCount: Number(row.total_imagens || images.length || 0),
+    pagesCount: Number(
+      row?.total_paginas ||
+      row?.done_steps ||
+      pages.length ||
+      0
+    ),
+
+    imagesCount: Number(
+      row?.total_imagens ||
+      images.length ||
+      0
+    ),
 
     coverUrl: inferCoverUrl(row),
     hasPdf: !!pdfUrl,
     pdfUrl,
 
-    createdAt: toIso(row.created_at || row.createdAt),
-    updatedAt: toIso(row.updated_at || row.updatedAt || row.created_at || row.createdAt),
+    createdAt: toIso(row?.created_at || row?.createdAt || manifest?.createdAt),
+    updatedAt: toIso(row?.updated_at || row?.updatedAt || manifest?.updatedAt || row?.created_at || manifest?.createdAt),
   };
 }
 
 async function listBooksForRequest(supabaseAdmin, req) {
-  const uid = String(req.user?.id || "").trim();
+  const uid = String(req?.user?.id || "").trim();
   if (!uid) return [];
+
+  if (!supabaseAdmin) {
+    throw new Error("Supabase Admin não configurado no servidor.");
+  }
 
   let query = supabaseAdmin
     .from("books")
@@ -212,48 +254,20 @@ async function listBooksForRequest(supabaseAdmin, req) {
     throw new Error("Erro ao consultar livros no Supabase: " + error.message);
   }
 
-  const list = Array.isArray(data) ? data.map((row) => ({
-    id: String(row.id || ""),
-    bookId: String(row.id || ""),
-    dirId: String(row.id || ""),
-
-    ownerId: String(row.user_id || ""),
-    status: String(row.status || "created"),
-    step: String(row.step || ""),
-    error: String(row.error || ""),
-
-    theme: String(row.theme || ""),
-    themeLabel: String(row.theme || ""),
-    style: String(row.style || "read"),
-    styleLabel: String(row.style || "read"),
-
-    child: {
-      name: String(row.child_name || ""),
-      age: Number(row.child_age || 0),
-      gender: String(row.child_gender || "neutral"),
-    },
-    childName: String(row.child_name || ""),
-
-    pagesCount: Array.isArray(row.manifest?.pages) ? row.manifest.pages.length : 0,
-    imagesCount: Array.isArray(row.images) ? row.images.length : 0,
-
-    coverUrl: String(row.cover_url || ""),
-    hasPdf: !!row.pdf_url,
-    pdfUrl: String(row.pdf_url || ""),
-
-    createdAt: String(row.created_at || ""),
-    updatedAt: String(row.updated_at || row.created_at || ""),
-  })) : [];
-
+  const list = Array.isArray(data) ? data.map(toListItem) : [];
   list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   return list;
 }
 
 async function loadBookForRequest(supabaseAdmin, req, bookId) {
-  const uid = String(req.user?.id || "").trim();
+  const uid = String(req?.user?.id || "").trim();
   const id = String(bookId || "").trim();
 
   if (!uid || !id) return null;
+
+  if (!supabaseAdmin) {
+    throw new Error("Supabase Admin não configurado no servidor.");
+  }
 
   let query = supabaseAdmin
     .from("books")
@@ -273,94 +287,182 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
 
   if (!data) return null;
 
-  const manifest = data.manifest && typeof data.manifest === "object" ? data.manifest : {};
+  const manifest = inferManifest(data);
+  const child = inferChild(data);
+  const pages = inferPages(data);
+  const images = inferImages(data);
 
   return {
     ...manifest,
     ...data,
 
-    id: String(data.id || ""),
-    bookId: String(data.id || ""),
-    dirId: String(data.id || ""),
-    folderId: String(data.id || ""),
-    ownerId: String(data.user_id || ""),
+    id: String(data.id || manifest.id || ""),
+    bookId: String(data.id || manifest.id || ""),
+    dirId: String(data.id || manifest.id || ""),
+    folderId: String(data.id || manifest.id || ""),
+    ownerId: String(data.user_id || manifest.ownerId || ""),
 
-    theme: String(data.theme || ""),
-    style: String(data.style || "read"),
+    status: String(data.status || manifest.status || "created"),
+    step: String(data.step || manifest.step || ""),
+    error: String(data.error || manifest.error || ""),
 
-    child: {
-      name: String(data.child_name || ""),
-      age: Number(data.child_age || 0),
-      gender: String(data.child_gender || "neutral"),
-    },
+    theme: String(data.theme || manifest.theme || ""),
+    style: String(data.style || manifest.style || "read"),
 
-    pages: Array.isArray(manifest.pages) ? manifest.pages : [],
-    images: Array.isArray(data.images) ? data.images : [],
+    child,
+    pages,
+    images,
 
-    coverUrl: String(data.cover_url || ""),
-    pdf: String(data.pdf_url || ""),
-    pdfUrl: String(data.pdf_url || ""),
+    coverUrl: inferCoverUrl(data),
+    pdf: inferPdfUrl(data),
+    pdfUrl: inferPdfUrl(data),
 
-    createdAt: String(data.created_at || ""),
-    updatedAt: String(data.updated_at || data.created_at || ""),
+    createdAt: toIso(data.created_at || manifest.createdAt),
+    updatedAt: toIso(data.updated_at || manifest.updatedAt || data.created_at || manifest.createdAt),
   };
 }
+
+function fallbackBooksHtml() {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Meus Livros</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px">
+  <h1>Meus Livros</h1>
+  <p>O renderer principal não foi carregado.</p>
+  <p><a href="/sales">Ir para página inicial</a></p>
+</body>
+</html>`;
+}
+
+function fallbackPreviewHtml(book) {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Preview do Livro</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px">
+  <h1>Preview do Livro</h1>
+  <pre>${escapeHtmlJson(book)}</pre>
+</body>
+</html>`;
+}
+
+function fallbackEditorHtml(book) {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Editor do Livro</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px">
+  <h1>Editor do Livro</h1>
+  <pre>${escapeHtmlJson(book)}</pre>
+</body>
+</html>`;
+}
+
+function fallbackCheckoutHtml(book) {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Checkout</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px">
+  <h1>Checkout</h1>
+  <p>Livro: <b>${escapeHtmlText(book?.id || "")}</b></p>
+  <p><a href="/books">Voltar</a></p>
+</body>
+</html>`;
+}
+
+function escapeHtmlText(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeHtmlJson(v) {
+  return escapeHtmlText(JSON.stringify(v || {}, null, 2));
+}
+
 module.exports = function mountRoutes(app, opts = {}) {
-  const { OUT_DIR, requireAuth, supabaseAdmin } = opts;
+  const OUT_DIR = String(opts.OUT_DIR || process.cwd());
+  const requireAuth = opts.requireAuth;
+  const supabaseAdmin = opts.supabaseAdmin || null;
 
   if (!app) throw new Error("books/routes.js: app é obrigatório");
-  if (!OUT_DIR) throw new Error("books/routes.js: OUT_DIR é obrigatório");
   if (typeof requireAuth !== "function") {
     throw new Error("books/routes.js: requireAuth é obrigatório");
   }
-  if (!supabaseAdmin) {
-    throw new Error("books/routes.js: supabaseAdmin é obrigatório");
-  }
 
-  const booksRendererMod = require("./render.books.html");
-  const previewRendererMod = require("./render.preview.html");
-  const editorRendererMod = require("./render.editor.html");
-  const checkoutRendererMod = require("./render.checkout.html");
+  const booksRendererMod = tryRequire("./render.books.html");
+  const previewRendererMod = tryRequire("./render.preview.html");
+  const editorRendererMod = tryRequire("./render.editor.html");
+  const checkoutRendererMod = tryRequire("./render.checkout.html");
 
-  const renderBooksHtml = pickFn(booksRendererMod, [
-    "renderBooksHtml",
-    "renderBooksGalleryHtml",
-    "renderBooksPageHtml",
-  ]);
+  const renderBooksHtml =
+    pickFn(booksRendererMod, [
+      "renderBooksHtml",
+      "renderBooksGalleryHtml",
+      "renderBooksPageHtml",
+    ]) ||
+    (() => fallbackBooksHtml());
 
-  const renderBookPreviewHtml = pickFn(previewRendererMod, ["renderBookPreviewHtml"]);
-  const renderBookEditorHtml = pickFn(editorRendererMod, ["renderBookEditorHtml"]);
-  const renderCheckoutHtml = pickFn(checkoutRendererMod, ["renderCheckoutHtml"]);
+  const renderBookPreviewHtml =
+    pickFn(previewRendererMod, [
+      "renderBookPreviewHtml",
+      "renderPreviewHtml",
+      "renderPreview",
+    ]) ||
+    ((book) => fallbackPreviewHtml(book));
 
-  if (!renderBooksHtml) {
-    throw new Error(
-      "books/routes.js: render.books.html.js precisa exportar uma função"
-    );
-  }
+  const renderBookEditorHtml =
+    pickFn(editorRendererMod, [
+      "renderBookEditorHtml",
+      "renderEditorHtml",
+      "renderEditor",
+    ]) ||
+    ((book) => fallbackEditorHtml(book));
 
-  if (!renderBookPreviewHtml) {
-    throw new Error(
-      "books/routes.js: render.preview.html.js precisa exportar { renderBookPreviewHtml }"
-    );
-  }
+  const renderCheckoutHtml =
+    pickFn(checkoutRendererMod, [
+      "renderCheckoutHtml",
+      "renderCheckoutPageHtml",
+    ]) ||
+    ((book) => fallbackCheckoutHtml(book));
 
-  if (!renderBookEditorHtml) {
-    throw new Error(
-      "books/routes.js: render.editor.html.js precisa exportar { renderBookEditorHtml }"
-    );
-  }
-
-  if (!renderCheckoutHtml) {
-    throw new Error(
-      "books/routes.js: render.checkout.html.js precisa exportar { renderCheckoutHtml }"
-    );
-  }
+  console.log("✅ books/routes.js montado com Supabase.");
+  console.log("[books/routes] OUT_DIR =", OUT_DIR);
+  console.log("[books/routes] supabaseAdmin =", !!supabaseAdmin);
+  console.log("[books/routes] renderBooksHtml =", typeof renderBooksHtml === "function");
+  console.log("[books/routes] renderBookPreviewHtml =", typeof renderBookPreviewHtml === "function");
+  console.log("[books/routes] renderBookEditorHtml =", typeof renderBookEditorHtml === "function");
+  console.log("[books/routes] renderCheckoutHtml =", typeof renderCheckoutHtml === "function");
 
   // --------------------
   // GET /api/books
   // --------------------
   app.get("/api/books", requireAuth, async (req, res) => {
     try {
+      if (!supabaseAdmin) {
+        return res.status(500).json({
+          ok: false,
+          error: "Supabase Admin não configurado no servidor",
+        });
+      }
+
       const books = await listBooksForRequest(supabaseAdmin, req);
 
       return res.json({
@@ -382,12 +484,15 @@ module.exports = function mountRoutes(app, opts = {}) {
   // --------------------
   app.get("/books", requireAuth, async (req, res) => {
     try {
-      const list = await listBooksForRequest(supabaseAdmin, req);
+      let list = [];
+      if (supabaseAdmin) {
+        list = await listBooksForRequest(supabaseAdmin, req);
+      }
 
       const html = renderBooksHtml({
         user: req.user || null,
         books: list,
-        OUT_DIR: String(OUT_DIR),
+        OUT_DIR,
         isAdmin: isAdmin(req),
       });
 
@@ -397,7 +502,38 @@ module.exports = function mountRoutes(app, opts = {}) {
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${String(e?.message || e || "Erro")}</pre></body></html>`);
+        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+    }
+  });
+
+  // --------------------
+  // GET /preview?id=...
+  // --------------------
+  app.get("/preview", requireAuth, async (req, res) => {
+    try {
+      const bookId = String(req.query?.id || "").trim();
+      if (!bookId) {
+        return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!supabaseAdmin) {
+        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+      }
+
+      const book = await loadBookForRequest(supabaseAdmin, req, bookId);
+
+      if (!book) {
+        return res.status(404).type("html").send("<h1>404</h1><p>Livro não encontrado</p>");
+      }
+
+      const html = renderBookPreviewHtml(book);
+      return res.type("html").send(html);
+    } catch (e) {
+      console.error("ERRO /preview:", e);
+      return res
+        .status(500)
+        .type("html")
+        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
     }
   });
 
@@ -409,6 +545,10 @@ module.exports = function mountRoutes(app, opts = {}) {
       const bookId = String(req.params?.id || "").trim();
       if (!bookId) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!supabaseAdmin) {
+        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -424,7 +564,7 @@ module.exports = function mountRoutes(app, opts = {}) {
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${String(e?.message || e || "Erro")}</pre></body></html>`);
+        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
     }
   });
 
@@ -436,6 +576,10 @@ module.exports = function mountRoutes(app, opts = {}) {
       const bookId = String(req.params?.id || "").trim();
       if (!bookId) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!supabaseAdmin) {
+        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -451,7 +595,7 @@ module.exports = function mountRoutes(app, opts = {}) {
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${String(e?.message || e || "Erro")}</pre></body></html>`);
+        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
     }
   });
 
@@ -463,6 +607,10 @@ module.exports = function mountRoutes(app, opts = {}) {
       const bookId = String(req.params?.id || "").trim();
       if (!bookId) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!supabaseAdmin) {
+        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -487,10 +635,9 @@ module.exports = function mountRoutes(app, opts = {}) {
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${String(e?.message || e || "Erro")}</pre></body></html>`);
+        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
     }
   });
 
-  console.log("✅ books/routes.js montado com Supabase.");
   return true;
 };
