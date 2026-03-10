@@ -1218,9 +1218,10 @@ app.get("/preview", core.requireAuth, async (req, res) => {
 });
   // ========== Galeria de livros (rota já existente em módulo separado) ==========
   const mountBooksRoutes = require("./books/routes.js");
-  mountBooksRoutes(app, {
-    OUT_DIR: core.OUT_DIR,
-    USERS_DIR: core.USERS_DIR,
-    requireAuth: core.requireAuth
-  });
+mountBooksRoutes(app, {
+  OUT_DIR: core.OUT_DIR,
+  USERS_DIR: core.USERS_DIR,
+  requireAuth: core.requireAuth,
+  supabaseAdmin: core.supabaseAdmin
+});
 };
