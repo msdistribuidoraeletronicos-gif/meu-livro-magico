@@ -199,10 +199,8 @@ async function listBooksForRequest(supabaseAdmin, req) {
   if (!uid) return [];
 
   let query = supabaseAdmin
-    .from("livros")
-    .select("*")
-    .order("updated_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false, nullsFirst: false });
+    .from("books")
+    .select("*");
 
   if (!isAdmin(req)) {
     query = query.eq("user_id", uid);
@@ -214,21 +212,53 @@ async function listBooksForRequest(supabaseAdmin, req) {
     throw new Error("Erro ao consultar livros no Supabase: " + error.message);
   }
 
-  return Array.isArray(data) ? data.map(toListItem) : [];
+  const list = Array.isArray(data) ? data.map((row) => ({
+    id: String(row.id || ""),
+    bookId: String(row.id || ""),
+    dirId: String(row.id || ""),
+
+    ownerId: String(row.user_id || ""),
+    status: String(row.status || "created"),
+    step: String(row.step || ""),
+    error: String(row.error || ""),
+
+    theme: String(row.theme || ""),
+    themeLabel: String(row.theme || ""),
+    style: String(row.style || "read"),
+    styleLabel: String(row.style || "read"),
+
+    child: {
+      name: String(row.child_name || ""),
+      age: Number(row.child_age || 0),
+      gender: String(row.child_gender || "neutral"),
+    },
+    childName: String(row.child_name || ""),
+
+    pagesCount: Array.isArray(row.manifest?.pages) ? row.manifest.pages.length : 0,
+    imagesCount: Array.isArray(row.images) ? row.images.length : 0,
+
+    coverUrl: String(row.cover_url || ""),
+    hasPdf: !!row.pdf_url,
+    pdfUrl: String(row.pdf_url || ""),
+
+    createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || row.created_at || ""),
+  })) : [];
+
+  list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  return list;
 }
 
 async function loadBookForRequest(supabaseAdmin, req, bookId) {
   const uid = String(req.user?.id || "").trim();
   const id = String(bookId || "").trim();
 
-  if (!uid) return null;
-  if (!id) return null;
+  if (!uid || !id) return null;
 
   let query = supabaseAdmin
-    .from("livros")
+    .from("books")
     .select("*")
     .eq("id", id)
-    .limit(1)
     .maybeSingle();
 
   if (!isAdmin(req)) {
@@ -243,30 +273,38 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
 
   if (!data) return null;
 
+  const manifest = data.manifest && typeof data.manifest === "object" ? data.manifest : {};
+
   return {
+    ...manifest,
     ...data,
+
     id: String(data.id || ""),
     bookId: String(data.id || ""),
     dirId: String(data.id || ""),
     folderId: String(data.id || ""),
-    ownerId: String(data.user_id || data.owner_id || ""),
+    ownerId: String(data.user_id || ""),
 
-    theme: String(data.tema || data.theme || ""),
-    style: String(data.estilo || data.style || "read"),
+    theme: String(data.theme || ""),
+    style: String(data.style || "read"),
 
-    child: inferChild(data),
-    pages: inferPages(data),
-    images: inferImages(data),
+    child: {
+      name: String(data.child_name || ""),
+      age: Number(data.child_age || 0),
+      gender: String(data.child_gender || "neutral"),
+    },
 
-    coverUrl: inferCoverUrl(data),
-    pdf: inferPdfUrl(data),
-    pdfUrl: inferPdfUrl(data),
+    pages: Array.isArray(manifest.pages) ? manifest.pages : [],
+    images: Array.isArray(data.images) ? data.images : [],
 
-    createdAt: toIso(data.created_at || data.createdAt),
-    updatedAt: toIso(data.updated_at || data.updatedAt || data.created_at || data.createdAt),
+    coverUrl: String(data.cover_url || ""),
+    pdf: String(data.pdf_url || ""),
+    pdfUrl: String(data.pdf_url || ""),
+
+    createdAt: String(data.created_at || ""),
+    updatedAt: String(data.updated_at || data.created_at || ""),
   };
 }
-
 module.exports = function mountRoutes(app, opts = {}) {
   const { OUT_DIR, requireAuth, supabaseAdmin } = opts;
 
