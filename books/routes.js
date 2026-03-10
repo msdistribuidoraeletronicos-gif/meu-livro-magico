@@ -188,25 +188,31 @@ async function listBooksForRequest(BOOKS_ROOT_DIR, req) {
   const out = [];
   const uid = String(req.user?.id || "").trim();
 
+  console.log("[listBooksForRequest] uid =", uid);
+  console.log("[listBooksForRequest] isAdmin =", isAdmin(req));
+
   if (!uid) return out;
 
   if (!isAdmin(req)) {
-    // Usuário normal: só seus livros
     const bookIds = await listBookFoldersForOwner(BOOKS_ROOT_DIR, uid);
+    console.log("[listBooksForRequest] bookIds do usuário =", bookIds);
 
     for (const bookId of bookIds) {
       const m = await loadManifestByOwnerAndBook(BOOKS_ROOT_DIR, uid, bookId);
+      console.log("[listBooksForRequest] manifest", bookId, "=", !!m);
+
       if (!m) continue;
       if (!canAccessManifest(req, m)) continue;
 
       out.push(toListItem(m));
     }
   } else {
-    // Admin: todos
     const owners = await listOwnerFolders(BOOKS_ROOT_DIR);
+    console.log("[listBooksForRequest] owners =", owners);
 
     for (const ownerId of owners) {
       const bookIds = await listBookFoldersForOwner(BOOKS_ROOT_DIR, ownerId);
+      console.log("[listBooksForRequest] owner", ownerId, "bookIds =", bookIds);
 
       for (const bookId of bookIds) {
         const m = await loadManifestByOwnerAndBook(BOOKS_ROOT_DIR, ownerId, bookId);
@@ -218,12 +224,9 @@ async function listBooksForRequest(BOOKS_ROOT_DIR, req) {
     }
   }
 
-  // mais recente primeiro
   out.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-
   return out;
 }
-
 function toListItem(m) {
   return {
     // ids
@@ -323,19 +326,26 @@ module.exports = function mountRoutes(app, opts = {}) {
   // GET /api/books (JSON)
   // --------------------
   app.get("/api/books", requireAuth, async (req, res) => {
-    try {
-      const list = await listBooksForRequest(BOOKS_ROOT_DIR, req);
+  try {
+    console.log("==== /api/books ====");
+    console.log("req.user =", req.user);
+    console.log("BOOKS_ROOT_DIR =", BOOKS_ROOT_DIR);
 
-      return res.json({
-        ok: true,
-        books: list,
-        isAdmin: isAdmin(req),
-      });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
-    }
-  });
+    const list = await listBooksForRequest(BOOKS_ROOT_DIR, req);
 
+    console.log("books encontrados =", list.length);
+    console.log("books =", list);
+
+    return res.json({
+      ok: true,
+      books: list,
+      isAdmin: isAdmin(req),
+    });
+  } catch (e) {
+    console.error("ERRO /api/books:", e);
+    return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
+  }
+});
   // --------------------
   // GET /books (HTML galeria)
   // --------------------
