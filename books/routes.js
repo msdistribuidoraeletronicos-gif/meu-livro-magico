@@ -1,12 +1,5 @@
 // books/routes.js
 // Rotas do módulo /books (galeria + preview + editor + checkout)
-//
-// ✅ Consulta os livros no SUPABASE (tabela: books)
-// ✅ Usuário comum vê somente os próprios livros
-// ✅ Admin pode ver todos
-// ✅ Preview / editor / checkout também validam acesso no banco
-// ✅ Não derruba a aplicação inteira se faltar renderer ou opts opcionais
-// ✅ Suporte a /preview?id=... (compatível com seu render.books.html.js)
 
 "use strict";
 
@@ -25,9 +18,12 @@ function pickFn(mod, names = []) {
 
 function tryRequire(p) {
   try {
-    return require(p);
+    const mod = require(p);
+    console.log(`[books/routes] módulo carregado com sucesso: ${p}`);
+    return mod;
   } catch (err) {
-    console.error(`[books/routes] Falha ao carregar módulo ${p}:`, err?.message || err);
+    console.error(`[books/routes] Falha ao carregar módulo ${p}`);
+    console.error(err && err.stack ? err.stack : err);
     return null;
   }
 }
@@ -90,36 +86,37 @@ function toIso(v) {
   }
 }
 
-function inferCoverUrl(row) {
-  return String(
-    row?.cover_url ||
-    row?.capa_url ||
-    row?.coverUrl ||
-    row?.capa ||
-    row?.manifest?.cover?.url ||
-    ""
-  );
-}
-
-function inferPdfUrl(row) {
-  return String(
-    row?.pdf_url ||
-    row?.arquivo_pdf ||
-    row?.pdf ||
-    row?.manifest?.pdf ||
-    ""
-  );
-}
-
 function inferManifest(row) {
   return row?.manifest && typeof row.manifest === "object"
     ? row.manifest
     : parseJsonSafe(row?.manifest, {});
 }
 
+function inferCoverUrl(row) {
+  const manifest = inferManifest(row);
+  return String(
+    row?.cover_url ||
+      row?.capa_url ||
+      row?.coverUrl ||
+      row?.capa ||
+      manifest?.cover?.url ||
+      ""
+  );
+}
+
+function inferPdfUrl(row) {
+  const manifest = inferManifest(row);
+  return String(
+    row?.pdf_url ||
+      row?.arquivo_pdf ||
+      row?.pdf ||
+      manifest?.pdf ||
+      ""
+  );
+}
+
 function inferPages(row) {
   const manifest = inferManifest(row);
-
   const a =
     row?.pages ??
     row?.paginas ??
@@ -133,7 +130,6 @@ function inferPages(row) {
 
 function inferImages(row) {
   const manifest = inferManifest(row);
-
   const a =
     row?.images ??
     row?.imagens ??
@@ -161,26 +157,26 @@ function inferChild(row) {
   return {
     name: String(
       row?.child_name ||
-      row?.nome_da_crianca ||
-      parsed?.name ||
-      parsed?.nome ||
-      ""
+        row?.nome_da_crianca ||
+        parsed?.name ||
+        parsed?.nome ||
+        ""
     ),
     age: Number(
       row?.child_age ||
-      row?.idade_da_crianca ||
-      parsed?.age ||
-      parsed?.idade ||
-      0
+        row?.idade_da_crianca ||
+        parsed?.age ||
+        parsed?.idade ||
+        0
     ),
     gender: String(
       row?.child_gender ||
-      row?.genero_da_crianca ||
-      row?.gênero_da_crianca ||
-      parsed?.gender ||
-      parsed?.genero ||
-      parsed?.gênero ||
-      "neutral"
+        row?.genero_da_crianca ||
+        row?.gênero_da_crianca ||
+        parsed?.gender ||
+        parsed?.genero ||
+        parsed?.gênero ||
+        "neutral"
     ),
   };
 }
@@ -210,25 +206,21 @@ function toListItem(row) {
     child,
     childName: String(child.name || ""),
 
-    pagesCount: Number(
-      row?.total_paginas ||
-      row?.done_steps ||
-      pages.length ||
-      0
-    ),
-
-    imagesCount: Number(
-      row?.total_imagens ||
-      images.length ||
-      0
-    ),
+    pagesCount: Number(row?.total_paginas || pages.length || 0),
+    imagesCount: Number(row?.total_imagens || images.length || 0),
 
     coverUrl: inferCoverUrl(row),
     hasPdf: !!pdfUrl,
     pdfUrl,
 
     createdAt: toIso(row?.created_at || row?.createdAt || manifest?.createdAt),
-    updatedAt: toIso(row?.updated_at || row?.updatedAt || manifest?.updatedAt || row?.created_at || manifest?.createdAt),
+    updatedAt: toIso(
+      row?.updated_at ||
+        row?.updatedAt ||
+        manifest?.updatedAt ||
+        row?.created_at ||
+        manifest?.createdAt
+    ),
   };
 }
 
@@ -240,9 +232,7 @@ async function listBooksForRequest(supabaseAdmin, req) {
     throw new Error("Supabase Admin não configurado no servidor.");
   }
 
-  let query = supabaseAdmin
-    .from("books")
-    .select("*");
+  let query = supabaseAdmin.from("books").select("*");
 
   if (!isAdmin(req)) {
     query = query.eq("user_id", uid);
@@ -251,8 +241,11 @@ async function listBooksForRequest(supabaseAdmin, req) {
   const { data, error } = await query;
 
   if (error) {
+    console.error("[listBooksForRequest] erro do Supabase:", error);
     throw new Error("Erro ao consultar livros no Supabase: " + error.message);
   }
+
+  console.log("[listBooksForRequest] rows =", Array.isArray(data) ? data.length : 0);
 
   const list = Array.isArray(data) ? data.map(toListItem) : [];
   list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
@@ -282,6 +275,7 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
   const { data, error } = await query;
 
   if (error) {
+    console.error("[loadBookForRequest] erro do Supabase:", error);
     throw new Error("Erro ao carregar livro no Supabase: " + error.message);
   }
 
@@ -407,41 +401,43 @@ module.exports = function mountRoutes(app, opts = {}) {
     throw new Error("books/routes.js: requireAuth é obrigatório");
   }
 
-  const booksRendererMod = tryRequire("./render.books.html");
-  const previewRendererMod = tryRequire("./render.preview.html");
-  const editorRendererMod = tryRequire("./render.editor.html");
-  const checkoutRendererMod = tryRequire("./render.checkout.html");
+ const booksRendererMod = tryRequire("./render.books.html.js");
+console.log(
+  "[books/routes] exports render.books.html.js =",
+  booksRendererMod && typeof booksRendererMod === "object"
+    ? Object.keys(booksRendererMod)
+    : typeof booksRendererMod
+);
+  const previewRendererMod = tryRequire("./render.preview.html.js");
+  const editorRendererMod = tryRequire("./render.editor.html.js");
+  const checkoutRendererMod = tryRequire("./render.checkout.html.js");
 
   const renderBooksHtml =
     pickFn(booksRendererMod, [
       "renderBooksHtml",
       "renderBooksGalleryHtml",
       "renderBooksPageHtml",
-    ]) ||
-    (() => fallbackBooksHtml());
+    ]) || (() => fallbackBooksHtml());
 
   const renderBookPreviewHtml =
     pickFn(previewRendererMod, [
       "renderBookPreviewHtml",
       "renderPreviewHtml",
       "renderPreview",
-    ]) ||
-    ((book) => fallbackPreviewHtml(book));
+    ]) || ((book) => fallbackPreviewHtml(book));
 
   const renderBookEditorHtml =
     pickFn(editorRendererMod, [
       "renderBookEditorHtml",
       "renderEditorHtml",
       "renderEditor",
-    ]) ||
-    ((book) => fallbackEditorHtml(book));
+    ]) || ((book) => fallbackEditorHtml(book));
 
   const renderCheckoutHtml =
     pickFn(checkoutRendererMod, [
       "renderCheckoutHtml",
       "renderCheckoutPageHtml",
-    ]) ||
-    ((book) => fallbackCheckoutHtml(book));
+    ]) || ((book) => fallbackCheckoutHtml(book));
 
   console.log("✅ books/routes.js montado com Supabase.");
   console.log("[books/routes] OUT_DIR =", OUT_DIR);
@@ -451,11 +447,13 @@ module.exports = function mountRoutes(app, opts = {}) {
   console.log("[books/routes] renderBookEditorHtml =", typeof renderBookEditorHtml === "function");
   console.log("[books/routes] renderCheckoutHtml =", typeof renderCheckoutHtml === "function");
 
-  // --------------------
-  // GET /api/books
-  // --------------------
   app.get("/api/books", requireAuth, async (req, res) => {
     try {
+      console.log("==== /api/books ====");
+      console.log("[api/books] user =", req.user);
+      console.log("[api/books] isAdmin =", isAdmin(req));
+      console.log("[api/books] supabaseAdmin =", !!supabaseAdmin);
+
       if (!supabaseAdmin) {
         return res.status(500).json({
           ok: false,
@@ -465,13 +463,17 @@ module.exports = function mountRoutes(app, opts = {}) {
 
       const books = await listBooksForRequest(supabaseAdmin, req);
 
+      console.log("[api/books] encontrados =", books.length);
+
       return res.json({
         ok: true,
         books,
         isAdmin: isAdmin(req),
       });
     } catch (e) {
-      console.error("ERRO /api/books:", e);
+      console.error("ERRO /api/books:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res.status(500).json({
         ok: false,
         error: String(e?.message || e || "Erro"),
@@ -479,26 +481,20 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  // --------------------
-  // GET /books
-  // --------------------
   app.get("/books", requireAuth, async (req, res) => {
     try {
-      let list = [];
-      if (supabaseAdmin) {
-        list = await listBooksForRequest(supabaseAdmin, req);
-      }
-
       const html = renderBooksHtml({
         user: req.user || null,
-        books: list,
+        books: [],
         OUT_DIR,
         isAdmin: isAdmin(req),
       });
 
       return res.type("html").send(html);
     } catch (e) {
-      console.error("ERRO /books:", e);
+      console.error("ERRO /books:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res
         .status(500)
         .type("html")
@@ -506,9 +502,6 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  // --------------------
-  // GET /preview?id=...
-  // --------------------
   app.get("/preview", requireAuth, async (req, res) => {
     try {
       const bookId = String(req.query?.id || "").trim();
@@ -529,7 +522,9 @@ module.exports = function mountRoutes(app, opts = {}) {
       const html = renderBookPreviewHtml(book);
       return res.type("html").send(html);
     } catch (e) {
-      console.error("ERRO /preview:", e);
+      console.error("ERRO /preview:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res
         .status(500)
         .type("html")
@@ -537,9 +532,6 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  // --------------------
-  // GET /books/:id
-  // --------------------
   app.get("/books/:id", requireAuth, async (req, res) => {
     try {
       const bookId = String(req.params?.id || "").trim();
@@ -560,7 +552,9 @@ module.exports = function mountRoutes(app, opts = {}) {
       const html = renderBookPreviewHtml(book);
       return res.type("html").send(html);
     } catch (e) {
-      console.error("ERRO /books/:id:", e);
+      console.error("ERRO /books/:id:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res
         .status(500)
         .type("html")
@@ -568,9 +562,6 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  // --------------------
-  // GET /books/:id/edit
-  // --------------------
   app.get("/books/:id/edit", requireAuth, async (req, res) => {
     try {
       const bookId = String(req.params?.id || "").trim();
@@ -591,7 +582,9 @@ module.exports = function mountRoutes(app, opts = {}) {
       const html = renderBookEditorHtml(book);
       return res.type("html").send(html);
     } catch (e) {
-      console.error("ERRO /books/:id/edit:", e);
+      console.error("ERRO /books/:id/edit:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res
         .status(500)
         .type("html")
@@ -599,9 +592,6 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  // --------------------
-  // GET /checkout/:id
-  // --------------------
   app.get("/checkout/:id", requireAuth, async (req, res) => {
     try {
       const bookId = String(req.params?.id || "").trim();
@@ -631,7 +621,9 @@ module.exports = function mountRoutes(app, opts = {}) {
 
       return res.type("html").send(html);
     } catch (e) {
-      console.error("ERRO /checkout/:id:", e);
+      console.error("ERRO /checkout/:id:");
+      console.error(e && e.stack ? e.stack : e);
+
       return res
         .status(500)
         .type("html")
