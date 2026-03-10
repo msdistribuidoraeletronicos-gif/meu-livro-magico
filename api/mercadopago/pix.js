@@ -80,11 +80,6 @@ function hasMinAddress(address) {
   );
 }
 
-function buildIdempotencyKey(payload) {
-  const raw = JSON.stringify(payload || {}) + "|" + Date.now() + "|" + Math.random();
-  return crypto.createHash("sha256").update(raw).digest("hex");
-}
-
 function buildPaymentReference(bookId) {
   const rand = crypto.randomBytes(6).toString("hex");
   return `mlm_${String(bookId || "").replace(/[^a-zA-Z0-9_-]/g, "")}_${Date.now()}_${rand}`;
@@ -93,6 +88,31 @@ function buildPaymentReference(bookId) {
 function safeMetadata(v) {
   try {
     return v ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function splitCustomerName(fullName) {
+  const parts = String(fullName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  return {
+    firstName: parts[0] || "Cliente",
+    lastName: parts.slice(1).join(" ") || "Meu Livro Mágico",
+  };
+}
+
+function getNotificationUrl() {
+  if (!APP_BASE_URL) return undefined;
+  return APP_BASE_URL.replace(/\/+$/, "") + "/api/webhooks/mercadopago";
+}
+
+async function readJsonSafe(response) {
+  try {
+    return await response.json();
   } catch {
     return {};
   }
@@ -108,6 +128,12 @@ module.exports = async (req, res) => {
   }
 
   try {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: "Supabase não configurado no ambiente",
+      });
+    }
+
     if (!MP_ACCESS_TOKEN) {
       return res.status(500).json({
         error: "MERCADOPAGO_ACCESS_TOKEN não configurado",
@@ -170,6 +196,7 @@ module.exports = async (req, res) => {
     }
 
     const expectedTotal = toMoney(normalized.subtotalBeforeCoins - normalized.usedWalletCoins);
+
     if (expectedTotal !== normalized.total) {
       return res.status(400).json({
         error: "Os valores do checkout não conferem.",
@@ -197,9 +224,11 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: "Livro não encontrado" });
     }
 
-    const externalReference = String(book.id);
-    const internalReference = buildPaymentReference(book.id);
     const nowIso = new Date().toISOString();
+    const internalReference = buildPaymentReference(book.id);
+    const externalReference = internalReference;
+    const notificationUrl = getNotificationUrl();
+    const { firstName, lastName } = splitCustomerName(normalized.name);
 
     const metadata = {
       source: "meu_livro_magico_checkout",
@@ -222,18 +251,15 @@ module.exports = async (req, res) => {
       internal_reference: internalReference,
     };
 
-    const notificationUrl = APP_BASE_URL
-      ? APP_BASE_URL.replace(/\/+$/, "") + "/api/webhooks/mercadopago"
-      : undefined;
-
     const mpPayload = {
-      transaction_amount: normalized.total,
+      transaction_amount: Number(normalized.total.toFixed(2)),
       description: `Meu Livro Mágico - Livro ${normalized.bookId}`,
       payment_method_id: "pix",
       external_reference: externalReference,
       payer: {
         email: normalized.email,
-        first_name: normalized.name,
+        first_name: firstName,
+        last_name: lastName,
       },
       metadata,
     };
@@ -242,25 +268,38 @@ module.exports = async (req, res) => {
       mpPayload.notification_url = notificationUrl;
     }
 
+    console.log("[mercadopago/pix] token prefix:", MP_ACCESS_TOKEN.slice(0, 12));
+    console.log("[mercadopago/pix] token is live:", MP_ACCESS_TOKEN.startsWith("APP_USR-"));
+    console.log("[mercadopago/pix] token is test:", MP_ACCESS_TOKEN.startsWith("TEST-"));
+    console.log("[mercadopago/pix] payer email:", normalized.email);
+    console.log("[mercadopago/pix] amount:", normalized.total);
+    console.log("[mercadopago/pix] external_reference:", externalReference);
+    console.log("[mercadopago/pix] internal_reference:", internalReference);
+    console.log("[mercadopago/pix] notification_url:", notificationUrl || "(none)");
     console.log("[mercadopago/pix] criando cobrança PIX...");
     console.log("[mercadopago/pix] payload:", JSON.stringify(mpPayload, null, 2));
 
     const mpResponse = await fetch("https://api.mercadopago.com/v1/payments", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
-        "X-Idempotency-Key": buildIdempotencyKey(mpPayload),
+        "X-Idempotency-Key": internalReference,
       },
       body: JSON.stringify(mpPayload),
     });
 
-    const mpResult = await mpResponse.json().catch(() => ({}));
+    const mpResult = await readJsonSafe(mpResponse);
 
     if (!mpResponse.ok) {
       console.error("[mercadopago/pix] erro do Mercado Pago:", mpResult);
-      return res.status(500).json({
-        error: mpResult?.message || mpResult?.error || "Não foi possível gerar o PIX no Mercado Pago",
+
+      return res.status(mpResponse.status || 500).json({
+        error:
+          mpResult?.message ||
+          mpResult?.error ||
+          mpResult?.cause?.[0]?.description ||
+          "Não foi possível gerar o PIX no Mercado Pago",
         details: mpResult,
       });
     }
