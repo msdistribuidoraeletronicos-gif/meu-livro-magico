@@ -238,7 +238,18 @@ async function listBooksForRequest(supabaseAdmin, req) {
     query = query.eq("user_id", uid);
   }
 
-  const { data, error } = await query;
+const { data, error, status, statusText } = await query;
+if (error) {
+  console.error("[listBooksForRequest] erro do Supabase:", {
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+    code: error.code,
+    status,
+    statusText,
+  });
+  throw new Error("Erro ao consultar livros no Supabase: " + error.message);
+}
 
   if (error) {
     console.error("[listBooksForRequest] erro do Supabase:", error);
