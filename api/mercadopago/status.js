@@ -1,4 +1,3 @@
-// api/mercadopago/status.js
 "use strict";
 
 const { createClient } = require("@supabase/supabase-js");
@@ -21,7 +20,6 @@ function mapMercadoPagoStatus(rawStatus) {
   const s = String(rawStatus || "").trim().toLowerCase();
 
   if (!s) return "pending";
-
   if (["approved", "paid", "completed"].includes(s)) return "paid";
   if (["pending", "in_process", "in_mediation", "authorized"].includes(s)) return "pending";
   if (["cancelled", "canceled"].includes(s)) return "cancelled";
@@ -42,21 +40,68 @@ function extractPaymentReference(req) {
   ).trim();
 }
 
-async function findPaymentByReference(paymentReference) {
-  const { data, error } = await supabase
-    .from("payments")
-    .select("*")
-    .or([
-      `id.eq.${paymentReference}`,
-      `mercadopago_payment_id.eq.${paymentReference}`,
-      `mercadopago_reference_id.eq.${paymentReference}`,
-      `mercadopago_external_reference.eq.${paymentReference}`
-    ].join(","))
-    .order("created_at", { ascending: false })
-    .limit(1);
+function isUuid(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "").trim()
+  );
+}
 
-  if (error) throw error;
-  return Array.isArray(data) && data.length > 0 ? data[0] : null;
+function isNumericId(v) {
+  return /^\d+$/.test(String(v || "").trim());
+}
+
+async function findPaymentByReference(paymentReference) {
+  const ref = String(paymentReference || "").trim();
+  if (!ref) return null;
+
+  if (isUuid(ref)) {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .eq("id", ref)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  if (isNumericId(ref)) {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .eq("mercadopago_payment_id", ref)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return data[0];
+  }
+
+  {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .eq("mercadopago_reference_id", ref)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return data[0];
+  }
+
+  {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .eq("mercadopago_external_reference", ref)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return data[0];
+  }
+
+  return null;
 }
 
 module.exports = async (req, res) => {
@@ -90,30 +135,29 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: "Pagamento não encontrado" });
     }
 
-    const alreadyFinal = ["paid", "failed", "expired", "cancelled", "refunded"].includes(
-      String(payment.status || "").toLowerCase()
-    );
+    const currentStatus = String(payment.status || "").toLowerCase();
+    const alreadyFinal = ["paid", "failed", "expired", "cancelled", "refunded"].includes(currentStatus);
 
-    if (alreadyFinal && String(payment.status || "").toLowerCase() === "paid") {
+    if (alreadyFinal && currentStatus === "paid") {
       return res.status(200).json({
         ok: true,
         paymentId: payment.id,
         paymentReference:
-          payment.mercadopago_payment_id ||
           payment.mercadopago_reference_id ||
           payment.mercadopago_external_reference ||
+          payment.mercadopago_payment_id ||
           payment.id,
         status: "paid",
         providerStatus: payment.mercadopago_status || payment.status || "paid",
         paidAt: payment.paid_at || payment.approved_at || null,
-        expiresAt: payment.expires_at || null
+        expiresAt: payment.expires_at || null,
       });
     }
 
     const mercadopagoPaymentId = String(payment.mercadopago_payment_id || "").trim();
     if (!mercadopagoPaymentId) {
       return res.status(400).json({
-        error: "Pagamento sem mercadopago_payment_id salvo"
+        error: "Pagamento sem mercadopago_payment_id salvo",
       });
     }
 
@@ -126,8 +170,8 @@ module.exports = async (req, res) => {
       headers: {
         Authorization: "Bearer " + MP_ACCESS_TOKEN,
         Accept: "application/json",
-        "Content-Type": "application/json"
-      }
+        "Content-Type": "application/json",
+      },
     });
 
     const rawText = await mpResponse.text();
@@ -139,7 +183,7 @@ module.exports = async (req, res) => {
       console.error("[mercadopago/status] Resposta não-JSON do Mercado Pago:", rawText);
       return res.status(502).json({
         error: "O Mercado Pago retornou uma resposta inválida",
-        raw: rawText
+        raw: rawText,
       });
     }
 
@@ -156,7 +200,7 @@ module.exports = async (req, res) => {
 
       return res.status(400).json({
         error: message,
-        details: mpResult
+        details: mpResult,
       });
     }
 
@@ -180,7 +224,7 @@ module.exports = async (req, res) => {
       mercadopago_status: rawStatus || null,
       mercadopago_status_detail: String(mpResult?.status_detail || "").trim().toLowerCase() || null,
       provider_response: mpResult,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     };
 
     if (paidAt && mappedStatus === "paid") {
@@ -200,7 +244,7 @@ module.exports = async (req, res) => {
     if (updateErr) {
       console.error("[mercadopago/status] Erro ao atualizar payment:", updateErr);
       return res.status(500).json({
-        error: "Erro ao atualizar status do pagamento"
+        error: "Erro ao atualizar status do pagamento",
       });
     }
 
@@ -208,20 +252,20 @@ module.exports = async (req, res) => {
       ok: true,
       paymentId: payment.id,
       paymentReference:
-        payment.mercadopago_payment_id ||
         payment.mercadopago_reference_id ||
         payment.mercadopago_external_reference ||
+        payment.mercadopago_payment_id ||
         payment.id,
       status: mappedStatus,
       providerStatus: rawStatus || "",
       paidAt,
-      expiresAt
+      expiresAt,
     });
   } catch (e) {
     console.error("[mercadopago/status] Erro interno:");
     console.error(e);
     return res.status(500).json({
-      error: e?.message || "Erro interno ao consultar pagamento"
+      error: e?.message || "Erro interno ao consultar pagamento",
     });
   }
 };

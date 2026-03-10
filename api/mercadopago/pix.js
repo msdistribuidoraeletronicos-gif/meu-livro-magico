@@ -1,4 +1,3 @@
-// api/mercadopago/pix.js
 "use strict";
 
 const crypto = require("crypto");
@@ -386,7 +385,13 @@ module.exports = async (req, res) => {
 
       id: mercadopagoPaymentId,
       paymentId: mercadopagoPaymentId,
-      paymentReference: mercadopagoPaymentId,
+      payment_id: mercadopagoPaymentId,
+
+      paymentReference: internalReference,
+      payment_reference: internalReference,
+
+      mercadopagoPaymentId: mercadopagoPaymentId,
+      mercadopago_payment_id: mercadopagoPaymentId,
 
       localPaymentId: insertedPayment?.id || null,
 

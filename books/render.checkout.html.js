@@ -2156,18 +2156,29 @@ function renderCheckoutHtml(book, opts = {}) {
       pendingCheckoutPayload = payload;
 
       const pix = await createPixCharge(payload);
-      currentPaymentRef = String(
-        pix.paymentReference ||
-        pix.payment_reference ||
-        pix.paymentId ||
-        pix.payment_id ||
-        pix.mercadopagoPaymentId ||
-        pix.mercadopago_payment_id ||
-        pix.mercadopagoReferenceId ||
-        pix.mercadopago_reference_id ||
-        pix.id ||
-        ""
-      ).trim();
+  currentPaymentRef = String(
+  pix.paymentReference ||
+  pix.payment_reference ||
+  pix.reference ||
+  pix.checkoutReference ||
+  pix.checkout_reference ||
+  ""
+).trim();
+
+const mercadoPagoPaymentId = String(
+  pix.paymentId ||
+  pix.payment_id ||
+  pix.mercadopagoPaymentId ||
+  pix.mercadopago_payment_id ||
+  pix.id ||
+  ""
+).trim();
+
+if (!currentPaymentRef) {
+  throw new Error(
+    "A cobrança PIX foi criada, mas o backend não retornou paymentReference interno."
+  );
+}
 
       if (!currentPaymentRef) {
         throw new Error("A cobrança PIX foi criada, mas não recebemos a referência do pagamento.");
