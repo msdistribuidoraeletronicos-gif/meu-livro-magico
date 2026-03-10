@@ -78,14 +78,12 @@ function renderBooksHtml() {
   }
   .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 
-  /* Impede quebra dos botões em telas maiores (igual ao checkout) */
   @media (min-width: 900px) {
     .navRight {
       flex-wrap: nowrap;
     }
   }
 
-  /* Buttons */
   .btn{
     border:0;
     cursor:pointer;
@@ -126,7 +124,6 @@ function renderBooksHtml() {
     font-weight: 900;
   }
 
-  /* Pill style (usado em outras páginas) */
   .pill{
     display:inline-flex; gap:8px; align-items:center;
     padding:10px 12px; border-radius:999px;
@@ -147,7 +144,6 @@ function renderBooksHtml() {
     box-shadow: 0 18px 44px rgba(17,24,39,.10);
   }
 
-  /* Hero */
   .hero{
     position:relative;
     overflow:hidden;
@@ -895,7 +891,6 @@ function renderBooksHtml() {
           </svg>
           Criar Livro
         </a>
-        <!-- Botão Sair com estilo btnOutline (igual ao checkout) -->
         <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
       </div>
     </div>
@@ -1224,10 +1219,9 @@ function renderBooksHtml() {
   }
   function $(id){ return document.getElementById(id); }
 
-  // ✅ Logout com estilo btnOutline (igual ao checkout)
   document.getElementById('btnLogout')?.addEventListener('click', async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
       window.location.href = '/sales';
     } catch (e) {
       alert('Erro ao sair');
@@ -1385,7 +1379,6 @@ function renderBooksHtml() {
       html +=   '<div class="meta" style="color:rgba(220,38,38,1); font-weight:900;">Erro: ' + esc(b.error) + '</div>';
     }
 
-    // ✅ CORREÇÃO: link "Abrir" agora aponta para /preview?id=...
     html +=     '<div class="rowBtns">';
     html +=       '<a class="aBtn primary" href="/preview?id=' + encodeURIComponent(b.dirId || b.id) + '">👀 Abrir</a>';
     html +=       '<a class="aBtn order" href="/checkout/' + encodeURIComponent(b.dirId || b.id) + '">🛒 Fazer pedido <span class="tag">PIX</span></a>';
@@ -1413,10 +1406,17 @@ function renderBooksHtml() {
   }
 
   function applyFilters(){
-    var q = ($("q").value || "").toLowerCase().trim();
-    var st = $("status").value;
-    var sy = $("style").value;
-    var th = $("theme").value;
+    var qEl = $("q");
+    var stEl = $("status");
+    var syEl = $("style");
+    var thEl = $("theme");
+    var gridEl = $("grid");
+    var noteEl = $("note");
+
+    var q = qEl ? (qEl.value || "").toLowerCase().trim() : "";
+    var st = stEl ? stEl.value : "";
+    var sy = syEl ? syEl.value : "";
+    var th = thEl ? thEl.value : "";
 
     var list = all.slice();
 
@@ -1433,22 +1433,62 @@ function renderBooksHtml() {
 
     showEmpty(all.length === 0);
 
-    $("grid").innerHTML = list.map(makeCard).join("");
-    $("note").textContent = list.length
-      ? ("Mostrando " + list.length + " de " + all.length + " livro(s).")
-      : (all.length ? "Nenhum livro encontrado com esses filtros." : "Você ainda não criou nenhum livro. Use os exemplos acima e clique em “Criar meu primeiro livro”.");
+    if (gridEl) gridEl.innerHTML = list.map(makeCard).join("");
+    if (noteEl) {
+      noteEl.textContent = list.length
+        ? ("Mostrando " + list.length + " de " + all.length + " livro(s).")
+        : (all.length ? "Nenhum livro encontrado com esses filtros." : "Você ainda não criou nenhum livro. Use os exemplos acima e clique em “Criar meu primeiro livro”.");
+    }
   }
 
   async function load(){
-    if($("note")) $("note").textContent = "Carregando…";
-    var r = await fetch("/api/books", { cache: "no-store" });
-    var j = {};
-    try { j = await r.json(); } catch(e){}
-    all = Array.isArray(j.books) ? j.books : [];
-    updateStats();
+    try {
+      if($("note")) $("note").textContent = "Carregando…";
 
-    if($("note")) $("note").textContent = "";
-    applyFilters();
+      var r = await fetch("/api/books", {
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+
+      var j = {};
+      try {
+        j = await r.json();
+      } catch (e) {}
+
+      if (!r.ok || !j.ok) {
+        console.error("[books] erro /api/books:", j);
+        all = [];
+        updateStats();
+        showEmpty(false);
+
+        if ($("grid")) $("grid").innerHTML = "";
+        if ($("note")) {
+          $("note").textContent =
+            "Erro ao carregar seus livros: " +
+            (j && j.error ? j.error : ("HTTP " + r.status));
+        }
+        return;
+      }
+
+      all = Array.isArray(j.books) ? j.books : [];
+      console.log("[books] livros carregados =", all);
+
+      updateStats();
+
+      if($("note")) $("note").textContent = "";
+      applyFilters();
+    } catch (err) {
+      console.error("[books] falha no load:", err);
+      all = [];
+      updateStats();
+      showEmpty(false);
+
+      if ($("grid")) $("grid").innerHTML = "";
+      if ($("note")) {
+        $("note").textContent =
+          "Falha ao carregar seus livros: " + String(err?.message || err || "Erro");
+      }
+    }
   }
 
   if($("refresh")){

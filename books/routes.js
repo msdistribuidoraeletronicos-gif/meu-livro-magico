@@ -205,7 +205,9 @@ function toListItem(row) {
     bookId: String(row?.id || manifest?.id || ""),
     dirId: String(row?.id || manifest?.id || ""),
 
-    ownerId: String(row?.user_id || row?.owner_id || manifest?.ownerId || ""),
+    ownerId: String(
+      row?.user_id || row?.owner_id || manifest?.ownerId || ""
+    ),
     status: String(row?.status || manifest?.status || "created"),
     step: String(row?.step || manifest?.step || ""),
     error: String(row?.error || manifest?.error || ""),
@@ -238,36 +240,94 @@ function toListItem(row) {
 
 async function listBooksForRequest(supabaseAdmin, req) {
   const uid = String(req?.user?.id || "").trim();
-  if (!uid) return [];
+  const email = normalizeEmail(req?.user?.email || "");
+
+  console.log("[listBooksForRequest] req.user =", req?.user || null);
+  console.log("[listBooksForRequest] uid =", uid);
+  console.log("[listBooksForRequest] email =", email);
+  console.log("[listBooksForRequest] isAdmin =", isAdmin(req));
 
   if (!supabaseAdmin) {
     throw new Error("Supabase Admin não configurado no servidor.");
   }
 
-  let query = supabaseAdmin.from("books").select("*");
+  if (isAdmin(req)) {
+    const { data, error, status, statusText } = await supabaseAdmin
+      .from("books")
+      .select("*");
 
-  if (!isAdmin(req)) {
-    query = query.eq("user_id", uid);
+    if (error) {
+      console.error("[listBooksForRequest] erro do Supabase:", {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+        status,
+        statusText,
+      });
+      throw new Error("Erro ao consultar livros no Supabase: " + error.message);
+    }
+
+    console.log(
+      "[listBooksForRequest] rows (admin) =",
+      Array.isArray(data) ? data.length : 0
+    );
+
+    const list = Array.isArray(data) ? data.map(toListItem) : [];
+    list.sort((a, b) =>
+      String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+    );
+    return list;
   }
 
-  const { data, error, status, statusText } = await query;
+  if (!uid) {
+    throw new Error("Usuário autenticado sem id em req.user.id");
+  }
 
-  if (error) {
-    console.error("[listBooksForRequest] erro do Supabase:", {
-      message: error.message,
-      details: error.details,
-      hint: error.hint,
-      code: error.code,
-      status,
-      statusText,
+  // 1) tenta user_id
+  let result = await supabaseAdmin.from("books").select("*").eq("user_id", uid);
+
+  if (result.error) {
+    console.error("[listBooksForRequest] erro user_id:", {
+      message: result.error.message,
+      details: result.error.details,
+      hint: result.error.hint,
+      code: result.error.code,
     });
-    throw new Error("Erro ao consultar livros no Supabase: " + error.message);
+    throw new Error("Erro ao consultar livros no Supabase: " + result.error.message);
   }
 
-  console.log("[listBooksForRequest] rows =", Array.isArray(data) ? data.length : 0);
+  let data = Array.isArray(result.data) ? result.data : [];
 
-  const list = Array.isArray(data) ? data.map(toListItem) : [];
-  list.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  // 2) fallback owner_id
+  if (!data.length) {
+    const resultOwner = await supabaseAdmin
+      .from("books")
+      .select("*")
+      .eq("owner_id", uid);
+
+    if (resultOwner.error) {
+      console.error("[listBooksForRequest] erro owner_id:", {
+        message: resultOwner.error.message,
+        details: resultOwner.error.details,
+        hint: resultOwner.error.hint,
+        code: resultOwner.error.code,
+      });
+      throw new Error(
+        "Erro ao consultar livros no Supabase (owner_id): " +
+          resultOwner.error.message
+      );
+    }
+
+    data = Array.isArray(resultOwner.data) ? resultOwner.data : [];
+  }
+
+  console.log("[listBooksForRequest] rows =", data.length);
+
+  const list = data.map(toListItem);
+  list.sort((a, b) =>
+    String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+  );
   return list;
 }
 
@@ -275,23 +335,56 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
   const uid = String(req?.user?.id || "").trim();
   const id = String(bookId || "").trim();
 
-  if (!uid || !id) return null;
+  if (!id) return null;
 
   if (!supabaseAdmin) {
     throw new Error("Supabase Admin não configurado no servidor.");
   }
 
-  let query = supabaseAdmin
-    .from("books")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
+  console.log("[loadBookForRequest] req.user =", req?.user || null);
+  console.log("[loadBookForRequest] uid =", uid);
+  console.log("[loadBookForRequest] bookId =", id);
+  console.log("[loadBookForRequest] isAdmin =", isAdmin(req));
 
-  if (!isAdmin(req)) {
-    query = query.eq("user_id", uid);
+  let data = null;
+  let error = null;
+
+  if (isAdmin(req)) {
+    const result = await supabaseAdmin
+      .from("books")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    data = result.data;
+    error = result.error;
+  } else {
+    if (!uid) {
+      throw new Error("Usuário autenticado sem id em req.user.id");
+    }
+
+    let result = await supabaseAdmin
+      .from("books")
+      .select("*")
+      .eq("id", id)
+      .eq("user_id", uid)
+      .maybeSingle();
+
+    data = result.data;
+    error = result.error;
+
+    if (!data && !error) {
+      const resultOwner = await supabaseAdmin
+        .from("books")
+        .select("*")
+        .eq("id", id)
+        .eq("owner_id", uid)
+        .maybeSingle();
+
+      data = resultOwner.data;
+      error = resultOwner.error;
+    }
   }
-
-  const { data, error } = await query;
 
   if (error) {
     console.error("[loadBookForRequest] erro do Supabase:", error);
@@ -313,7 +406,7 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
     bookId: String(data.id || manifest.id || ""),
     dirId: String(data.id || manifest.id || ""),
     folderId: String(data.id || manifest.id || ""),
-    ownerId: String(data.user_id || manifest.ownerId || ""),
+    ownerId: String(data.user_id || data.owner_id || manifest.ownerId || ""),
 
     status: String(data.status || manifest.status || "created"),
     step: String(data.step || manifest.step || ""),
@@ -474,9 +567,18 @@ module.exports = function mountRoutes(app, opts = {}) {
   console.log("[books/routes] OUT_DIR =", OUT_DIR);
   console.log("[books/routes] supabaseAdmin =", !!supabaseAdmin);
   console.log("[books/routes] renderBooksHtml =", typeof renderBooksHtml === "function");
-  console.log("[books/routes] renderBookPreviewHtml =", typeof renderBookPreviewHtml === "function");
-  console.log("[books/routes] renderBookEditorHtml =", typeof renderBookEditorHtml === "function");
-  console.log("[books/routes] renderCheckoutHtml =", typeof renderCheckoutHtml === "function");
+  console.log(
+    "[books/routes] renderBookPreviewHtml =",
+    typeof renderBookPreviewHtml === "function"
+  );
+  console.log(
+    "[books/routes] renderBookEditorHtml =",
+    typeof renderBookEditorHtml === "function"
+  );
+  console.log(
+    "[books/routes] renderCheckoutHtml =",
+    typeof renderCheckoutHtml === "function"
+  );
 
   app.get("/api/books", requireAuth, async (req, res) => {
     try {
