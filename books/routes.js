@@ -3,6 +3,8 @@
 
 "use strict";
 
+const path = require("path");
+
 function pickFn(mod, names = []) {
   if (typeof mod === "function") return mod;
 
@@ -16,14 +18,24 @@ function pickFn(mod, names = []) {
   return null;
 }
 
-function tryRequire(p) {
+function tryRequireAbs(absPath) {
   try {
-    const mod = require(p);
-    console.log(`[books/routes] módulo carregado com sucesso: ${p}`);
+    const resolved = require.resolve(absPath);
+    console.log(`[books/routes] require.resolve OK: ${absPath} -> ${resolved}`);
+
+    const mod = require(absPath);
+    console.log(`[books/routes] módulo carregado com sucesso: ${absPath}`);
+    console.log(
+      `[books/routes] exports de ${absPath}:`,
+      mod && typeof mod === "object" ? Object.keys(mod) : typeof mod
+    );
+
     return mod;
   } catch (err) {
-    console.error(`[books/routes] Falha ao carregar módulo ${p}`);
-    console.error(err && err.stack ? err.stack : err);
+    console.error(`[books/routes] Falha ao carregar módulo ${absPath}`);
+    console.error("[books/routes] message:", err?.message || err);
+    console.error("[books/routes] code:", err?.code || "");
+    console.error("[books/routes] stack:", err?.stack || err);
     return null;
   }
 }
@@ -238,21 +250,17 @@ async function listBooksForRequest(supabaseAdmin, req) {
     query = query.eq("user_id", uid);
   }
 
-const { data, error, status, statusText } = await query;
-if (error) {
-  console.error("[listBooksForRequest] erro do Supabase:", {
-    message: error.message,
-    details: error.details,
-    hint: error.hint,
-    code: error.code,
-    status,
-    statusText,
-  });
-  throw new Error("Erro ao consultar livros no Supabase: " + error.message);
-}
+  const { data, error, status, statusText } = await query;
 
   if (error) {
-    console.error("[listBooksForRequest] erro do Supabase:", error);
+    console.error("[listBooksForRequest] erro do Supabase:", {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      status,
+      statusText,
+    });
     throw new Error("Erro ao consultar livros no Supabase: " + error.message);
   }
 
@@ -323,7 +331,12 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
     pdfUrl: inferPdfUrl(data),
 
     createdAt: toIso(data.created_at || manifest.createdAt),
-    updatedAt: toIso(data.updated_at || manifest.updatedAt || data.created_at || manifest.createdAt),
+    updatedAt: toIso(
+      data.updated_at ||
+        manifest.updatedAt ||
+        data.created_at ||
+        manifest.createdAt
+    ),
   };
 }
 
@@ -412,16 +425,22 @@ module.exports = function mountRoutes(app, opts = {}) {
     throw new Error("books/routes.js: requireAuth é obrigatório");
   }
 
- const booksRendererMod = tryRequire("./render.books.html.js");
-console.log(
-  "[books/routes] exports render.books.html.js =",
-  booksRendererMod && typeof booksRendererMod === "object"
-    ? Object.keys(booksRendererMod)
-    : typeof booksRendererMod
-);
-  const previewRendererMod = tryRequire("./render.preview.html.js");
-  const editorRendererMod = tryRequire("./render.editor.html.js");
-  const checkoutRendererMod = tryRequire("./render.checkout.html.js");
+  const booksRendererPath = path.join(__dirname, "render.books.html.js");
+  const previewRendererPath = path.join(__dirname, "render.preview.html.js");
+  const editorRendererPath = path.join(__dirname, "render.editor.html.js");
+  const checkoutRendererPath = path.join(__dirname, "render.checkout.html.js");
+
+  const booksRendererMod = tryRequireAbs(booksRendererPath);
+  const previewRendererMod = tryRequireAbs(previewRendererPath);
+  const editorRendererMod = tryRequireAbs(editorRendererPath);
+  const checkoutRendererMod = tryRequireAbs(checkoutRendererPath);
+
+  console.log(
+    "[books/routes] exports render.books.html.js =",
+    booksRendererMod && typeof booksRendererMod === "object"
+      ? Object.keys(booksRendererMod)
+      : typeof booksRendererMod
+  );
 
   const renderBooksHtml =
     pickFn(booksRendererMod, [
@@ -451,6 +470,7 @@ console.log(
     ]) || ((book) => fallbackCheckoutHtml(book));
 
   console.log("✅ books/routes.js montado com Supabase.");
+  console.log("[books/routes] __dirname =", __dirname);
   console.log("[books/routes] OUT_DIR =", OUT_DIR);
   console.log("[books/routes] supabaseAdmin =", !!supabaseAdmin);
   console.log("[books/routes] renderBooksHtml =", typeof renderBooksHtml === "function");
@@ -509,7 +529,11 @@ console.log(
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
     }
   });
 
@@ -521,7 +545,10 @@ console.log(
       }
 
       if (!supabaseAdmin) {
-        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+        return res
+          .status(500)
+          .type("html")
+          .send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -539,7 +566,11 @@ console.log(
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
     }
   });
 
@@ -551,7 +582,10 @@ console.log(
       }
 
       if (!supabaseAdmin) {
-        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+        return res
+          .status(500)
+          .type("html")
+          .send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -569,7 +603,11 @@ console.log(
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
     }
   });
 
@@ -581,7 +619,10 @@ console.log(
       }
 
       if (!supabaseAdmin) {
-        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+        return res
+          .status(500)
+          .type("html")
+          .send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -599,7 +640,11 @@ console.log(
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
     }
   });
 
@@ -611,7 +656,10 @@ console.log(
       }
 
       if (!supabaseAdmin) {
-        return res.status(500).type("html").send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+        return res
+          .status(500)
+          .type("html")
+          .send("<h1>500</h1><p>Supabase Admin não configurado</p>");
       }
 
       const book = await loadBookForRequest(supabaseAdmin, req, bookId);
@@ -638,7 +686,11 @@ console.log(
       return res
         .status(500)
         .type("html")
-        .send(`<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(String(e?.message || e || "Erro"))}</pre></body></html>`);
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
     }
   });
 
