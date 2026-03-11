@@ -90,12 +90,10 @@ function getPaymentReference(payload) {
       payload.payment_reference ||
       payload.paymentId ||
       payload.payment_id ||
-
       payload.mercadopagoPaymentId ||
       payload.mercadopago_payment_id ||
       payload.mercadopagoReferenceId ||
       payload.mercadopago_reference_id ||
-
       payload.pagbankReferenceId ||
       payload.pagbank_reference_id ||
       payload.pagbankOrderId ||
@@ -106,28 +104,71 @@ function getPaymentReference(payload) {
   ).trim();
 }
 
-async function findPaymentByReference(paymentReference) {
+function isUuid(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "").trim()
+  );
+}
+
+function isNumericId(v) {
+  return /^\d+$/.test(String(v || "").trim());
+}
+
+async function findLatestByField(table, field, value) {
   const { data, error } = await supabase
-    .from("payments")
+    .from(table)
     .select("*")
-    .or(
-      [
-        `id.eq.${paymentReference}`,
-
-        `mercadopago_payment_id.eq.${paymentReference}`,
-        `mercadopago_reference_id.eq.${paymentReference}`,
-        `mercadopago_external_reference.eq.${paymentReference}`,
-
-        `pagbank_order_id.eq.${paymentReference}`,
-        `pagbank_charge_id.eq.${paymentReference}`,
-        `pagbank_reference_id.eq.${paymentReference}`,
-      ].join(",")
-    )
+    .eq(field, value)
     .order("created_at", { ascending: false })
     .limit(1);
 
   if (error) throw error;
   return Array.isArray(data) && data.length > 0 ? data[0] : null;
+}
+
+async function findSingleByField(table, field, value) {
+  const { data, error } = await supabase
+    .from(table)
+    .select("*")
+    .eq(field, value)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data || null;
+}
+
+async function findPaymentByReference(paymentReference) {
+  const ref = String(paymentReference || "").trim();
+  if (!ref) return null;
+
+  let payment = null;
+
+  payment = await findLatestByField("payments", "mercadopago_reference_id", ref);
+  if (payment) return payment;
+
+  payment = await findLatestByField("payments", "mercadopago_external_reference", ref);
+  if (payment) return payment;
+
+  payment = await findLatestByField("payments", "pagbank_reference_id", ref);
+  if (payment) return payment;
+
+  payment = await findLatestByField("payments", "pagbank_order_id", ref);
+  if (payment) return payment;
+
+  payment = await findLatestByField("payments", "pagbank_charge_id", ref);
+  if (payment) return payment;
+
+  if (isNumericId(ref)) {
+    payment = await findLatestByField("payments", "mercadopago_payment_id", ref);
+    if (payment) return payment;
+  }
+
+  if (isUuid(ref)) {
+    payment = await findSingleByField("payments", "id", ref);
+    if (payment) return payment;
+  }
+
+  return null;
 }
 
 function isPaidStatus(status) {
@@ -475,8 +516,14 @@ module.exports = async (req, res) => {
       });
     }
 
-    if (!isPaidStatus(payment.status)) {
-      console.log("[checkout] Pagamento ainda não confirmado:", payment.status);
+    const paymentStatus = String(payment.status || "").toLowerCase();
+    const providerStatus = String(payment.mercadopago_status || payment.pagbank_status || "").toLowerCase();
+
+    if (!isPaidStatus(paymentStatus) && !isPaidStatus(providerStatus)) {
+      console.log("[checkout] Pagamento ainda não confirmado:", {
+        paymentStatus,
+        providerStatus,
+      });
       return res.status(400).json({
         error: "Pagamento ainda não foi confirmado.",
       });
@@ -557,9 +604,9 @@ module.exports = async (req, res) => {
     const nowIso = new Date().toISOString();
 
     const resolvedPaymentReference =
-      payment.mercadopago_payment_id ||
       payment.mercadopago_reference_id ||
       payment.mercadopago_external_reference ||
+      payment.mercadopago_payment_id ||
       payment.pagbank_reference_id ||
       payment.pagbank_charge_id ||
       payment.pagbank_order_id ||
@@ -603,7 +650,7 @@ module.exports = async (req, res) => {
       payment_id: payment.id,
       payment_provider: payment.provider || "mercadopago",
       payment_method: payment.payment_method || "pix",
-      payment_status: String(payment.status || "").toLowerCase(),
+      payment_status: paymentStatus || providerStatus || "paid",
       payment_reference: resolvedPaymentReference,
 
       order_data: orderData,
