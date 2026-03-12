@@ -1569,19 +1569,25 @@ function renderCheckoutHtml(book, opts = {}) {
       }
     }
 
-    function close(){
+    function closeAndGoProfile(){
+      modal.style.display = "none";
+      modal.setAttribute("aria-hidden", "true");
+      window.location.href = "/profile";
+    }
+
+    function closeOnly(){
       modal.style.display = "none";
       modal.setAttribute("aria-hidden", "true");
     }
 
-    okBtn.onclick = close;
+    if (okBtn) okBtn.onclick = closeAndGoProfile;
 
     const backdrop = modal.querySelector(".modalBackdrop");
-    if (backdrop) backdrop.onclick = close;
+    if (backdrop) backdrop.onclick = closeOnly;
 
     const onKey = (e)=>{
       if (e.key === "Escape") {
-        close();
+        closeOnly();
         window.removeEventListener("keydown", onKey);
       }
     };
@@ -1735,6 +1741,7 @@ function renderCheckoutHtml(book, opts = {}) {
     submitted = true;
     stopPaymentPolling();
     try { localStorage.removeItem(TIMER_KEY); } catch(e){}
+    try { localStorage.removeItem(DRAFT_KEY); } catch(e){}
 
     $("msg").textContent = "✅ Pagamento confirmado e pedido enviado com sucesso!";
     closePixModal();
@@ -2156,33 +2163,33 @@ function renderCheckoutHtml(book, opts = {}) {
       pendingCheckoutPayload = payload;
 
       const pix = await createPixCharge(payload);
-  currentPaymentRef = String(
-  pix.paymentReference ||
-  pix.payment_reference ||
-  pix.reference ||
-  pix.checkoutReference ||
-  pix.checkout_reference ||
-  ""
-).trim();
 
-const mercadoPagoPaymentId = String(
-  pix.paymentId ||
-  pix.payment_id ||
-  pix.mercadopagoPaymentId ||
-  pix.mercadopago_payment_id ||
-  pix.id ||
-  ""
-).trim();
+      currentPaymentRef = String(
+        pix.paymentReference ||
+        pix.payment_reference ||
+        pix.reference ||
+        pix.checkoutReference ||
+        pix.checkout_reference ||
+        ""
+      ).trim();
 
-if (!currentPaymentRef) {
-  throw new Error(
-    "A cobrança PIX foi criada, mas o backend não retornou paymentReference interno."
-  );
-}
+      const mercadoPagoPaymentId = String(
+        pix.paymentId ||
+        pix.payment_id ||
+        pix.mercadopagoPaymentId ||
+        pix.mercadopago_payment_id ||
+        pix.id ||
+        ""
+      ).trim();
 
       if (!currentPaymentRef) {
-        throw new Error("A cobrança PIX foi criada, mas não recebemos a referência do pagamento.");
+        throw new Error(
+          "A cobrança PIX foi criada, mas o backend não retornou paymentReference interno."
+        );
       }
+
+      console.log("[checkout] paymentReference:", currentPaymentRef);
+      console.log("[checkout] mercadopagoPaymentId:", mercadoPagoPaymentId);
 
       renderPixData(pix, built.calcData);
 
