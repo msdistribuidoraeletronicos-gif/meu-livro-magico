@@ -1393,9 +1393,15 @@ module.exports = function mountProfilePage(app, options = {}) {
   // ------------------------------
   // API: /api/my-wallet/buy
   // ------------------------------
+   // ------------------------------
+  // API: /api/my-wallet/buy
+  // Agora: cria um pedido de compra de moedas
+  // e retorna a URL do checkout
+  // ------------------------------
   app.post("/api/my-wallet/buy", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
+      const userEmail = String(req.user?.email || "").trim().toLowerCase();
 
       if (!userId) {
         return res.status(401).json({ ok: false, error: "not_logged_in" });
@@ -1408,12 +1414,8 @@ module.exports = function mountProfilePage(app, options = {}) {
       }
 
       const pack = clamp(toNum(req.body?.pack, 0), 0, 9999999);
-
-      if (!pack || pack <= 0) {
-        return res.status(400).json({ ok: false, error: "invalid_pack" });
-      }
-
       const allowed = [10, 25, 50, 100];
+
       if (!allowed.includes(pack)) {
         return res
           .status(400)
@@ -1422,53 +1424,52 @@ module.exports = function mountProfilePage(app, options = {}) {
 
       const completedOrders = await countCompletedUserOrders(userId);
       const level = getUserLevelByOrders(completedOrders);
-      const wallet = await ensureUserWallet(userId);
 
       const bonus = Number((pack * level.buyBonusPct).toFixed(2));
-      const credit = pack + bonus;
+      const credit = Number((pack + bonus).toFixed(2));
+      const price = Number(pack.toFixed ? pack.toFixed(2) : pack);
 
-      const nextPurchased = toNum(wallet.purchased_coins, 0) + credit;
+      const externalReference = `coin_${userId}_${pack}_${Date.now()}`;
 
-      const { data: updated, error: updErr } = await supabaseAdmin
-        .from("user_wallets")
-        .update({
-          purchased_coins: nextPurchased,
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from("coin_orders")
+        .insert({
+          user_id: userId,
+          pack,
+          price_amount: price,
+          bonus_coins: bonus,
+          credit_coins: credit,
+          currency: "BRL",
+          status: "pending",
+          customer_email: userEmail || null,
+          metadata: {
+            source: "profile_wallet_buy",
+            level_key: level.key,
+            level_name: level.name,
+            buy_bonus_pct: level.buyBonusPct,
+            created_from: "/profile",
+          },
+          mercadopago_external_reference: externalReference,
+          created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
-        .eq("user_id", userId)
-        .select("*")
+        .select("id")
         .single();
 
-      if (updErr) throw updErr;
-
-      await addWalletActivity(userId, {
-        type: "buy",
-        title: "Compra de moedas",
-        amount: credit,
-        meta: `Pacote ${pack} + bônus ${bonus.toLocaleString("pt-BR", {
-          minimumFractionDigits: bonus % 1 ? 2 : 0,
-          maximumFractionDigits: 2,
-        })}`,
-      });
-
-      const summary = await getMyWalletSummary(userId);
+      if (insertErr) throw insertErr;
 
       return res.json({
         ok: true,
-        credit,
-        bonus,
-        wallet: updated,
-        level: summary.level,
-        availableCoins: summary.available,
-        activities: summary.activities,
+        orderId: inserted.id,
+        checkoutUrl: "/checkout/coins?order=" + encodeURIComponent(inserted.id),
       });
     } catch (e) {
-      return res
-        .status(500)
-        .json({ ok: false, error: String(e?.message || e || "Erro") });
+      return res.status(500).json({
+        ok: false,
+        error: String(e?.message || e || "Erro"),
+      });
     }
   });
-
   // ------------------------------
   // API: /api/my-account
   // ------------------------------

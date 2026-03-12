@@ -1620,7 +1620,8 @@ const mercadopagoPixApi = require("./api/mercadopago/pix");
 const mercadopagoStatusApi = require("./api/mercadopago/status");
 const mercadopagoWebhookApi = require("./api/webhooks/mercadopago");
 const checkoutApi = require("./api/checkout");
-
+const coinOrderPixApi = require("./api/coin-order-pix");
+const coinOrderStatusApi = require("./api/coin-order-status");
 // ------------------------------
 // API Router
 // ------------------------------
@@ -1631,7 +1632,7 @@ apiRouter.use(express.json({ limit: JSON_LIMIT }));
 apiRouter.use(cookieParser());
 apiRouter.all("/mercadopago/pix", (req, res) => mercadopagoPixApi(req, res));
 apiRouter.all("/mercadopago/status", (req, res) => mercadopagoStatusApi(req, res));
-apiRouter.all("/webhooks/mercadopago", (req, res) => mercadopagoWebhookApi(req, res));
+apiRouter.post("/webhooks/mercadopago", (req, res) => mercadopagoWebhookApi(req, res));
 apiRouter.all("/checkout", (req, res) => checkoutApi(req, res));
 
 // Middleware de parceiro ref (para todas as rotas, mas só usado em algumas)
@@ -1664,6 +1665,15 @@ apiRouter.get("/partners", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
+});
+apiRouter.post("/coin-orders/:id/pix", (req, res) => {
+  req.query.orderId = String(req.params?.id || "").trim();
+  return coinOrderPixApi(req, res);
+});
+
+apiRouter.get("/coin-orders/:id/status", (req, res) => {
+  req.query.orderId = String(req.params?.id || "").trim();
+  return coinOrderStatusApi(req, res);
 });
 
 apiRouter.get("/partner/orders", async (req, res) => {

@@ -75,7 +75,6 @@ async function findPaymentByRefs(refs) {
       .from("payments")
       .select("*")
       .or([
-        `id.eq.${ref}`,
         `mercadopago_payment_id.eq.${ref}`,
         `mercadopago_reference_id.eq.${ref}`,
         `mercadopago_external_reference.eq.${ref}`
@@ -92,9 +91,136 @@ async function findPaymentByRefs(refs) {
   return null;
 }
 
-async function fetchMercadoPagoPayment(paymentId) {
-  if (!paymentId) return null;
+async function findCoinOrderByRefs(refs) {
+  const candidates = [
+    refs.mercadopagoPaymentId,
+    refs.mercadopagoReferenceId,
+    refs.mercadopagoExternalReference
+  ].filter(Boolean);
 
+  for (const ref of candidates) {
+    const { data, error } = await supabase
+      .from("coin_orders")
+      .select("*")
+      .or([
+        `mercadopago_payment_id.eq.${ref}`,
+        `mercadopago_reference_id.eq.${ref}`,
+        `mercadopago_external_reference.eq.${ref}`
+      ].join(","))
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) {
+      return data[0];
+    }
+  }
+
+  return null;
+}
+
+async function ensureUserWallet(userId) {
+  const { data: wallet } = await supabase
+    .from("user_wallets")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (wallet) return wallet;
+
+  const payload = {
+    user_id: userId,
+    bonus_coins: 0,
+    purchased_coins: 0,
+    withdrawn_coins: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  const { data: inserted } = await supabase
+    .from("user_wallets")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  return inserted;
+}
+
+async function addWalletActivity(userId, payload = {}) {
+  const row = {
+    user_id: userId,
+    type: payload.type || "buy",
+    title: payload.title || "Compra de moedas",
+    amount: Number(payload.amount || 0),
+    meta: payload.meta || null,
+    created_at: new Date().toISOString()
+  };
+
+  await supabase.from("user_wallet_activities").insert(row);
+}
+
+async function applyCoinOrderCreditIfPaid(orderId) {
+
+  const { data: order } = await supabase
+    .from("coin_orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (!order) return;
+
+  const status = String(order.status || "").toLowerCase();
+
+  if (status !== "paid") return;
+
+  if (order.credited_at) {
+    console.log("[coin credit] já creditado");
+    return;
+  }
+
+  const wallet = await ensureUserWallet(order.user_id);
+
+  const nextPurchased =
+    Number(wallet.purchased_coins || 0) +
+    Number(order.credit_coins || 0);
+
+  const nowIso = new Date().toISOString();
+
+  const { data: mark } = await supabase
+    .from("coin_orders")
+    .update({
+      credited_at: nowIso,
+      updated_at: nowIso
+    })
+    .eq("id", order.id)
+    .is("credited_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (!mark) {
+    console.log("[coin credit] corrida detectada");
+    return;
+  }
+
+  await supabase
+    .from("user_wallets")
+    .update({
+      purchased_coins: nextPurchased,
+      updated_at: nowIso
+    })
+    .eq("user_id", order.user_id);
+
+  await addWalletActivity(order.user_id, {
+    type: "buy",
+    title: "Compra de moedas aprovada",
+    amount: order.credit_coins,
+    meta: "Pacote " + order.pack
+  });
+
+  console.log("[coin credit] moedas creditadas:", order.credit_coins);
+}
+
+async function fetchMercadoPagoPayment(paymentId) {
   const url = "https://api.mercadopago.com/v1/payments/" + encodeURIComponent(paymentId);
 
   const response = await fetch(url, {
@@ -106,184 +232,135 @@ async function fetchMercadoPagoPayment(paymentId) {
     }
   });
 
-  const rawText = await response.text();
-  let json = null;
-
-  try {
-    json = rawText ? JSON.parse(rawText) : {};
-  } catch (e) {
-    return {
-      ok: false,
-      status: response.status,
-      error: "Resposta inválida do Mercado Pago",
-      raw: rawText
-    };
-  }
+  const json = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    return {
-      ok: false,
-      status: response.status,
-      error:
-        json?.message ||
-        json?.error ||
-        json?.cause?.[0]?.description ||
-        "Erro ao consultar pagamento no Mercado Pago",
-      raw: json
-    };
+    throw new Error(
+      json?.message ||
+      json?.error ||
+      json?.cause?.[0]?.description ||
+      "Erro ao consultar pagamento no Mercado Pago"
+    );
   }
 
-  return {
-    ok: true,
-    raw: json
-  };
+  return json;
 }
 
 module.exports = async (req, res) => {
-  console.log("[mercadopago/webhook] ===== NOVA REQUISIÇÃO =====");
-  console.log("[mercadopago/webhook] Método:", req.method);
-  console.log("[mercadopago/webhook] URL:", req.url);
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
   }
 
   try {
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return res.status(500).json({ error: "Supabase não configurado no ambiente" });
-    }
-
-    if (!MP_ACCESS_TOKEN) {
-      return res.status(500).json({ error: "MERCADOPAGO_ACCESS_TOKEN não configurado" });
-    }
 
     const body = req.body || {};
-    console.log("[mercadopago/webhook] Body recebido:", JSON.stringify(body, null, 2));
 
     const refs = extractWebhookRefs(body);
-    console.log("[mercadopago/webhook] Refs extraídas:", refs);
 
-    let payment = null;
+    let payment = await findPaymentByRefs(refs);
 
-    try {
-      payment = await findPaymentByRefs(refs);
-    } catch (findErr) {
-      console.error("[mercadopago/webhook] Erro ao buscar payment:", findErr);
-      return res.status(500).json({ error: "Erro ao buscar pagamento" });
-    }
-
-    if (!payment && !refs.mercadopagoPaymentId) {
-      console.warn("[mercadopago/webhook] Nenhuma referência útil encontrada");
-      return res.status(200).json({
-        ok: true,
-        ignored: true,
-        message: "Webhook recebido sem referência suficiente"
-      });
-    }
-
-    const paymentIdToQuery =
+    const paymentId =
       refs.mercadopagoPaymentId ||
       payment?.mercadopago_payment_id ||
-      "";
+      null;
 
-    let finalStatus = "pending";
-    let rawProviderStatus = "";
-    let paidAt = null;
-    let expiresAt = null;
-    let providerSnapshot = body;
-    let resolvedPaymentId = refs.mercadopagoPaymentId || payment?.mercadopago_payment_id || null;
-    let resolvedReferenceId = payment?.mercadopago_reference_id || null;
-    let resolvedExternalReference = payment?.mercadopago_external_reference || null;
+    let mpPayment = null;
 
-    if (paymentIdToQuery) {
-      const mpPayment = await fetchMercadoPagoPayment(paymentIdToQuery);
-
-      if (mpPayment?.ok) {
-        const raw = mpPayment.raw || {};
-        rawProviderStatus = String(raw.status || "").trim().toLowerCase();
-        finalStatus = mapMercadoPagoStatus(rawProviderStatus);
-        paidAt = toIsoOrNull(raw.date_approved || raw.date_last_updated || null);
-        expiresAt = toIsoOrNull(
-          raw.date_of_expiration ||
-          raw?.point_of_interaction?.transaction_data?.expiration_date ||
-          null
-        );
-        providerSnapshot = raw;
-        resolvedPaymentId = String(raw.id || resolvedPaymentId || "").trim() || null;
-        resolvedExternalReference = String(raw.external_reference || resolvedExternalReference || "").trim() || null;
-      } else {
-        console.error("[mercadopago/webhook] Falha ao consultar Mercado Pago:", mpPayment);
-      }
+    if (paymentId) {
+      mpPayment = await fetchMercadoPagoPayment(paymentId);
     }
+
+    const rawStatus = mpPayment?.status || "";
+
+    const finalStatus = mapMercadoPagoStatus(rawStatus);
+
+    const paidAt = toIsoOrNull(mpPayment?.date_approved);
+
+    let resolvedExternalReference =
+      mpPayment?.external_reference ||
+      payment?.mercadopago_external_reference ||
+      null;
 
     if (!payment) {
       payment = await findPaymentByRefs({
-        mercadopagoPaymentId: resolvedPaymentId,
-        mercadopagoReferenceId: resolvedReferenceId,
         mercadopagoExternalReference: resolvedExternalReference
       });
     }
 
     if (!payment) {
-      console.warn("[mercadopago/webhook] Payment não encontrado para refs:", refs);
-      return res.status(200).json({
-        ok: true,
-        ignored: true,
-        message: "Webhook recebido, mas nenhum payment correspondente foi encontrado"
-      });
+      console.log("[webhook] payment não encontrado");
     }
 
-    const updatePayload = {
-      status: finalStatus,
-      provider_response: providerSnapshot,
-      mercadopago_payment_id: resolvedPaymentId,
-      mercadopago_status: rawProviderStatus || null,
-      mercadopago_external_reference: resolvedExternalReference || null,
-      updated_at: new Date().toISOString(),
-      metadata: {
-        ...(payment.metadata || {}),
-        webhook_received: true,
-        webhook_received_at: new Date().toISOString(),
-        webhook_event_type: refs.eventType || null
+    if (payment) {
+
+      const updatePayload = {
+        status: finalStatus,
+        mercadopago_status: rawStatus,
+        mercadopago_payment_id: mpPayment?.id,
+        mercadopago_external_reference: resolvedExternalReference,
+        provider_response: mpPayment,
+        updated_at: new Date().toISOString()
+      };
+
+      if (paidAt && finalStatus === "paid") {
+        updatePayload.paid_at = paidAt;
+        updatePayload.approved_at = paidAt;
       }
-    };
 
-    if (paidAt && finalStatus === "paid") {
-      updatePayload.paid_at = paidAt;
-      updatePayload.approved_at = paidAt;
+      await supabase
+        .from("payments")
+        .update(updatePayload)
+        .eq("id", payment.id);
+
+      console.log("[webhook] payment atualizado:", finalStatus);
     }
 
-    if (expiresAt) {
-      updatePayload.expires_at = expiresAt;
+const coinOrder = await findCoinOrderByRefs({
+  mercadopagoPaymentId: mpPayment?.id || refs.mercadopagoPaymentId || null,
+  mercadopagoReferenceId: refs.mercadopagoReferenceId || null,
+  mercadopagoExternalReference: resolvedExternalReference || refs.mercadopagoExternalReference || null
+});
+    if (coinOrder) {
+
+      const updateCoinPayload = {
+        status: finalStatus,
+        mercadopago_payment_id: mpPayment?.id,
+        mercadopago_status: rawStatus,
+        mercadopago_external_reference: resolvedExternalReference,
+        updated_at: new Date().toISOString()
+      };
+
+      if (paidAt && finalStatus === "paid") {
+        updateCoinPayload.paid_at = paidAt;
+        updateCoinPayload.approved_at = paidAt;
+      }
+
+      await supabase
+        .from("coin_orders")
+        .update(updateCoinPayload)
+        .eq("id", coinOrder.id);
+
+      console.log("[webhook] coin_order atualizada:", finalStatus);
+
+      if (finalStatus === "paid") {
+        await applyCoinOrderCreditIfPaid(coinOrder.id);
+      }
+
     }
-
-    const { error: updateErr } = await supabase
-      .from("payments")
-      .update(updatePayload)
-      .eq("id", payment.id);
-
-    if (updateErr) {
-      console.error("[mercadopago/webhook] Erro ao atualizar payment:", updateErr);
-      return res.status(500).json({ error: "Erro ao atualizar pagamento" });
-    }
-
-    console.log("[mercadopago/webhook] Payment atualizado com sucesso:", {
-      paymentId: payment.id,
-      status: finalStatus,
-      providerStatus: rawProviderStatus
-    });
 
     return res.status(200).json({
       ok: true,
-      paymentId: payment.id,
-      status: finalStatus,
-      providerStatus: rawProviderStatus
+      status: finalStatus
     });
+
   } catch (e) {
-    console.error("[mercadopago/webhook] Erro interno:");
-    console.error(e);
+
+    console.error("[webhook] erro:", e);
+
     return res.status(500).json({
-      error: e?.message || "Erro interno no webhook"
+      error: e.message
     });
+
   }
 };

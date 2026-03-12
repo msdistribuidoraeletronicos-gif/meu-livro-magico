@@ -2495,17 +2495,24 @@ function buildProfilePageJS() {
     btn.addEventListener("click", async () => {
       setHint("hintBuy", "");
       setHint("hintBuyModal", "");
+
       const pack = Number(btn.getAttribute("data-pack") || 0);
       const old = btn.innerHTML;
+
       btn.disabled = true;
-      btn.innerHTML = "<span class='spin'></span> Processando";
+      btn.innerHTML = "<span class='spin'></span> Abrindo checkout";
+
       try{
         const j = await postJson("/api/my-wallet/buy", { pack });
+
+        if (!j.checkoutUrl) {
+          throw new Error("checkout_url_missing");
+        }
+
         closeBuyModal();
-        await loadWallet(false);
-        showToast("➕ Moedas adicionadas", "Você recebeu " + fmtCoins(j.credit) + " na carteira.", 2800);
+        window.location.href = j.checkoutUrl;
       }catch(e){
-        setHint("hintBuyModal", "Falha ao comprar moedas: " + String(e.message || e));
+        setHint("hintBuyModal", "Falha ao iniciar compra: " + String(e.message || e));
       }finally{
         btn.disabled = false;
         btn.innerHTML = old;
