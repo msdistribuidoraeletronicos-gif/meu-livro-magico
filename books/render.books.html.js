@@ -518,6 +518,7 @@ function renderBooksHtml() {
     display:grid;
     place-items:center;
     position:relative;
+    overflow:hidden;
   }
   .cover img{ width:100%; height:100%; object-fit:cover; display:block; }
   .emptyCover{
@@ -537,6 +538,7 @@ function renderBooksHtml() {
     position:absolute;
     left:12px; top:12px;
     display:flex; gap:8px; flex-wrap:wrap;
+    z-index: 2;
   }
   .pillMini{
     font-size: 12px;
@@ -1097,7 +1099,7 @@ function renderBooksHtml() {
               Luz baixinha, voz de personagem e a criança sendo a heroína do próprio livro.
               <b>Funciona demais</b> para criar rotina tranquila e pedir “só mais uma página” com sorriso.
               <br/><br/>
-              <b>Truque:</b> deixe a criança escolher o tema do dia (espaço, dinossauro, dragão…).
+              <b>Truque:</b> deixe a criança escolher o tema do dia (espaço, dinossauros, dragão…).
             </p>
           </div>
         </div>
@@ -1353,10 +1355,23 @@ function renderBooksHtml() {
     return '<span class="pillMini">🕓 ' + esc(status || "created") + '</span>';
   }
 
+  function hasUsableCover(url){
+    var s = String(url || "").trim();
+    if (!s) return false;
+    if (s === "null" || s === "undefined") return false;
+    return true;
+  }
+
+  function buildCoverHtml(url){
+    if (!hasUsableCover(url)) {
+      return '<div class="emptyCover">📘</div>';
+    }
+
+    return '<img src="' + esc(String(url).trim()) + '" alt="capa" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.onerror=null;this.outerHTML=\\'<div class=&quot;emptyCover&quot;>📘</div>\\';"/>';
+  }
+
   function makeCard(b){
-    var cover = b.coverUrl
-      ? '<img src="' + esc(b.coverUrl) + '" alt="capa"/>'
-      : '<div class="emptyCover">📘</div>';
+    var cover = buildCoverHtml(b.coverUrl);
 
     var sub =
       (b.childName ? ('👧/👦 <b>' + esc(b.childName) + '</b> • ') : '') +
