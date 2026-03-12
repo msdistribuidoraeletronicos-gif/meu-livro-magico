@@ -26,12 +26,152 @@ function buildReference(orderId) {
   return "coin_" + String(orderId) + "_" + Date.now() + "_" + rand;
 }
 
+function toIsoOrNull(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function mapMercadoPagoStatus(rawStatus) {
+  const s = String(rawStatus || "").trim().toLowerCase();
+
+  if (!s) return "pending";
+  if (["approved", "paid", "completed"].includes(s)) return "paid";
+  if (["pending", "in_process", "in_mediation", "authorized"].includes(s)) return "pending";
+  if (["cancelled", "canceled"].includes(s)) return "cancelled";
+  if (["rejected", "failed", "refused", "denied"].includes(s)) return "failed";
+  if (["expired"].includes(s)) return "expired";
+
+  return "pending";
+}
+
+async function ensureUserWallet(userId) {
+  const { data: wallet } = await supabase
+    .from("user_wallets")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (wallet) return wallet;
+
+  const nowIso = new Date().toISOString();
+
+  const payload = {
+    user_id: userId,
+    bonus_coins: 0,
+    purchased_coins: 0,
+    withdrawn_coins: 0,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  const { data: inserted, error } = await supabase
+    .from("user_wallets")
+    .upsert(payload, { onConflict: "user_id" })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return inserted;
+}
+
+async function addWalletActivity(userId, payload = {}) {
+  const row = {
+    user_id: userId,
+    type: payload.type || "buy",
+    title: payload.title || "Compra de moedas",
+    amount: Number(payload.amount || 0),
+    meta: payload.meta || null,
+    created_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("user_wallet_activities").insert(row);
+  if (error) throw error;
+}
+
+async function applyCoinOrderCreditIfPaid(orderId) {
+  const { data: order, error: orderErr } = await supabase
+    .from("coin_orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderErr) throw orderErr;
+  if (!order) return;
+
+  const status = String(order.status || "").toLowerCase();
+  if (status !== "paid") return;
+
+  if (order.credited_at) {
+    console.log("[coin credit] já creditado");
+    return;
+  }
+
+  await ensureUserWallet(order.user_id);
+
+  const nowIso = new Date().toISOString();
+
+  const { data: mark, error: markErr } = await supabase
+    .from("coin_orders")
+    .update({
+      credited_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq("id", order.id)
+    .is("credited_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (markErr) throw markErr;
+
+  if (!mark) {
+    console.log("[coin credit] corrida detectada");
+    return;
+  }
+
+  const { data: wallet, error: walletErr } = await supabase
+    .from("user_wallets")
+    .select("*")
+    .eq("user_id", order.user_id)
+    .maybeSingle();
+
+  if (walletErr) throw walletErr;
+  if (!wallet) throw new Error("wallet_not_found_after_ensure");
+
+  const nextPurchased =
+    Number(wallet.purchased_coins || 0) + Number(order.credit_coins || 0);
+
+  const { error: updWalletErr } = await supabase
+    .from("user_wallets")
+    .update({
+      purchased_coins: nextPurchased,
+      updated_at: nowIso,
+    })
+    .eq("user_id", order.user_id);
+
+  if (updWalletErr) throw updWalletErr;
+
+  await addWalletActivity(order.user_id, {
+    type: "buy",
+    title: "Compra de moedas aprovada",
+    amount: Number(order.credit_coins || 0),
+    meta: "Pacote " + String(order.pack || ""),
+  });
+
+  console.log("[coin credit] moedas creditadas:", order.credit_coins);
+}
+
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "method_not_allowed" });
   }
 
   try {
+    const authUserId = String(req.user?.id || "").trim();
+    if (!authUserId) {
+      return res.status(401).json({ ok: false, error: "not_logged_in" });
+    }
+
     const orderId = String(req.query.orderId || req.body?.orderId || "").trim();
     if (!orderId) {
       return res.status(400).json({ ok: false, error: "order_id_required" });
@@ -52,12 +192,67 @@ module.exports = async (req, res) => {
       return res.status(404).json({ ok: false, error: "coin_order_not_found" });
     }
 
+    if (String(order.user_id || "") !== authUserId) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
     if (order.credited_at) {
       return res.status(400).json({ ok: false, error: "coin_order_already_credited" });
     }
 
     if (String(order.status || "").toLowerCase() === "paid") {
       return res.status(400).json({ ok: false, error: "coin_order_already_paid" });
+    }
+
+    const existingPaymentId = String(order.payment_id || "").trim();
+    if (existingPaymentId) {
+      const { data: existingPayment, error: existingPaymentErr } = await supabase
+        .from("payments")
+        .select("*")
+        .eq("id", existingPaymentId)
+        .maybeSingle();
+
+      if (existingPaymentErr) throw existingPaymentErr;
+
+      if (existingPayment) {
+        const existingStatus = String(existingPayment.status || "").toLowerCase();
+        const existingMpStatus = String(existingPayment.mercadopago_status || "").toLowerCase();
+
+        if (["pending"].includes(existingStatus) || ["pending", "in_process"].includes(existingMpStatus)) {
+          return res.json({
+            ok: true,
+            reused: true,
+            orderId: order.id,
+            paymentReference:
+              existingPayment.mercadopago_external_reference ||
+              existingPayment.mercadopago_reference_id ||
+              "",
+            payment_reference:
+              existingPayment.mercadopago_external_reference ||
+              existingPayment.mercadopago_reference_id ||
+              "",
+            paymentId: existingPayment.mercadopago_payment_id || "",
+            payment_id: existingPayment.mercadopago_payment_id || "",
+            qrCodeBase64:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.qr_code_base64 ||
+              "",
+            qr_code_base64:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.qr_code_base64 ||
+              "",
+            qrCodeUrl:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.ticket_url || "",
+            qr_code_url:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.ticket_url || "",
+            pixCode:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.qr_code || "",
+            copyPaste:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.qr_code || "",
+            copy_paste:
+              existingPayment?.metadata?.raw_response?.point_of_interaction?.transaction_data?.qr_code || "",
+            status: existingStatus || "pending",
+          });
+        }
+      }
     }
 
     const externalReference =
@@ -116,8 +311,11 @@ module.exports = async (req, res) => {
     }
 
     const mercadopagoPaymentId = String(mpResult.id || "").trim();
-    const mercadopagoStatus = String(mpResult.status || "pending").trim().toLowerCase();
+    const rawMpStatus = String(mpResult.status || "pending").trim().toLowerCase();
+    const appStatus = mapMercadoPagoStatus(rawMpStatus);
     const mercadopagoStatusDetail = String(mpResult.status_detail || "").trim().toLowerCase();
+    const approvedAt = toIsoOrNull(mpResult?.date_approved);
+    const nowIso = new Date().toISOString();
 
     const qrCodeBase64 = String(
       mpResult?.point_of_interaction?.transaction_data?.qr_code_base64 || ""
@@ -131,13 +329,10 @@ module.exports = async (req, res) => {
       mpResult?.point_of_interaction?.transaction_data?.ticket_url || ""
     ).trim();
 
-    const nowIso = new Date().toISOString();
-
-    const paymentInsert = {
+    const paymentPayload = {
       provider: "mercadopago",
       payment_method: "pix",
-      status: mercadopagoStatus === "approved" ? "paid" : "pending",
-
+      status: appStatus,
       amount: Number(order.price_amount || 0),
       book_id: null,
       user_id: order.user_id,
@@ -147,7 +342,7 @@ module.exports = async (req, res) => {
       customer_whatsapp: order.customer_whatsapp || null,
 
       mercadopago_payment_id: mercadopagoPaymentId,
-      mercadopago_status: mercadopagoStatus,
+      mercadopago_status: rawMpStatus,
       mercadopago_status_detail: mercadopagoStatusDetail || null,
       mercadopago_reference_id: externalReference,
       mercadopago_external_reference: externalReference,
@@ -158,29 +353,54 @@ module.exports = async (req, res) => {
         qr_code_base64_available: !!qrCodeBase64,
         ticket_url: ticketUrl || null,
       },
-      created_at: nowIso,
       updated_at: nowIso,
-      approved_at: mercadopagoStatus === "approved" ? nowIso : null,
-      paid_at: mercadopagoStatus === "approved" ? nowIso : null,
+      approved_at: appStatus === "paid" ? approvedAt || nowIso : null,
+      paid_at: appStatus === "paid" ? approvedAt || nowIso : null,
     };
 
-    const { data: insertedPayment, error: payErr } = await supabase
+    const { data: existingPaymentByMpId, error: existingByMpErr } = await supabase
       .from("payments")
-      .insert(paymentInsert)
       .select("id")
-      .single();
+      .eq("mercadopago_payment_id", mercadopagoPaymentId)
+      .maybeSingle();
 
-    if (payErr) throw payErr;
+    if (existingByMpErr) throw existingByMpErr;
+
+    let paymentRowId = "";
+
+    if (existingPaymentByMpId?.id) {
+      const { error: updPaymentErr } = await supabase
+        .from("payments")
+        .update(paymentPayload)
+        .eq("id", existingPaymentByMpId.id);
+
+      if (updPaymentErr) throw updPaymentErr;
+
+      paymentRowId = String(existingPaymentByMpId.id);
+    } else {
+      const { data: insertedPayment, error: payErr } = await supabase
+        .from("payments")
+        .insert({
+          ...paymentPayload,
+          created_at: nowIso,
+        })
+        .select("id")
+        .single();
+
+      if (payErr) throw payErr;
+
+      paymentRowId = String(insertedPayment.id || "");
+    }
 
     const { error: updOrderErr } = await supabase
       .from("coin_orders")
       .update({
-        status: mercadopagoStatus === "approved" ? "paid" : "pending",
+        status: appStatus,
         payment_provider: "mercadopago",
         payment_method: "pix",
-        payment_id: insertedPayment.id,
+        payment_id: paymentRowId || null,
         mercadopago_payment_id: mercadopagoPaymentId,
-        mercadopago_status: mercadopagoStatus,
+        mercadopago_status: rawMpStatus,
         mercadopago_reference_id: externalReference,
         mercadopago_external_reference: externalReference,
         metadata: {
@@ -189,12 +409,16 @@ module.exports = async (req, res) => {
           checkout_started_at: nowIso,
         },
         updated_at: nowIso,
-        approved_at: mercadopagoStatus === "approved" ? nowIso : null,
-        paid_at: mercadopagoStatus === "approved" ? nowIso : null,
+        approved_at: appStatus === "paid" ? approvedAt || nowIso : null,
+        paid_at: appStatus === "paid" ? approvedAt || nowIso : null,
       })
       .eq("id", order.id);
 
     if (updOrderErr) throw updOrderErr;
+
+    if (appStatus === "paid") {
+      await applyCoinOrderCreditIfPaid(order.id);
+    }
 
     return res.json({
       ok: true,
@@ -210,9 +434,11 @@ module.exports = async (req, res) => {
       pixCode: pixCode,
       copyPaste: pixCode,
       copy_paste: pixCode,
-      status: mercadopagoStatus === "approved" ? "paid" : "pending",
+      status: appStatus,
     });
   } catch (e) {
+    console.error("[coin-order-pix] erro:", e);
+
     return res.status(500).json({
       ok: false,
       error: String(e?.message || e || "Erro"),
