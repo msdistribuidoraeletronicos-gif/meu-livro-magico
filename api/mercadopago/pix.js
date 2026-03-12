@@ -117,6 +117,77 @@ async function readJsonSafe(response) {
   }
 }
 
+async function ensureUserWallet(userId) {
+  const { data: existing, error: findErr } = await supabase
+    .from("user_wallets")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (findErr) throw findErr;
+  if (existing) return existing;
+
+  const payload = {
+    user_id: userId,
+    bonus_coins: 0,
+    purchased_coins: 0,
+    withdrawn_coins: 0,
+    streak_days: 0,
+    cycle_count: 0,
+    last_checkin_date: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from("user_wallets")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  if (insertErr) throw insertErr;
+  return inserted;
+}
+
+async function getWalletBaseCoinsFromOrders(userId) {
+  const paidStatuses = ["paid", "shipped", "delivered", "finalizado", "done"];
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("status, order_data")
+    .eq("user_id", userId)
+    .in("status", paidStatuses)
+    .limit(1000);
+
+  if (error) throw error;
+
+  let total = 0;
+  for (const row of data || []) {
+    const od = row?.order_data || {};
+    total += toMoney(od.wallet_bonus_coins || 0);
+  }
+
+  return toMoney(total);
+}
+
+async function getUserWalletAvailableCoins(userId) {
+  const wallet = await ensureUserWallet(userId);
+  const baseCoins = await getWalletBaseCoinsFromOrders(userId);
+
+  const available = toMoney(
+    baseCoins +
+      toMoney(wallet.bonus_coins) +
+      toMoney(wallet.purchased_coins) -
+      toMoney(wallet.withdrawn_coins)
+  );
+
+  return {
+    wallet,
+    baseCoins,
+    available: Math.max(0, available),
+  };
+}
+
 module.exports = async (req, res) => {
   console.log("[mercadopago/pix] ===== NOVA REQUISIÇÃO =====");
   console.log("[mercadopago/pix] Método:", req.method);
@@ -130,12 +201,6 @@ module.exports = async (req, res) => {
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
       return res.status(500).json({
         error: "Supabase não configurado no ambiente",
-      });
-    }
-
-    if (!MP_ACCESS_TOKEN) {
-      return res.status(500).json({
-        error: "MERCADOPAGO_ACCESS_TOKEN não configurado",
       });
     }
 
@@ -202,12 +267,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    if (normalized.total <= 0) {
-      return res.status(400).json({
-        error: "O total do PIX precisa ser maior que zero.",
-      });
-    }
-
     const { data: book, error: bookErr } = await supabase
       .from("books")
       .select("id, user_id, child_name, theme, style")
@@ -221,6 +280,21 @@ module.exports = async (req, res) => {
 
     if (!book) {
       return res.status(404).json({ error: "Livro não encontrado" });
+    }
+
+    if (normalized.usedWalletCoins > 0) {
+      if (!book.user_id) {
+        return res.status(400).json({
+          error: "Este livro não possui usuário vinculado para uso de moedas.",
+        });
+      }
+
+      const walletSummary = await getUserWalletAvailableCoins(book.user_id);
+      if (walletSummary.available < normalized.usedWalletCoins) {
+        return res.status(400).json({
+          error: "Saldo de moedas insuficiente para concluir esta compra.",
+        });
+      }
     }
 
     const nowIso = new Date().toISOString();
@@ -249,6 +323,135 @@ module.exports = async (req, res) => {
       obs: normalized.obs || "",
       internal_reference: internalReference,
     };
+
+    // =========================================================
+    // COMPRA 100% COM MOEDAS — NÃO GERA PIX
+    // =========================================================
+    if (normalized.total === 0) {
+      if (normalized.usedWalletCoins <= 0) {
+        return res.status(400).json({
+          error: "Compra sem PIX só é permitida quando o valor for coberto por moedas.",
+        });
+      }
+
+      if (normalized.usedWalletCoins < normalized.subtotalBeforeCoins) {
+        return res.status(400).json({
+          error: "As moedas informadas não cobrem o valor total do pedido.",
+        });
+      }
+
+      const paymentInsertWallet = {
+        provider: "wallet",
+        payment_method: "wallet",
+        status: "paid",
+
+        amount: 0,
+        book_id: normalized.bookId,
+        user_id: book.user_id || null,
+
+        customer_name: normalized.name,
+        customer_email: normalized.email,
+        customer_whatsapp: normalized.whatsapp,
+
+        mercadopago_payment_id: null,
+        mercadopago_status: "approved",
+        mercadopago_status_detail: "paid_with_wallet_only",
+        mercadopago_reference_id: internalReference,
+        mercadopago_external_reference: externalReference,
+
+        metadata: safeMetadata({
+          ...metadata,
+          wallet_only_payment: true,
+          paid_with_wallet_only: true,
+          qr_code_available: false,
+          qr_code_base64_available: false,
+          ticket_url: null,
+          raw_response: {
+            provider: "wallet",
+            status: "paid",
+            detail: "Compra concluída somente com moedas",
+          },
+        }),
+
+        created_at: nowIso,
+        updated_at: nowIso,
+        approved_at: nowIso,
+        paid_at: nowIso,
+      };
+
+      const { data: insertedWalletPayment, error: insertWalletErr } = await supabase
+        .from("payments")
+        .insert(paymentInsertWallet)
+        .select("id")
+        .single();
+
+      if (insertWalletErr) {
+        console.error("[mercadopago/pix] erro ao salvar pagamento wallet-only:", insertWalletErr);
+        return res.status(500).json({
+          error: "Compra com moedas validada, mas houve erro ao salvar o pagamento no sistema.",
+          details: insertWalletErr.message || insertWalletErr,
+        });
+      }
+
+      console.log("[mercadopago/pix] pagamento wallet-only salvo localmente:", insertedWalletPayment?.id);
+
+      return res.status(200).json({
+        ok: true,
+        provider: "wallet",
+
+        id: insertedWalletPayment?.id || internalReference,
+        paymentId: insertedWalletPayment?.id || internalReference,
+        payment_id: insertedWalletPayment?.id || internalReference,
+
+        paymentReference: internalReference,
+        payment_reference: internalReference,
+
+        mercadopagoPaymentId: "",
+        mercadopago_payment_id: "",
+
+        localPaymentId: insertedWalletPayment?.id || null,
+
+        status: "paid",
+        paymentStatus: "paid",
+        payment_status: "paid",
+
+        pixCode: "",
+        copyPaste: "",
+        copy_paste: "",
+        emv: "",
+
+        qrCodeBase64: "",
+        qr_code_base64: "",
+
+        qrCodeUrl: "",
+        qr_code_url: "",
+
+        walletOnly: true,
+        wallet_only: true,
+        message: "Compra concluída somente com moedas.",
+      });
+    }
+
+    // =========================================================
+    // FLUXO NORMAL — GERA PIX
+    // =========================================================
+    if (!MP_ACCESS_TOKEN) {
+      return res.status(500).json({
+        error: "MERCADOPAGO_ACCESS_TOKEN não configurado",
+      });
+    }
+
+    if (normalized.total < 0) {
+      return res.status(400).json({
+        error: "Total inválido",
+      });
+    }
+
+    if (normalized.total <= 0) {
+      return res.status(400).json({
+        error: "O total do PIX precisa ser maior que zero.",
+      });
+    }
 
     const mpPayload = {
       transaction_amount: Number(normalized.total.toFixed(2)),
