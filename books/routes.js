@@ -44,6 +44,12 @@ function normalizeEmail(s) {
   return String(s || "").trim().toLowerCase();
 }
 
+function isUuid(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "").trim()
+  );
+}
+
 function getAdminAllowlist() {
   let raw = String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || "");
   raw = raw.replace(/^["']|["']$/g, "");
@@ -495,6 +501,22 @@ function fallbackCheckoutHtml(book) {
 </html>`;
 }
 
+function fallbackCoinsCheckoutHtml(data) {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Checkout de Moedas</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px">
+  <h1>Checkout de moedas</h1>
+  <p>Pedido: <b>${escapeHtmlText(data?.orderId || "")}</b></p>
+  <p><a href="/profile">Voltar</a></p>
+</body>
+</html>`;
+}
+
 function escapeHtmlText(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -522,11 +544,16 @@ module.exports = function mountRoutes(app, opts = {}) {
   const previewRendererPath = path.join(__dirname, "render.preview.html.js");
   const editorRendererPath = path.join(__dirname, "render.editor.html.js");
   const checkoutRendererPath = path.join(__dirname, "render.checkout.html.js");
+  const checkoutCoinsRendererPath = path.join(
+    __dirname,
+    "render.checkout.coins.html.js"
+  );
 
   const booksRendererMod = tryRequireAbs(booksRendererPath);
   const previewRendererMod = tryRequireAbs(previewRendererPath);
   const editorRendererMod = tryRequireAbs(editorRendererPath);
   const checkoutRendererMod = tryRequireAbs(checkoutRendererPath);
+  const checkoutCoinsRendererMod = tryRequireAbs(checkoutCoinsRendererPath);
 
   console.log(
     "[books/routes] exports render.books.html.js =",
@@ -562,6 +589,14 @@ module.exports = function mountRoutes(app, opts = {}) {
       "renderCheckoutPageHtml",
     ]) || ((book) => fallbackCheckoutHtml(book));
 
+  const renderCheckoutCoinsHtml =
+    pickFn(checkoutCoinsRendererMod, [
+      "renderCheckoutCoinsHtml",
+      "renderCoinCheckoutHtml",
+      "renderCoinsCheckoutHtml",
+      "renderCheckoutPageHtml",
+    ]) || ((data) => fallbackCoinsCheckoutHtml(data));
+
   console.log("✅ books/routes.js montado com Supabase.");
   console.log("[books/routes] __dirname =", __dirname);
   console.log("[books/routes] OUT_DIR =", OUT_DIR);
@@ -578,6 +613,10 @@ module.exports = function mountRoutes(app, opts = {}) {
   console.log(
     "[books/routes] renderCheckoutHtml =",
     typeof renderCheckoutHtml === "function"
+  );
+  console.log(
+    "[books/routes] renderCheckoutCoinsHtml =",
+    typeof renderCheckoutCoinsHtml === "function"
   );
 
   app.get("/api/books", requireAuth, async (req, res) => {
@@ -646,6 +685,13 @@ module.exports = function mountRoutes(app, opts = {}) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
       }
 
+      if (!isUuid(bookId)) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>400</h1><p>ID do livro inválido</p>");
+      }
+
       if (!supabaseAdmin) {
         return res
           .status(500)
@@ -681,6 +727,13 @@ module.exports = function mountRoutes(app, opts = {}) {
       const bookId = String(req.params?.id || "").trim();
       if (!bookId) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!isUuid(bookId)) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>400</h1><p>ID do livro inválido</p>");
       }
 
       if (!supabaseAdmin) {
@@ -720,6 +773,13 @@ module.exports = function mountRoutes(app, opts = {}) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
       }
 
+      if (!isUuid(bookId)) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>400</h1><p>ID do livro inválido</p>");
+      }
+
       if (!supabaseAdmin) {
         return res
           .status(500)
@@ -750,11 +810,51 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
+  // IMPORTANTE: esta rota precisa vir antes de /checkout/:id
+  app.get("/checkout/coins", requireAuth, async (req, res) => {
+    try {
+      const orderId = String(req.query?.order || "").trim();
+
+      if (!orderId) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>400</h1><p>order ausente</p>");
+      }
+
+      const html = renderCheckoutCoinsHtml({
+        orderId,
+        user: req.user || null,
+      });
+
+      return res.type("html").send(html);
+    } catch (e) {
+      console.error("ERRO /checkout/coins:");
+      console.error(e && e.stack ? e.stack : e);
+
+      return res
+        .status(500)
+        .type("html")
+        .send(
+          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+            String(e?.message || e || "Erro")
+          )}</pre></body></html>`
+        );
+    }
+  });
+
   app.get("/checkout/:id", requireAuth, async (req, res) => {
     try {
       const bookId = String(req.params?.id || "").trim();
       if (!bookId) {
         return res.status(400).type("html").send("<h1>400</h1><p>id ausente</p>");
+      }
+
+      if (!isUuid(bookId)) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>400</h1><p>ID do livro inválido</p>");
       }
 
       if (!supabaseAdmin) {
