@@ -241,6 +241,7 @@ async function getWalletBaseCoinsFromOrders(userId) {
     const od = row?.order_data || {};
     total += toMoney(od.wallet_bonus_coins || 0);
   }
+
   return toMoney(total);
 }
 
@@ -517,7 +518,9 @@ module.exports = async (req, res) => {
     }
 
     const paymentStatus = String(payment.status || "").toLowerCase();
-    const providerStatus = String(payment.mercadopago_status || payment.pagbank_status || "").toLowerCase();
+    const providerStatus = String(
+      payment.mercadopago_status || payment.pagbank_status || ""
+    ).toLowerCase();
 
     if (!isPaidStatus(paymentStatus) && !isPaidStatus(providerStatus)) {
       console.log("[checkout] Pagamento ainda não confirmado:", {
@@ -616,6 +619,12 @@ module.exports = async (req, res) => {
       childName: book.child_name || "",
       theme: book.theme || "",
       style: book.style || "",
+
+      customer_name: normalized.name,
+      customer_whatsapp: normalized.whatsapp,
+      customer_email: normalized.email,
+      customer_address: normalized.address,
+
       pack: normalized.pack,
       giftwrap: normalized.giftwrap,
       subtotalBeforeCoins: normalized.subtotalBeforeCoins,
@@ -623,37 +632,43 @@ module.exports = async (req, res) => {
       total: normalized.total,
       wallet_bonus_coins: 0,
       obs: normalized.obs,
+      partner_ref: normalized.partnerRef || null,
+
       paymentProvider: payment.provider || "mercadopago",
       paymentMethod: payment.payment_method || "pix",
       paymentReference: resolvedPaymentReference,
     };
 
     console.log("[checkout] Inserindo pedido principal...");
+    console.log("[checkout] orderInsert preview:", JSON.stringify({
+      book_id: normalized.bookId,
+      user_id: book.user_id || null,
+      payment_id: payment.id,
+      total: normalized.total,
+      status: "para_aceitar",
+      payment_provider: payment.provider || "mercadopago",
+      payment_method: payment.payment_method || "pix",
+      payment_status: paymentStatus || providerStatus || "paid",
+      payment_reference: resolvedPaymentReference,
+      order_data: orderData,
+    }, null, 2));
 
     const orderInsert = {
       book_id: normalized.bookId,
       user_id: book.user_id || null,
+      partner_id: null,
 
-      customer_name: normalized.name,
-      customer_whatsapp: normalized.whatsapp,
-      customer_email: normalized.email,
-      customer_address: normalized.address,
-
-      pack_option: normalized.pack,
-      giftwrap: normalized.giftwrap,
-      total_amount: normalized.total,
-      observations: normalized.obs,
-      partner_ref: normalized.partnerRef || null,
+      order_data: orderData,
       status: "para_aceitar",
       created_at: nowIso,
+      updated_at: nowIso,
 
       payment_id: payment.id,
       payment_provider: payment.provider || "mercadopago",
       payment_method: payment.payment_method || "pix",
       payment_status: paymentStatus || providerStatus || "paid",
       payment_reference: resolvedPaymentReference,
-
-      order_data: orderData,
+      total: normalized.total,
     };
 
     const { data: order, error: orderErr } = await supabase
@@ -663,10 +678,16 @@ module.exports = async (req, res) => {
       .single();
 
     if (orderErr) {
-      console.error("[checkout] Erro ao inserir pedido principal:", orderErr);
+      console.error("[checkout] Erro ao inserir pedido principal:");
+      console.error(JSON.stringify(orderErr, null, 2));
       return res.status(500).json({
         error: "Erro ao salvar pedido",
-        details: orderErr.message || orderErr,
+        details: {
+          message: orderErr.message || null,
+          code: orderErr.code || null,
+          hint: orderErr.hint || null,
+          details: orderErr.details || null,
+        },
       });
     }
 
