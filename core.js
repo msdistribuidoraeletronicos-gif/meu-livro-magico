@@ -1666,12 +1666,12 @@ apiRouter.get("/partners", async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
-apiRouter.post("/coin-orders/:id/pix", (req, res) => {
+apiRouter.post("/coin-orders/:id/pix", requireAuth, (req, res) => {
   req.query.orderId = String(req.params?.id || "").trim();
   return coinOrderPixApi(req, res);
 });
 
-apiRouter.get("/coin-orders/:id/status", (req, res) => {
+apiRouter.get("/coin-orders/:id/status", requireAuth, (req, res) => {
   req.query.orderId = String(req.params?.id || "").trim();
   return coinOrderStatusApi(req, res);
 });
