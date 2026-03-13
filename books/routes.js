@@ -290,7 +290,6 @@ async function listBooksForRequest(supabaseAdmin, req) {
     throw new Error("Usuário autenticado sem id em req.user.id");
   }
 
-  // 1) tenta user_id
   let result = await supabaseAdmin.from("books").select("*").eq("user_id", uid);
 
   if (result.error) {
@@ -305,7 +304,6 @@ async function listBooksForRequest(supabaseAdmin, req) {
 
   let data = Array.isArray(result.data) ? result.data : [];
 
-  // 2) fallback owner_id
   if (!data.length) {
     const resultOwner = await supabaseAdmin
       .from("books")
@@ -439,6 +437,73 @@ async function loadBookForRequest(supabaseAdmin, req, bookId) {
   };
 }
 
+async function loadCoinOrderForRequest(supabaseAdmin, req, orderId) {
+  const uid = String(req?.user?.id || "").trim();
+  const id = String(orderId || "").trim();
+
+  if (!id) return null;
+
+  if (!supabaseAdmin) {
+    throw new Error("Supabase Admin não configurado no servidor.");
+  }
+
+  console.log("[loadCoinOrderForRequest] req.user =", req?.user || null);
+  console.log("[loadCoinOrderForRequest] uid =", uid);
+  console.log("[loadCoinOrderForRequest] orderId =", id);
+  console.log("[loadCoinOrderForRequest] isAdmin =", isAdmin(req));
+
+  let data = null;
+  let error = null;
+
+  if (isAdmin(req)) {
+    const result = await supabaseAdmin
+      .from("coin_orders")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    data = result.data;
+    error = result.error;
+  } else {
+    if (!uid) {
+      throw new Error("Usuário autenticado sem id em req.user.id");
+    }
+
+    const result = await supabaseAdmin
+      .from("coin_orders")
+      .select("*")
+      .eq("id", id)
+      .eq("user_id", uid)
+      .maybeSingle();
+
+    data = result.data;
+    error = result.error;
+  }
+
+  if (error) {
+    console.error("[loadCoinOrderForRequest] erro do Supabase:", error);
+    throw new Error("Erro ao carregar pedido de moedas no Supabase: " + error.message);
+  }
+
+  if (!data) return null;
+
+  return {
+    ...data,
+    id: String(data.id || ""),
+    orderId: String(data.id || ""),
+    user_id: String(data.user_id || ""),
+    pack: Number(data.pack || 0),
+    price_amount: Number(data.price_amount || 0),
+    bonus_coins: Number(data.bonus_coins || 0),
+    credit_coins: Number(
+      data.credit_coins || (Number(data.pack || 0) + Number(data.bonus_coins || 0))
+    ),
+    status: String(data.status || "pending"),
+    created_at: data.created_at || null,
+    updated_at: data.updated_at || null,
+  };
+}
+
 function fallbackBooksHtml() {
   return `<!doctype html>
 <html lang="pt-BR">
@@ -511,7 +576,9 @@ function fallbackCoinsCheckoutHtml(data) {
 </head>
 <body style="font-family:Arial,sans-serif;padding:24px">
   <h1>Checkout de moedas</h1>
-  <p>Pedido: <b>${escapeHtmlText(data?.orderId || "")}</b></p>
+  <p>Pedido: <b>${escapeHtmlText(data?.orderId || data?.id || "")}</b></p>
+  <p>Pacote: <b>${escapeHtmlText(String(data?.pack || 0))}</b></p>
+  <p>Preço: <b>${escapeHtmlText(String(data?.price_amount || 0))}</b></p>
   <p><a href="/profile">Voltar</a></p>
 </body>
 </html>`;
@@ -544,8 +611,11 @@ module.exports = function mountRoutes(app, opts = {}) {
   const previewRendererPath = path.join(__dirname, "render.preview.html.js");
   const editorRendererPath = path.join(__dirname, "render.editor.html.js");
   const checkoutRendererPath = path.join(__dirname, "render.checkout.html.js");
+
+  // checkout de moedas fica na raiz do projeto
   const checkoutCoinsRendererPath = path.join(
     __dirname,
+    "..",
     "render.checkout.coins.html.js"
   );
 
@@ -822,11 +892,23 @@ module.exports = function mountRoutes(app, opts = {}) {
           .send("<h1>400</h1><p>order ausente</p>");
       }
 
-      const html = renderCheckoutCoinsHtml({
-        orderId,
-        user: req.user || null,
-      });
+      if (!supabaseAdmin) {
+        return res
+          .status(500)
+          .type("html")
+          .send("<h1>500</h1><p>Supabase Admin não configurado</p>");
+      }
 
+      const order = await loadCoinOrderForRequest(supabaseAdmin, req, orderId);
+
+      if (!order) {
+        return res
+          .status(404)
+          .type("html")
+          .send("<h1>404</h1><p>Pedido de moedas não encontrado</p>");
+      }
+
+      const html = renderCheckoutCoinsHtml(order);
       return res.type("html").send(html);
     } catch (e) {
       console.error("ERRO /checkout/coins:");
