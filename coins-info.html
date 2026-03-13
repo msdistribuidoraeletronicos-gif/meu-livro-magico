@@ -10,16 +10,11 @@
     :root{
       --violet-50:#f5f3ff;
       --pink-50:#fff1f2;
-      --blue-50:#eff6ff;
-      --green-50:#ecfdf3;
-      --amber-50:#fff7ed;
-
       --white:#ffffff;
       --gray-900:#111827;
       --gray-800:#1f2937;
       --gray-700:#374151;
       --gray-600:#4b5563;
-
       --violet-600:#7c3aed;
       --violet-700:#6d28d9;
       --pink-600:#db2777;
@@ -27,9 +22,6 @@
       --blue-600:#2563eb;
       --green-600:#16a34a;
       --amber-500:#f59e0b;
-      --amber-600:#d97706;
-
-      --shadow:0 22px 55px rgba(124,58,237,.18);
       --shadow2:0 12px 30px rgba(17,24,39,.10);
       --r:24px;
       --max:1120px;
@@ -87,7 +79,6 @@
     .btn{
       border:0;
       cursor:pointer;
-      user-select:none;
       display:inline-flex;
       align-items:center;
       justify-content:center;
@@ -96,20 +87,13 @@
       padding:14px 18px;
       border-radius:999px;
       font-weight:900;
-      transition:transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
       white-space:nowrap;
     }
-    .btn:hover{ transform:translateY(-1px); }
-    .btn:active{ transform:translateY(1px); }
 
     .btnPrimary{
       color:#fff;
       background:linear-gradient(90deg, var(--violet-600), var(--pink-600));
       box-shadow:0 18px 40px rgba(124,58,237,.20);
-    }
-    .btnPrimary:hover{
-      background:linear-gradient(90deg, var(--violet-700), var(--pink-700));
-      box-shadow:0 18px 46px rgba(124,58,237,.26);
     }
 
     .btnOutline{
@@ -120,8 +104,6 @@
     }
 
     .hero{
-      position:relative;
-      overflow:hidden;
       padding:28px 0 46px;
     }
 
@@ -142,8 +124,6 @@
     .heroCenter{
       text-align:center;
       padding-top:18px;
-      position:relative;
-      z-index:2;
     }
 
     .h1{
@@ -153,6 +133,7 @@
       font-weight:1000;
       letter-spacing:-.04em;
     }
+
     @media (min-width:768px){
       .h1{ font-size:58px; }
     }
@@ -233,6 +214,7 @@
       font-weight:1000;
       letter-spacing:-.03em;
     }
+
     @media (min-width:768px){
       .h2{ font-size:40px; }
     }
@@ -252,9 +234,6 @@
       max-width:1000px;
       margin:0 auto;
     }
-    @media (min-width:960px){
-      .grid3{ grid-template-columns:repeat(3, 1fr); }
-    }
 
     .grid2{
       display:grid;
@@ -263,7 +242,9 @@
       max-width:1000px;
       margin:0 auto;
     }
+
     @media (min-width:960px){
+      .grid3{ grid-template-columns:repeat(3, 1fr); }
       .grid2{ grid-template-columns:repeat(2, 1fr); }
     }
 
@@ -275,35 +256,11 @@
       padding:20px;
     }
 
-    .card.softPurple{
-      background:
-        radial-gradient(circle at top left, rgba(124,58,237,.10), transparent 28%),
-        linear-gradient(180deg, #ffffff, #fbf8ff);
-    }
-
-    .card.softPink{
-      background:
-        radial-gradient(circle at top left, rgba(219,39,119,.10), transparent 28%),
-        linear-gradient(180deg, #ffffff, #fff8fc);
-    }
-
-    .card.softBlue{
-      background:
-        radial-gradient(circle at top left, rgba(37,99,235,.10), transparent 28%),
-        linear-gradient(180deg, #ffffff, #f8fbff);
-    }
-
-    .card.softGreen{
-      background:
-        radial-gradient(circle at top left, rgba(22,163,74,.10), transparent 28%),
-        linear-gradient(180deg, #ffffff, #f8fffb);
-    }
-
-    .card.softAmber{
-      background:
-        radial-gradient(circle at top left, rgba(245,158,11,.10), transparent 28%),
-        linear-gradient(180deg, #ffffff, #fffaf4);
-    }
+    .softPurple{ background:linear-gradient(180deg, #ffffff, #fbf8ff); }
+    .softPink{ background:linear-gradient(180deg, #ffffff, #fff8fc); }
+    .softBlue{ background:linear-gradient(180deg, #ffffff, #f8fbff); }
+    .softGreen{ background:linear-gradient(180deg, #ffffff, #f8fffb); }
+    .softAmber{ background:linear-gradient(180deg, #ffffff, #fffaf4); }
 
     .icon{
       width:56px;height:56px;border-radius:18px;
@@ -435,6 +392,7 @@
       justify-content:space-between;
       gap:10px;
     }
+
     summary::-webkit-details-marker{ display:none; }
 
     .chev{
@@ -443,11 +401,8 @@
       background:rgba(124,58,237,.10);
       border:1px solid rgba(124,58,237,.14);
       color:var(--violet-700);
-      transition:transform .2s ease;
       flex:0 0 auto;
     }
-
-    details[open] .chev{ transform:rotate(180deg); }
 
     .faqBody{
       padding:0 16px 16px 16px;
@@ -475,9 +430,6 @@
       font-weight:1000;
       letter-spacing:-.03em;
     }
-    @media (min-width:768px){
-      .ctaH{ font-size:42px; }
-    }
 
     .ctaP{
       margin:0 auto 22px;
@@ -496,24 +448,6 @@
       font-weight:750;
       font-size:13px;
       border-top:1px solid rgba(17,24,39,.06);
-    }
-
-    /* CONTEÚDO VISÍVEL POR PADRÃO */
-    .reveal{
-      opacity:1;
-      transform:none;
-    }
-
-    /* ANIMAÇÃO SÓ É APLICADA SE O JS INICIAR */
-    body.js-ready .reveal{
-      opacity:0;
-      transform:translateY(18px);
-      transition:opacity .55s ease, transform .55s ease;
-    }
-
-    body.js-ready .reveal.on{
-      opacity:1;
-      transform:translateY(0);
     }
 
     @media (max-width:900px){
@@ -539,33 +473,33 @@
   <section class="hero">
     <div class="wrap">
       <div class="heroCenter">
-        <div class="badge reveal" id="b1">🪙 Economize nas compras com sua carteira</div>
+        <div class="badge">🪙 Economize nas compras com sua carteira</div>
 
-        <h1 class="h1 reveal" id="b2">
+        <h1 class="h1">
           <span class="gradText">As moedas servem para você pagar menos</span><br/>
           <span>ou até comprar sem gastar dinheiro</span>
         </h1>
 
-        <p class="lead reveal" id="b3">
+        <p class="lead">
           O principal objetivo das moedas no Meu Livro Mágico é ajudar você a economizar nas compras dentro da plataforma.
           Ao acumular saldo, você pode usar suas moedas para reduzir o valor do pedido ou, em alguns casos,
           fazer a compra usando apenas as moedas da sua carteira.
         </p>
 
         <div class="heroCards">
-          <div class="heroCard reveal" id="hc1">
+          <div class="heroCard">
             <div class="heroCardLabel">Objetivo principal</div>
             <div class="heroCardValue">Pagar menos nas compras</div>
             <div class="heroCardSub">Use suas moedas para abater valor e deixar seus pedidos mais baratos.</div>
           </div>
 
-          <div class="heroCard reveal" id="hc2">
+          <div class="heroCard">
             <div class="heroCardLabel">Melhor cenário</div>
             <div class="heroCardValue">Comprar sem gastar dinheiro</div>
             <div class="heroCardSub">Quando seu saldo for suficiente, você pode finalizar compras usando apenas moedas.</div>
           </div>
 
-          <div class="heroCard reveal" id="hc3">
+          <div class="heroCard">
             <div class="heroCardLabel">Como entram</div>
             <div class="heroCardValue">Pedidos + check-in + compra</div>
             <div class="heroCardSub">Você pode acumular moedas por pedidos válidos, bônus de check-in e recargas compradas.</div>
@@ -578,14 +512,14 @@
   <section class="sectionWhite">
     <div class="wrap">
       <div class="sectionHead">
-        <h2 class="h2 reveal" id="s1">Para que servem as moedas</h2>
-        <p class="subP reveal" id="s2">
+        <h2 class="h2">Para que servem as moedas</h2>
+        <p class="subP">
           As moedas existem principalmente para transformar seu saldo em vantagem real na hora de comprar.
         </p>
       </div>
 
       <div class="grid3">
-        <div class="card softPurple reveal" id="c1">
+        <div class="card softPurple">
           <div class="icon i1">🛍️</div>
           <h3 class="cardT">Pagar menos no pedido</h3>
           <p class="cardP">
@@ -593,7 +527,7 @@
           </p>
         </div>
 
-        <div class="card softPink reveal" id="c2">
+        <div class="card softPink">
           <div class="icon i2">💸</div>
           <h3 class="cardT">Comprar sem gastar dinheiro</h3>
           <p class="cardP">
@@ -601,7 +535,7 @@
           </p>
         </div>
 
-        <div class="card softBlue reveal" id="c3">
+        <div class="card softBlue">
           <div class="icon i3">📊</div>
           <h3 class="cardT">Controlar seu saldo</h3>
           <p class="cardP">
@@ -615,14 +549,14 @@
   <section class="sectionSoft">
     <div class="wrap">
       <div class="sectionHead">
-        <h2 class="h2 reveal" id="f1">Como obter moedas</h2>
-        <p class="subP reveal" id="f2">
+        <h2 class="h2">Como obter moedas</h2>
+        <p class="subP">
           Quanto mais moedas você acumula, maior é sua chance de pagar menos ou até fazer compras sem gastar dinheiro.
         </p>
       </div>
 
       <div class="flow">
-        <div class="flowRow reveal" id="fr1">
+        <div class="flowRow">
           <div class="flowDot">🧾</div>
           <div>
             <h3 class="flowT">1) Pedidos concluídos</h3>
@@ -637,7 +571,7 @@
           </div>
         </div>
 
-        <div class="flowRow reveal" id="fr2">
+        <div class="flowRow">
           <div class="flowDot">✅</div>
           <div>
             <h3 class="flowT">2) Check-in diário</h3>
@@ -653,7 +587,7 @@
           </div>
         </div>
 
-        <div class="flowRow reveal" id="fr3">
+        <div class="flowRow">
           <div class="flowDot">➕</div>
           <div>
             <h3 class="flowT">3) Compra de moedas</h3>
@@ -675,14 +609,14 @@
   <section class="sectionWhite">
     <div class="wrap">
       <div class="sectionHead">
-        <h2 class="h2 reveal" id="u1">Como usar suas moedas</h2>
-        <p class="subP reveal" id="u2">
+        <h2 class="h2">Como usar suas moedas</h2>
+        <p class="subP">
           A lógica da carteira foi feita para que seu saldo vire benefício real na hora da compra.
         </p>
       </div>
 
       <div class="grid2">
-        <div class="card softGreen reveal" id="u3">
+        <div class="card softGreen">
           <div class="icon i4">🪙</div>
           <h3 class="cardT">Abater valor do pedido</h3>
           <p class="cardP">
@@ -691,7 +625,7 @@
           </p>
         </div>
 
-        <div class="card softAmber reveal" id="u4">
+        <div class="card softAmber">
           <div class="icon i5">🎯</div>
           <h3 class="cardT">Comprar usando apenas moedas</h3>
           <p class="cardP">
@@ -703,89 +637,15 @@
     </div>
   </section>
 
-  <section class="sectionSoft">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2 reveal" id="n1">Como a carteira é organizada</h2>
-        <p class="subP reveal" id="n2">
-          Na sua página de perfil, a carteira separa as moedas por origem para você entender exatamente quanto tem disponível para usar nas compras.
-        </p>
-      </div>
-
-      <div class="grid3">
-        <div class="card softAmber reveal" id="n3">
-          <div class="icon i5">💰</div>
-          <h3 class="cardT">Saldo disponível</h3>
-          <p class="cardP">
-            Você acompanha quanto tem em carteira para usar na redução de pedidos ou em compras feitas com moedas.
-          </p>
-        </div>
-
-        <div class="card softBlue reveal" id="n4">
-          <div class="icon i3">📌</div>
-          <h3 class="cardT">Origem das moedas</h3>
-          <p class="cardP">
-            O sistema mostra as moedas que vieram de pedidos, bônus, check-in e recargas compradas.
-          </p>
-        </div>
-
-        <div class="card softPink reveal" id="n5">
-          <div class="icon i2">🧾</div>
-          <h3 class="cardT">Histórico de uso</h3>
-          <p class="cardP">
-            Você pode acompanhar as movimentações da carteira e entender como seu saldo foi acumulado e utilizado.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <section class="sectionWhite">
     <div class="wrap">
       <div class="sectionHead">
-        <h2 class="h2 reveal" id="lv1">Níveis da conta e benefícios</h2>
-        <p class="subP reveal" id="lv2">
-          Quanto mais você evolui na plataforma, melhores podem ser os bônus que ajudam a aumentar seu saldo e seu poder de economia.
-        </p>
-      </div>
-
-      <div class="grid3">
-        <div class="card softAmber reveal" id="lv3">
-          <div class="icon i5">🥉</div>
-          <h3 class="cardT">Bronze</h3>
-          <p class="cardP">
-            Nível inicial. Você já participa do check-in diário e recebe bônus básico nas compras de moedas.
-          </p>
-        </div>
-
-        <div class="card softBlue reveal" id="lv4">
-          <div class="icon i3">🥈</div>
-          <h3 class="cardT">Prata</h3>
-          <p class="cardP">
-            Com mais pedidos concluídos, seu check-in pode melhorar e o bônus de compra fica mais interessante.
-          </p>
-        </div>
-
-        <div class="card softPink reveal" id="lv5">
-          <div class="icon i2">🥇</div>
-          <h3 class="cardT">Ouro</h3>
-          <p class="cardP">
-            É o nível mais alto. Aqui você aproveita os melhores bônus de check-in e compra disponíveis na conta.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sectionWhite">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2 reveal" id="q1">Dúvidas comuns sobre moedas</h2>
-        <p class="subP reveal" id="q2">As respostas abaixo ajudam o usuário a entender a carteira com mais confiança.</p>
+        <h2 class="h2">Dúvidas comuns sobre moedas</h2>
+        <p class="subP">As respostas abaixo ajudam o usuário a entender a carteira com mais confiança.</p>
       </div>
 
       <div class="faq">
-        <details class="reveal" id="q3">
+        <details>
           <summary>
             Qual é o principal objetivo das moedas?
             <span class="chev">⌄</span>
@@ -795,27 +655,7 @@
           </div>
         </details>
 
-        <details class="reveal" id="q4">
-          <summary>
-            As moedas têm relação com meus pedidos?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. Parte do saldo pode vir de pedidos válidos e concluídos, dependendo das regras configuradas na plataforma, e depois esse saldo pode ser usado nas próximas compras.</p>
-          </div>
-        </details>
-
-        <details class="reveal" id="q5">
-          <summary>
-            Posso ganhar moedas sem comprar?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. Você pode receber moedas por pedidos válidos e também pelo check-in diário, conforme sua conta e seu nível.</p>
-          </div>
-        </details>
-
-        <details class="reveal" id="q6">
+        <details>
           <summary>
             Posso usar moedas para diminuir o valor da compra?
             <span class="chev">⌄</span>
@@ -825,7 +665,7 @@
           </div>
         </details>
 
-        <details class="reveal" id="q7">
+        <details>
           <summary>
             Posso comprar usando somente moedas?
             <span class="chev">⌄</span>
@@ -834,39 +674,17 @@
             <p>Sim. Quando seu saldo em moedas for suficiente para cobrir o valor necessário da compra, o pedido pode ser concluído usando apenas as moedas da sua carteira.</p>
           </div>
         </details>
-
-        <details class="reveal" id="q8">
-          <summary>
-            Comprar moedas aumenta meu saldo na hora?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Após a confirmação do pagamento, o crédito da compra é somado na carteira, incluindo eventual bônus do seu nível.</p>
-          </div>
-        </details>
-
-        <details class="reveal" id="q9">
-          <summary>
-            Onde acompanho tudo isso?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Tudo fica centralizado na sua página de perfil: saldo disponível, nível, progresso, check-in, atividades e ações rápidas.</p>
-          </div>
-        </details>
       </div>
     </div>
   </section>
 
   <section class="cta">
     <div class="ctaBox">
-      <h2 class="ctaH reveal" id="cta1">Agora você sabe: moedas servem para economizar de verdade</h2>
-      <p class="ctaP reveal" id="cta2">
+      <h2 class="ctaH">Agora você sabe: moedas servem para economizar de verdade</h2>
+      <p class="ctaP">
         Volte ao perfil para acompanhar seu saldo, fazer check-in diário, comprar moedas e usar sua carteira para pagar menos ou até comprar sem gastar dinheiro.
       </p>
-      <div class="reveal" id="cta3">
-        <a class="btn btnOutline" href="/profile" style="background:#fff;color:#6d28d9;border:none;">🪙 Voltar para minha carteira</a>
-      </div>
+      <a class="btn btnOutline" href="/profile" style="background:#fff;color:#6d28d9;border:none;">🪙 Voltar para minha carteira</a>
     </div>
   </section>
 
@@ -879,44 +697,5 @@
       </p>
     </div>
   </footer>
-
-  <script>
-    (function () {
-      try {
-        document.body.classList.add("js-ready");
-
-        const els = Array.from(document.querySelectorAll(".reveal"));
-
-        function inView(el){
-          const r = el.getBoundingClientRect();
-          return r.top < window.innerHeight * 0.92;
-        }
-
-        function tick(){
-          els.forEach(function(el){
-            if (el.classList.contains("on")) return;
-            if (inView(el)) el.classList.add("on");
-          });
-        }
-
-        ["b1","b2","b3","hc1","hc2","hc3"].forEach(function(id, idx){
-          const el = document.getElementById(id);
-          if (el) {
-            setTimeout(function(){
-              el.classList.add("on");
-            }, 90 + idx * 120);
-          }
-        });
-
-        window.addEventListener("scroll", tick, { passive:true });
-        window.addEventListener("resize", tick);
-        setTimeout(tick, 650);
-        tick();
-      } catch (err) {
-        console.error("Erro no script da animação:", err);
-        document.body.classList.remove("js-ready");
-      }
-    })();
-  </script>
 </body>
 </html>
