@@ -185,8 +185,8 @@ function PROFILE_PAGE_CSS() {
     user-select:none;
   }
   .btn:hover{
-    transform:translateY(-2px);
-    box-shadow:var(--shadow-2);
+    transform:translateY(-1px);
+    box-shadow:var(--shadow-1);
   }
   .btn:active{
     transform:translateY(1px) scale(.99);
@@ -731,7 +731,7 @@ function PROFILE_PAGE_CSS() {
 
   .linkBtn:hover{
     transform:translateY(-1px);
-    box-shadow:var(--shadow-2);
+    box-shadow:var(--shadow-1);
   }
 
   .linkBtn.primaryLink{
@@ -1198,7 +1198,7 @@ function PROFILE_PAGE_CSS() {
     height:24px;
   }
 
-  .modalBackdrop{
+ .modalBackdrop{
     position:fixed;
     inset:0;
     z-index:90;
@@ -1207,7 +1207,7 @@ function PROFILE_PAGE_CSS() {
     justify-content:center;
     padding:20px;
     background:rgba(15,23,42,.58);
-    backdrop-filter:blur(6px);
+    backdrop-filter:none;
   }
 
   .modalBackdrop.open{ display:flex; }
@@ -1302,42 +1302,42 @@ function PROFILE_PAGE_CSS() {
     line-height:1.6;
   }
 
-  /* =========================================================
-     POPUP DE COMPRA DE MOEDAS — NOVO VISUAL
+    /* =========================================================
+     POPUP DE COMPRA DE MOEDAS — VERSÃO OTIMIZADA / LEVE
      ========================================================= */
 
   #buyModal{
     align-items:center;
     justify-content:center;
-    padding:20px;
+    padding:16px;
+    background:rgba(15,23,42,.50);
+    backdrop-filter:none;
   }
 
   #buyModal .buyPopup{
-    width:min(1120px, calc(100vw - 40px));
+    width:min(980px, calc(100vw - 24px));
     max-height:90vh;
-    border-radius:30px;
-    background:
-      radial-gradient(circle at top left, rgba(139,92,246,.16), transparent 30%),
-      radial-gradient(circle at top right, rgba(236,72,153,.12), transparent 26%),
-      linear-gradient(180deg, #ffffff 0%, #fcfcff 100%);
+    border-radius:26px;
+    background:#ffffff;
     border:1px solid rgba(226,232,240,.95);
-    box-shadow:
-      0 30px 90px rgba(15,23,42,.22),
-      0 10px 30px rgba(139,92,246,.10);
+    box-shadow:0 20px 50px rgba(15,23,42,.16);
     overflow:hidden;
     position:relative;
+    will-change:transform, opacity;
+    transform:translateZ(0);
   }
 
   #buyModal .buyPopupScroll{
     max-height:90vh;
     overflow:auto;
+    -webkit-overflow-scrolling:touch;
   }
 
   #buyModal .buyPopupScroll::-webkit-scrollbar{
-    width:10px;
+    width:8px;
   }
   #buyModal .buyPopupScroll::-webkit-scrollbar-thumb{
-    background:rgba(148,163,184,.55);
+    background:rgba(148,163,184,.45);
     border-radius:999px;
   }
   #buyModal .buyPopupScroll::-webkit-scrollbar-track{
@@ -1346,40 +1346,20 @@ function PROFILE_PAGE_CSS() {
 
   #buyModal .buyPopupHero{
     position:relative;
-    padding:28px 28px 20px;
-    background:
-      linear-gradient(135deg, rgba(124,58,237,.10), rgba(236,72,153,.08)),
-      linear-gradient(180deg, #ffffff 0%, #faf7ff 100%);
-    border-bottom:1px solid rgba(226,232,240,.9);
+    padding:22px 22px 16px;
+    background:linear-gradient(180deg, #fcfaff 0%, #ffffff 100%);
+    border-bottom:1px solid rgba(226,232,240,.92);
   }
 
+  /* remove glows pesados */
   #buyModal .buyPopupHeroGlow{
-    position:absolute;
-    border-radius:999px;
-    filter:blur(28px);
-    pointer-events:none;
-  }
-  #buyModal .buyPopupHeroGlowA{
-    width:180px;
-    height:180px;
-    background:rgba(124,58,237,.18);
-    top:-50px;
-    left:-40px;
-  }
-  #buyModal .buyPopupHeroGlowB{
-    width:180px;
-    height:180px;
-    background:rgba(236,72,153,.14);
-    top:-40px;
-    right:-40px;
+    display:none;
   }
 
   #buyModal .buyPopupTop{
-    position:relative;
-    z-index:1;
     display:grid;
-    grid-template-columns:1.5fr .9fr;
-    gap:18px;
+    grid-template-columns:1.35fr .85fr;
+    gap:16px;
     align-items:stretch;
   }
 
@@ -1388,43 +1368,43 @@ function PROFILE_PAGE_CSS() {
     align-items:center;
     gap:8px;
     min-height:34px;
-    padding:0 14px;
+    padding:0 12px;
     border-radius:999px;
-    background:rgba(255,255,255,.88);
-    border:1px solid rgba(124,58,237,.12);
+    background:#f5f3ff;
+    border:1px solid rgba(124,58,237,.10);
     color:#6d28d9;
     font-size:12px;
     font-weight:900;
-    box-shadow:0 8px 24px rgba(124,58,237,.08);
   }
 
   #buyModal .buyPopupIntro h3{
-    margin:16px 0 10px;
-    font-size:42px;
-    line-height:1.04;
+    margin:14px 0 10px;
+    font-size:34px;
+    line-height:1.06;
     letter-spacing:-.04em;
     color:#0f172a;
   }
 
   #buyModal .buyPopupDesc{
     margin:0;
-    font-size:16px;
-    line-height:1.65;
+    font-size:15px;
+    line-height:1.6;
     color:#475569;
-    max-width:760px;
+    max-width:720px;
+    font-weight:700;
   }
 
   #buyModal .buyPopupTrust{
     display:flex;
     flex-wrap:wrap;
-    gap:10px;
-    margin-top:16px;
+    gap:8px;
+    margin-top:14px;
   }
   #buyModal .buyPopupTrust span{
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-height:34px;
+    min-height:32px;
     padding:0 12px;
     border-radius:999px;
     background:#fff;
@@ -1432,17 +1412,14 @@ function PROFILE_PAGE_CSS() {
     color:#334155;
     font-size:12px;
     font-weight:800;
-    box-shadow:0 8px 18px rgba(15,23,42,.05);
   }
 
   #buyModal .buyPopupLevel{
-    position:relative;
-    z-index:1;
-    border-radius:24px;
-    padding:18px;
-    background:rgba(255,255,255,.88);
+    border-radius:20px;
+    padding:16px;
+    background:#faf7ff;
     border:1px solid rgba(226,232,240,.95);
-    box-shadow:0 14px 34px rgba(15,23,42,.08);
+    box-shadow:none;
     display:flex;
     flex-direction:column;
     justify-content:center;
@@ -1455,121 +1432,127 @@ function PROFILE_PAGE_CSS() {
     font-weight:900;
     color:#64748b;
   }
+
   #buyModal .buyPopupLevelName{
     margin-top:8px;
-    font-size:30px;
+    font-size:26px;
     font-weight:1000;
-    line-height:1.05;
+    line-height:1.08;
     letter-spacing:-.03em;
     color:#0f172a;
   }
+
   #buyModal .buyPopupLevelBonus{
     margin-top:8px;
     color:#475569;
     font-size:14px;
+    font-weight:700;
   }
+
   #buyModal .buyPopupLevelBadge{
-    margin-top:14px;
+    margin-top:12px;
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-height:40px;
+    min-height:38px;
     padding:0 14px;
     border-radius:999px;
     background:linear-gradient(135deg,#7c3aed,#ec4899);
     color:#fff;
     font-size:13px;
     font-weight:900;
-    box-shadow:0 12px 28px rgba(124,58,237,.22);
+    box-shadow:none;
   }
 
   #buyModal .buyPopupHighlights{
-    position:relative;
-    z-index:1;
     display:grid;
     grid-template-columns:repeat(3,1fr);
-    gap:12px;
-    margin-top:18px;
+    gap:10px;
+    margin-top:16px;
   }
 
   #buyModal .buyPopupHighlight{
-    background:rgba(255,255,255,.82);
+    background:#ffffff;
     border:1px solid rgba(226,232,240,.95);
-    border-radius:18px;
-    padding:14px 16px;
-    box-shadow:0 8px 18px rgba(15,23,42,.04);
+    border-radius:16px;
+    padding:12px 14px;
+    box-shadow:none;
   }
+
   #buyModal .buyPopupHighlight small{
     display:block;
-    font-size:12px;
+    font-size:11px;
     font-weight:800;
     color:#64748b;
     text-transform:uppercase;
     letter-spacing:.08em;
     margin-bottom:6px;
   }
+
   #buyModal .buyPopupHighlight strong{
-    font-size:16px;
+    font-size:15px;
     color:#0f172a;
+    line-height:1.35;
   }
+
   #buyModal .buyPopupHighlightHot{
-    border-color:rgba(124,58,237,.25);
-    box-shadow:0 12px 30px rgba(124,58,237,.10);
+    border-color:rgba(124,58,237,.20);
+    background:#fcfaff;
   }
 
   #buyModal .buyPopupGrid{
-    padding:22px;
+    padding:18px;
     display:grid;
     grid-template-columns:repeat(2,minmax(0,1fr));
-    gap:18px;
-    background:linear-gradient(180deg, rgba(248,250,252,.6), #fff);
+    gap:14px;
+    background:#ffffff;
   }
 
   #buyModal .buyOption{
     position:relative;
-    border-radius:24px;
-    padding:20px;
+    border-radius:20px;
+    padding:18px;
     background:#fff;
     border:1px solid rgba(226,232,240,.95);
-    box-shadow:0 12px 28px rgba(15,23,42,.06);
-    transition:.18s ease;
+    box-shadow:0 8px 20px rgba(15,23,42,.05);
+    transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
     overflow:hidden;
   }
+
   #buyModal .buyOption:hover{
-    transform:translateY(-3px);
-    box-shadow:0 18px 36px rgba(15,23,42,.10);
+    transform:translateY(-2px);
+    box-shadow:0 12px 24px rgba(15,23,42,.08);
   }
 
   #buyModal .buyOptionFeatured{
-    border:2px solid rgba(124,58,237,.24);
-    background:
-      radial-gradient(circle at top right, rgba(236,72,153,.08), transparent 30%),
-      radial-gradient(circle at top left, rgba(124,58,237,.10), transparent 25%),
-      linear-gradient(180deg, #ffffff 0%, #fdfaff 100%);
-    box-shadow:0 20px 44px rgba(124,58,237,.16);
+    border:2px solid rgba(124,58,237,.18);
+    background:#fcfaff;
+    box-shadow:0 12px 24px rgba(124,58,237,.10);
   }
 
   #buyModal .buyOptionEssencial{
-    background:linear-gradient(180deg,#ffffff 0%,#fcfcff 100%);
+    background:#ffffff;
   }
+
   #buyModal .buyOptionTurbo{
-    background:linear-gradient(180deg,#ffffff 0%,#f7fbff 100%);
+    background:#fbfdff;
   }
+
   #buyModal .buyOptionMaster{
-    background:linear-gradient(180deg,#ffffff 0%,#f7fff9 100%);
+    background:#fbfffc;
   }
 
   #buyModal .buyOptionRibbon{
     position:absolute;
-    top:14px;
-    right:-34px;
-    transform:rotate(24deg);
-    padding:8px 44px;
+    top:12px;
+    right:-32px;
+    transform:rotate(22deg);
+    padding:7px 40px;
     background:linear-gradient(135deg,#7c3aed,#ec4899);
     color:#fff;
-    font-size:12px;
+    font-size:11px;
     font-weight:900;
-    box-shadow:0 10px 24px rgba(124,58,237,.22);
+    box-shadow:none;
   }
 
   #buyModal .buyOptionTop{
@@ -1577,23 +1560,24 @@ function PROFILE_PAGE_CSS() {
     justify-content:space-between;
     align-items:center;
     gap:10px;
-    margin-bottom:14px;
+    margin-bottom:12px;
   }
 
   #buyModal .buyOptionTag{
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-height:30px;
-    padding:0 12px;
+    min-height:28px;
+    padding:0 10px;
     border-radius:999px;
     background:#f1f5f9;
     color:#334155;
-    font-size:12px;
+    font-size:11px;
     font-weight:900;
   }
+
   #buyModal .buyOptionTagHot{
-    background:linear-gradient(135deg,rgba(124,58,237,.12),rgba(236,72,153,.12));
+    background:#f5f3ff;
     color:#6d28d9;
   }
 
@@ -1601,7 +1585,7 @@ function PROFILE_PAGE_CSS() {
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-height:28px;
+    min-height:26px;
     padding:0 10px;
     border-radius:999px;
     background:rgba(15,23,42,.05);
@@ -1609,31 +1593,34 @@ function PROFILE_PAGE_CSS() {
     font-size:11px;
     font-weight:900;
   }
+
   #buyModal .buyOptionMiniHot{
-    background:rgba(124,58,237,.12);
+    background:rgba(124,58,237,.10);
     color:#6d28d9;
   }
 
   #buyModal .buyOptionTitle{
-    font-size:31px;
-    line-height:1.04;
+    font-size:28px;
+    line-height:1.06;
     letter-spacing:-.04em;
     font-weight:1000;
     color:#0f172a;
   }
+
   #buyModal .buyOptionCoins{
     margin-top:6px;
-    font-size:18px;
+    font-size:17px;
     font-weight:800;
     color:#64748b;
   }
+
   #buyModal .buyOptionBonus{
     margin-top:12px;
     display:inline-flex;
     align-items:center;
-    padding:9px 12px;
-    border-radius:14px;
-    background:linear-gradient(135deg, rgba(124,58,237,.08), rgba(236,72,153,.08));
+    padding:8px 12px;
+    border-radius:12px;
+    background:#f5f3ff;
     color:#6d28d9;
     font-size:13px;
     font-weight:900;
@@ -1643,60 +1630,66 @@ function PROFILE_PAGE_CSS() {
     display:flex;
     align-items:flex-end;
     gap:10px;
-    margin-top:16px;
+    margin-top:14px;
   }
+
   #buyModal .buyOptionPrice strong{
-    font-size:34px;
+    font-size:30px;
     line-height:1;
     letter-spacing:-.04em;
     font-weight:1000;
     color:#0f172a;
   }
+
   #buyModal .buyOptionOld{
-    font-size:18px;
+    font-size:16px;
     font-weight:800;
     color:#94a3b8;
     text-decoration:line-through;
   }
 
   #buyModal .buyOptionTotal{
-    margin-top:16px;
-    padding:14px 16px;
-    border-radius:18px;
+    margin-top:14px;
+    padding:13px 14px;
+    border-radius:16px;
     background:#f8fafc;
     border:1px solid #e2e8f0;
     color:#1e293b;
-    font-size:15px;
+    font-size:14px;
     font-weight:900;
   }
+
   #buyModal .buyOptionTotalFeatured{
-    background:linear-gradient(135deg, rgba(124,58,237,.10), rgba(236,72,153,.10));
-    border-color:rgba(124,58,237,.18);
+    background:#f5f3ff;
+    border-color:rgba(124,58,237,.14);
     color:#6d28d9;
   }
 
   #buyModal .buyOptionList{
-    margin:16px 0 0;
-    padding-left:20px;
+    margin:14px 0 0;
+    padding-left:18px;
     color:#334155;
   }
+
   #buyModal .buyOptionList li{
-    margin:8px 0;
-    line-height:1.5;
+    margin:7px 0;
+    line-height:1.45;
+    font-weight:700;
   }
 
   #buyModal .buyOptionBtn{
     width:100%;
-    min-height:52px;
+    min-height:50px;
     border:none;
-    border-radius:16px;
-    margin-top:18px;
+    border-radius:15px;
+    margin-top:16px;
     cursor:pointer;
-    font-size:16px;
+    font-size:15px;
     font-weight:1000;
     letter-spacing:-.01em;
-    transition:.18s ease;
+    transition:transform .12s ease, opacity .12s ease, box-shadow .12s ease;
   }
+
   #buyModal .buyOptionBtn:hover{
     transform:translateY(-1px);
   }
@@ -1705,122 +1698,46 @@ function PROFILE_PAGE_CSS() {
     background:#fff;
     color:#0f172a;
     border:1px solid #e2e8f0;
-    box-shadow:0 8px 18px rgba(15,23,42,.06);
+    box-shadow:none;
   }
+
   #buyModal .buyOptionBtnPrimary{
     color:#fff;
     background:linear-gradient(135deg,#7c3aed,#ec4899);
-    box-shadow:0 12px 24px rgba(124,58,237,.24);
+    box-shadow:none;
   }
+
   #buyModal .buyOptionBtnInfo{
     color:#fff;
     background:linear-gradient(135deg,#2563eb,#7c3aed);
-    box-shadow:0 12px 24px rgba(37,99,235,.22);
+    box-shadow:none;
   }
+
   #buyModal .buyOptionBtnSuccess{
     color:#fff;
     background:linear-gradient(135deg,#10b981,#22c55e);
-    box-shadow:0 12px 24px rgba(16,185,129,.22);
+    box-shadow:none;
   }
 
   #buyModal .buyPopupFooter{
-    padding:0 22px 10px;
+    padding:0 18px 8px;
   }
+
   #buyModal .buyPopupFooterText{
-    border-radius:18px;
-    background:linear-gradient(180deg,#fff,#fafcff);
+    border-radius:16px;
+    background:#f8fafc;
     border:1px solid rgba(226,232,240,.95);
-    padding:14px 16px;
+    padding:13px 14px;
     color:#475569;
     font-size:14px;
     text-align:center;
+    font-weight:700;
   }
 
   #buyModal .buyPopupActions{
     display:flex;
     justify-content:flex-end;
-    padding:0 22px 22px;
-  }
-
-  .toastWrap{
-    position:fixed;
-    left:50%;
-    bottom:18px;
-    transform:translateX(-50%);
-    z-index:95;
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-    pointer-events:none;
-  }
-
-  .toast{
-    min-width:min(520px, calc(100vw - 28px));
-    background:#111827;
-    color:#fff;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:16px;
-    box-shadow:0 24px 50px rgba(0,0,0,.24);
-    padding:12px 14px;
-    opacity:0;
-    transform:translateY(8px);
-    transition:opacity .16s ease, transform .16s ease;
-  }
-
-  .toast.show{
-    opacity:1;
-    transform:translateY(0);
-  }
-
-  .toastTitle{
-    font-weight:1000;
-    line-height:1.4;
-  }
-
-  .toastText{
-    margin-top:6px;
-    color:rgba(255,255,255,.88);
-    font-size:13px;
-    line-height:1.5;
-    font-weight:700;
-  }
-
-  .spin{
-    width:16px;
-    height:16px;
-    border:2px solid rgba(255,255,255,.55);
-    border-top-color:transparent;
-    border-radius:999px;
-    display:inline-block;
-    animation:spin .8s linear infinite;
-  }
-
-  .hidden{
-    display:none !important;
-  }
-
-  @keyframes spin{
-    to{ transform:rotate(360deg); }
-  }
-
-  .footerSpace{
-    height:44px;
-  }
-
-  @media (max-width: 1080px){
-    .heroGrid,
-    .walletShell,
-    .summaryGrid,
-    .twoCols,
-    .threeCols,
-    .promoGrid,
-    .benefitGrid{
-      grid-template-columns:1fr 1fr;
-    }
-
-    .heroStats{
-      grid-template-columns:1fr;
-    }
+    padding:0 18px 18px;
   }
 
   @media (max-width: 980px){
@@ -1837,122 +1754,66 @@ function PROFILE_PAGE_CSS() {
     }
 
     #buyModal .buyPopupIntro h3{
-      font-size:32px;
-    }
-  }
-
-  @media (max-width: 840px){
-    .heroGrid,
-    .walletShell,
-    .summaryGrid,
-    .twoCols,
-    .threeCols,
-    .tierGrid,
-    .buyGrid,
-    .promoGrid,
-    .benefitGrid{
-      grid-template-columns:1fr;
-    }
-
-    .weekTrack{
-      grid-template-columns:repeat(4, 1fr);
-    }
-
-    .walletActions,
-    .heroActions,
-    .actionRow,
-    .rowBtns,
-    .modalActions{
-      flex-direction:column;
-    }
-
-    .walletActions .btn,
-    .heroActions .btn,
-    .actionRow .btn,
-    .actionRow .linkBtn,
-    .rowBtns .linkBtn,
-    .rowBtns .btn,
-    .modalActions .btn{
-      width:100%;
+      font-size:30px;
     }
   }
 
   @media (max-width: 640px){
-    .wrap,
-    .topbarInner{
-      width:min(calc(100% - 16px), var(--max));
-    }
-
-    .heroMain,
-    .heroSide,
-    .sectionCard{
-      border-radius:24px;
-      padding:20px;
-    }
-
-    .heroTitle{
-      font-size:32px;
-    }
-
-    .sectionTitle{
-      font-size:28px;
-    }
-
-    .profileTop{
-      align-items:flex-start;
-    }
-
-    .modal{
-      padding:16px;
-      border-radius:20px;
-    }
-
     #buyModal{
-      padding:10px;
+      padding:8px;
       align-items:flex-end;
     }
 
     #buyModal .buyPopup{
       width:100%;
       max-height:94vh;
-      border-radius:24px 24px 0 0;
+      border-radius:22px 22px 0 0;
     }
 
     #buyModal .buyPopupHero{
-      padding:18px 16px 16px;
+      padding:16px 14px 14px;
     }
 
     #buyModal .buyPopupGrid{
-      padding:16px;
-      gap:14px;
+      padding:14px;
+      gap:12px;
     }
 
     #buyModal .buyPopupFooter,
     #buyModal .buyPopupActions{
-      padding-left:16px;
-      padding-right:16px;
+      padding-left:14px;
+      padding-right:14px;
     }
 
     #buyModal .buyPopupIntro h3{
-      font-size:26px;
+      font-size:24px;
     }
 
     #buyModal .buyOption{
-      padding:16px;
-      border-radius:20px;
+      padding:15px;
+      border-radius:18px;
     }
 
     #buyModal .buyOptionTitle{
-      font-size:25px;
+      font-size:24px;
     }
 
     #buyModal .buyOptionPrice strong{
-      font-size:28px;
+      font-size:26px;
     }
 
     #buyModal .buyOptionRibbon{
-      right:-42px;
-      font-size:11px;
+      right:-40px;
+      font-size:10px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    #buyModal .buyOption,
+    #buyModal .buyOptionBtn,
+    .btn,
+    .linkBtn{
+      transition:none !important;
     }
   }
 `;
