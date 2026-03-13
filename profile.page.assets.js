@@ -1302,6 +1302,446 @@ function PROFILE_PAGE_CSS() {
     line-height:1.6;
   }
 
+  /* =========================================================
+     POPUP DE COMPRA DE MOEDAS — NOVO VISUAL
+     ========================================================= */
+
+  #buyModal{
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+
+  #buyModal .buyPopup{
+    width:min(1120px, calc(100vw - 40px));
+    max-height:90vh;
+    border-radius:30px;
+    background:
+      radial-gradient(circle at top left, rgba(139,92,246,.16), transparent 30%),
+      radial-gradient(circle at top right, rgba(236,72,153,.12), transparent 26%),
+      linear-gradient(180deg, #ffffff 0%, #fcfcff 100%);
+    border:1px solid rgba(226,232,240,.95);
+    box-shadow:
+      0 30px 90px rgba(15,23,42,.22),
+      0 10px 30px rgba(139,92,246,.10);
+    overflow:hidden;
+    position:relative;
+  }
+
+  #buyModal .buyPopupScroll{
+    max-height:90vh;
+    overflow:auto;
+  }
+
+  #buyModal .buyPopupScroll::-webkit-scrollbar{
+    width:10px;
+  }
+  #buyModal .buyPopupScroll::-webkit-scrollbar-thumb{
+    background:rgba(148,163,184,.55);
+    border-radius:999px;
+  }
+  #buyModal .buyPopupScroll::-webkit-scrollbar-track{
+    background:transparent;
+  }
+
+  #buyModal .buyPopupHero{
+    position:relative;
+    padding:28px 28px 20px;
+    background:
+      linear-gradient(135deg, rgba(124,58,237,.10), rgba(236,72,153,.08)),
+      linear-gradient(180deg, #ffffff 0%, #faf7ff 100%);
+    border-bottom:1px solid rgba(226,232,240,.9);
+  }
+
+  #buyModal .buyPopupHeroGlow{
+    position:absolute;
+    border-radius:999px;
+    filter:blur(28px);
+    pointer-events:none;
+  }
+  #buyModal .buyPopupHeroGlowA{
+    width:180px;
+    height:180px;
+    background:rgba(124,58,237,.18);
+    top:-50px;
+    left:-40px;
+  }
+  #buyModal .buyPopupHeroGlowB{
+    width:180px;
+    height:180px;
+    background:rgba(236,72,153,.14);
+    top:-40px;
+    right:-40px;
+  }
+
+  #buyModal .buyPopupTop{
+    position:relative;
+    z-index:1;
+    display:grid;
+    grid-template-columns:1.5fr .9fr;
+    gap:18px;
+    align-items:stretch;
+  }
+
+  #buyModal .buyPopupEyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    min-height:34px;
+    padding:0 14px;
+    border-radius:999px;
+    background:rgba(255,255,255,.88);
+    border:1px solid rgba(124,58,237,.12);
+    color:#6d28d9;
+    font-size:12px;
+    font-weight:900;
+    box-shadow:0 8px 24px rgba(124,58,237,.08);
+  }
+
+  #buyModal .buyPopupIntro h3{
+    margin:16px 0 10px;
+    font-size:42px;
+    line-height:1.04;
+    letter-spacing:-.04em;
+    color:#0f172a;
+  }
+
+  #buyModal .buyPopupDesc{
+    margin:0;
+    font-size:16px;
+    line-height:1.65;
+    color:#475569;
+    max-width:760px;
+  }
+
+  #buyModal .buyPopupTrust{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    margin-top:16px;
+  }
+  #buyModal .buyPopupTrust span{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:34px;
+    padding:0 12px;
+    border-radius:999px;
+    background:#fff;
+    border:1px solid rgba(226,232,240,.95);
+    color:#334155;
+    font-size:12px;
+    font-weight:800;
+    box-shadow:0 8px 18px rgba(15,23,42,.05);
+  }
+
+  #buyModal .buyPopupLevel{
+    position:relative;
+    z-index:1;
+    border-radius:24px;
+    padding:18px;
+    background:rgba(255,255,255,.88);
+    border:1px solid rgba(226,232,240,.95);
+    box-shadow:0 14px 34px rgba(15,23,42,.08);
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+  }
+
+  #buyModal .buyPopupLevelMini{
+    font-size:12px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    font-weight:900;
+    color:#64748b;
+  }
+  #buyModal .buyPopupLevelName{
+    margin-top:8px;
+    font-size:30px;
+    font-weight:1000;
+    line-height:1.05;
+    letter-spacing:-.03em;
+    color:#0f172a;
+  }
+  #buyModal .buyPopupLevelBonus{
+    margin-top:8px;
+    color:#475569;
+    font-size:14px;
+  }
+  #buyModal .buyPopupLevelBadge{
+    margin-top:14px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:40px;
+    padding:0 14px;
+    border-radius:999px;
+    background:linear-gradient(135deg,#7c3aed,#ec4899);
+    color:#fff;
+    font-size:13px;
+    font-weight:900;
+    box-shadow:0 12px 28px rgba(124,58,237,.22);
+  }
+
+  #buyModal .buyPopupHighlights{
+    position:relative;
+    z-index:1;
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:12px;
+    margin-top:18px;
+  }
+
+  #buyModal .buyPopupHighlight{
+    background:rgba(255,255,255,.82);
+    border:1px solid rgba(226,232,240,.95);
+    border-radius:18px;
+    padding:14px 16px;
+    box-shadow:0 8px 18px rgba(15,23,42,.04);
+  }
+  #buyModal .buyPopupHighlight small{
+    display:block;
+    font-size:12px;
+    font-weight:800;
+    color:#64748b;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    margin-bottom:6px;
+  }
+  #buyModal .buyPopupHighlight strong{
+    font-size:16px;
+    color:#0f172a;
+  }
+  #buyModal .buyPopupHighlightHot{
+    border-color:rgba(124,58,237,.25);
+    box-shadow:0 12px 30px rgba(124,58,237,.10);
+  }
+
+  #buyModal .buyPopupGrid{
+    padding:22px;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:18px;
+    background:linear-gradient(180deg, rgba(248,250,252,.6), #fff);
+  }
+
+  #buyModal .buyOption{
+    position:relative;
+    border-radius:24px;
+    padding:20px;
+    background:#fff;
+    border:1px solid rgba(226,232,240,.95);
+    box-shadow:0 12px 28px rgba(15,23,42,.06);
+    transition:.18s ease;
+    overflow:hidden;
+  }
+  #buyModal .buyOption:hover{
+    transform:translateY(-3px);
+    box-shadow:0 18px 36px rgba(15,23,42,.10);
+  }
+
+  #buyModal .buyOptionFeatured{
+    border:2px solid rgba(124,58,237,.24);
+    background:
+      radial-gradient(circle at top right, rgba(236,72,153,.08), transparent 30%),
+      radial-gradient(circle at top left, rgba(124,58,237,.10), transparent 25%),
+      linear-gradient(180deg, #ffffff 0%, #fdfaff 100%);
+    box-shadow:0 20px 44px rgba(124,58,237,.16);
+  }
+
+  #buyModal .buyOptionEssencial{
+    background:linear-gradient(180deg,#ffffff 0%,#fcfcff 100%);
+  }
+  #buyModal .buyOptionTurbo{
+    background:linear-gradient(180deg,#ffffff 0%,#f7fbff 100%);
+  }
+  #buyModal .buyOptionMaster{
+    background:linear-gradient(180deg,#ffffff 0%,#f7fff9 100%);
+  }
+
+  #buyModal .buyOptionRibbon{
+    position:absolute;
+    top:14px;
+    right:-34px;
+    transform:rotate(24deg);
+    padding:8px 44px;
+    background:linear-gradient(135deg,#7c3aed,#ec4899);
+    color:#fff;
+    font-size:12px;
+    font-weight:900;
+    box-shadow:0 10px 24px rgba(124,58,237,.22);
+  }
+
+  #buyModal .buyOptionTop{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:10px;
+    margin-bottom:14px;
+  }
+
+  #buyModal .buyOptionTag{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:30px;
+    padding:0 12px;
+    border-radius:999px;
+    background:#f1f5f9;
+    color:#334155;
+    font-size:12px;
+    font-weight:900;
+  }
+  #buyModal .buyOptionTagHot{
+    background:linear-gradient(135deg,rgba(124,58,237,.12),rgba(236,72,153,.12));
+    color:#6d28d9;
+  }
+
+  #buyModal .buyOptionMini{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:28px;
+    padding:0 10px;
+    border-radius:999px;
+    background:rgba(15,23,42,.05);
+    color:#475569;
+    font-size:11px;
+    font-weight:900;
+  }
+  #buyModal .buyOptionMiniHot{
+    background:rgba(124,58,237,.12);
+    color:#6d28d9;
+  }
+
+  #buyModal .buyOptionTitle{
+    font-size:31px;
+    line-height:1.04;
+    letter-spacing:-.04em;
+    font-weight:1000;
+    color:#0f172a;
+  }
+  #buyModal .buyOptionCoins{
+    margin-top:6px;
+    font-size:18px;
+    font-weight:800;
+    color:#64748b;
+  }
+  #buyModal .buyOptionBonus{
+    margin-top:12px;
+    display:inline-flex;
+    align-items:center;
+    padding:9px 12px;
+    border-radius:14px;
+    background:linear-gradient(135deg, rgba(124,58,237,.08), rgba(236,72,153,.08));
+    color:#6d28d9;
+    font-size:13px;
+    font-weight:900;
+  }
+
+  #buyModal .buyOptionPrice{
+    display:flex;
+    align-items:flex-end;
+    gap:10px;
+    margin-top:16px;
+  }
+  #buyModal .buyOptionPrice strong{
+    font-size:34px;
+    line-height:1;
+    letter-spacing:-.04em;
+    font-weight:1000;
+    color:#0f172a;
+  }
+  #buyModal .buyOptionOld{
+    font-size:18px;
+    font-weight:800;
+    color:#94a3b8;
+    text-decoration:line-through;
+  }
+
+  #buyModal .buyOptionTotal{
+    margin-top:16px;
+    padding:14px 16px;
+    border-radius:18px;
+    background:#f8fafc;
+    border:1px solid #e2e8f0;
+    color:#1e293b;
+    font-size:15px;
+    font-weight:900;
+  }
+  #buyModal .buyOptionTotalFeatured{
+    background:linear-gradient(135deg, rgba(124,58,237,.10), rgba(236,72,153,.10));
+    border-color:rgba(124,58,237,.18);
+    color:#6d28d9;
+  }
+
+  #buyModal .buyOptionList{
+    margin:16px 0 0;
+    padding-left:20px;
+    color:#334155;
+  }
+  #buyModal .buyOptionList li{
+    margin:8px 0;
+    line-height:1.5;
+  }
+
+  #buyModal .buyOptionBtn{
+    width:100%;
+    min-height:52px;
+    border:none;
+    border-radius:16px;
+    margin-top:18px;
+    cursor:pointer;
+    font-size:16px;
+    font-weight:1000;
+    letter-spacing:-.01em;
+    transition:.18s ease;
+  }
+  #buyModal .buyOptionBtn:hover{
+    transform:translateY(-1px);
+  }
+
+  #buyModal .buyOptionBtnSoft{
+    background:#fff;
+    color:#0f172a;
+    border:1px solid #e2e8f0;
+    box-shadow:0 8px 18px rgba(15,23,42,.06);
+  }
+  #buyModal .buyOptionBtnPrimary{
+    color:#fff;
+    background:linear-gradient(135deg,#7c3aed,#ec4899);
+    box-shadow:0 12px 24px rgba(124,58,237,.24);
+  }
+  #buyModal .buyOptionBtnInfo{
+    color:#fff;
+    background:linear-gradient(135deg,#2563eb,#7c3aed);
+    box-shadow:0 12px 24px rgba(37,99,235,.22);
+  }
+  #buyModal .buyOptionBtnSuccess{
+    color:#fff;
+    background:linear-gradient(135deg,#10b981,#22c55e);
+    box-shadow:0 12px 24px rgba(16,185,129,.22);
+  }
+
+  #buyModal .buyPopupFooter{
+    padding:0 22px 10px;
+  }
+  #buyModal .buyPopupFooterText{
+    border-radius:18px;
+    background:linear-gradient(180deg,#fff,#fafcff);
+    border:1px solid rgba(226,232,240,.95);
+    padding:14px 16px;
+    color:#475569;
+    font-size:14px;
+    text-align:center;
+  }
+
+  #buyModal .buyPopupActions{
+    display:flex;
+    justify-content:flex-end;
+    padding:0 22px 22px;
+  }
+
   .toastWrap{
     position:fixed;
     left:50%;
@@ -1383,6 +1823,24 @@ function PROFILE_PAGE_CSS() {
     }
   }
 
+  @media (max-width: 980px){
+    #buyModal .buyPopupTop{
+      grid-template-columns:1fr;
+    }
+
+    #buyModal .buyPopupHighlights{
+      grid-template-columns:1fr;
+    }
+
+    #buyModal .buyPopupGrid{
+      grid-template-columns:1fr;
+    }
+
+    #buyModal .buyPopupIntro h3{
+      font-size:32px;
+    }
+  }
+
   @media (max-width: 840px){
     .heroGrid,
     .walletShell,
@@ -1447,6 +1905,54 @@ function PROFILE_PAGE_CSS() {
     .modal{
       padding:16px;
       border-radius:20px;
+    }
+
+    #buyModal{
+      padding:10px;
+      align-items:flex-end;
+    }
+
+    #buyModal .buyPopup{
+      width:100%;
+      max-height:94vh;
+      border-radius:24px 24px 0 0;
+    }
+
+    #buyModal .buyPopupHero{
+      padding:18px 16px 16px;
+    }
+
+    #buyModal .buyPopupGrid{
+      padding:16px;
+      gap:14px;
+    }
+
+    #buyModal .buyPopupFooter,
+    #buyModal .buyPopupActions{
+      padding-left:16px;
+      padding-right:16px;
+    }
+
+    #buyModal .buyPopupIntro h3{
+      font-size:26px;
+    }
+
+    #buyModal .buyOption{
+      padding:16px;
+      border-radius:20px;
+    }
+
+    #buyModal .buyOptionTitle{
+      font-size:25px;
+    }
+
+    #buyModal .buyOptionPrice strong{
+      font-size:28px;
+    }
+
+    #buyModal .buyOptionRibbon{
+      right:-42px;
+      font-size:11px;
     }
   }
 `;
@@ -2064,6 +2570,7 @@ function buildProfilePageJS() {
       const data = await getJson("/api/my-wallet");
       renderWalletSummary(data);
       syncWithdrawModalByAccount();
+      updateBuyModal(data);
       if (showToastOnSuccess) showToast("🪙 Carteira atualizada", "Sua carteira foi atualizada com sucesso.", 2200);
     }catch(e){
       showToast("⚠️ Carteira", "Falha ao carregar carteira: " + String(e.message || e), 3200);
@@ -2141,6 +2648,68 @@ function buildProfilePageJS() {
     $("editAddressState").value = account?.address_state || "";
     $("editAddressZip").value = account?.address_zip || "";
     $("editAddressComplement").value = account?.address_complement || "";
+  }
+
+  function pctLabel(pct){
+    const n = Number(pct || 0);
+    return Math.round(n) + "%";
+  }
+
+  function formatPackPrice(pack){
+    return "R$ " + Number(pack || 0).toLocaleString("pt-BR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    });
+  }
+
+  function updateBuyCard(pack, bonusPct){
+    const bonus = Number((Number(pack || 0) * Number(bonusPct || 0)).toFixed(2));
+    const total = Number((Number(pack || 0) + bonus).toFixed(2));
+
+    const bonusEl = $("bonus-pack-" + pack);
+    const totalEl = $("total-pack-" + pack);
+
+    if (bonusEl) {
+      bonusEl.textContent = bonus > 0
+        ? "+ " + fmtCoins(bonus) + " de bônus do seu nível"
+        : "+ bônus do seu nível";
+    }
+
+    if (totalEl) {
+      totalEl.textContent = "Você recebe " + fmtCoins(total);
+    }
+  }
+
+  function updateBuyModal(walletData){
+    const level = walletData?.level || {};
+    const completedOrders = Number(walletData?.completedOrders || 0);
+    const progress = walletData?.levelProgress || {};
+    const bonusPctNum = Number(level.buyBonusPct || 0);
+    const bonusPctText = Math.round(bonusPctNum * 100) + "%";
+
+    if ($("buyCurrentLevelText")) {
+      $("buyCurrentLevelText").textContent = (level.icon || "🥉") + " " + (level.name || "Bronze");
+    }
+
+    if ($("buyBonusPercentText")) {
+      $("buyBonusPercentText").textContent = bonusPctText;
+    }
+
+    if ($("buyLevelBadgeModal")) {
+      if (level.key === "ouro") {
+        $("buyLevelBadgeModal").textContent = "Nível máximo desbloqueado";
+      } else {
+        const nextName = String(progress.nextName || "Próximo");
+        const nextAt = Number(progress.nextAt || 0);
+        $("buyLevelBadgeModal").textContent =
+          "Progresso: " + pctLabel(progress.pct || 0) + " • " + completedOrders + "/" + nextAt + " para " + nextName;
+      }
+    }
+
+    updateBuyCard(10, bonusPctNum);
+    updateBuyCard(25, bonusPctNum);
+    updateBuyCard(50, bonusPctNum);
+    updateBuyCard(100, bonusPctNum);
   }
 
   let allBooks = [];
@@ -2341,7 +2910,11 @@ function buildProfilePageJS() {
   $("btnCloseVerifyPassword").addEventListener("click", closeVerifyPasswordModal);
   $("btnCloseEditAccount").addEventListener("click", closeEditAccountModal);
 
-  $("btnBuyWallet").addEventListener("click", openBuyModal);
+  $("btnBuyWallet").addEventListener("click", async () => {
+    if (!state.walletData) await loadWallet(false);
+    openBuyModal();
+  });
+
   $("btnWithdrawWallet").addEventListener("click", async () => {
     if (!state.accountData) await loadAccount(false);
     openWithdrawModal();
