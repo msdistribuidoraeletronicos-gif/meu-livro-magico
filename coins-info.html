@@ -498,12 +498,20 @@
       border-top:1px solid rgba(17,24,39,.06);
     }
 
+    /* CONTEÚDO VISÍVEL POR PADRÃO */
     .reveal{
+      opacity:1;
+      transform:none;
+    }
+
+    /* ANIMAÇÃO SÓ É APLICADA SE O JS INICIAR */
+    body.js-ready .reveal{
       opacity:0;
       transform:translateY(18px);
       transition:opacity .55s ease, transform .55s ease;
     }
-    .reveal.on{
+
+    body.js-ready .reveal.on{
       opacity:1;
       transform:translateY(0);
     }
@@ -873,29 +881,41 @@
   </footer>
 
   <script>
-    (function reveal(){
-      const els = Array.from(document.querySelectorAll(".reveal"));
+    (function () {
+      try {
+        document.body.classList.add("js-ready");
 
-      function inView(el){
-        const r = el.getBoundingClientRect();
-        return r.top < window.innerHeight * 0.92;
-      }
+        const els = Array.from(document.querySelectorAll(".reveal"));
 
-      function tick(){
-        els.forEach(el => {
-          if(el.classList.contains("on")) return;
-          if(inView(el)) el.classList.add("on");
+        function inView(el){
+          const r = el.getBoundingClientRect();
+          return r.top < window.innerHeight * 0.92;
+        }
+
+        function tick(){
+          els.forEach(function(el){
+            if (el.classList.contains("on")) return;
+            if (inView(el)) el.classList.add("on");
+          });
+        }
+
+        ["b1","b2","b3","hc1","hc2","hc3"].forEach(function(id, idx){
+          const el = document.getElementById(id);
+          if (el) {
+            setTimeout(function(){
+              el.classList.add("on");
+            }, 90 + idx * 120);
+          }
         });
+
+        window.addEventListener("scroll", tick, { passive:true });
+        window.addEventListener("resize", tick);
+        setTimeout(tick, 650);
+        tick();
+      } catch (err) {
+        console.error("Erro no script da animação:", err);
+        document.body.classList.remove("js-ready");
       }
-
-      ["b1","b2","b3","hc1","hc2","hc3"].forEach((id, idx) => {
-        const el = document.getElementById(id);
-        if (el) setTimeout(() => el.classList.add("on"), 90 + idx * 120);
-      });
-
-      window.addEventListener("scroll", tick, { passive:true });
-      window.addEventListener("resize", tick);
-      setTimeout(tick, 650);
     })();
   </script>
 </body>
