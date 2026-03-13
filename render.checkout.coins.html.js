@@ -158,6 +158,7 @@ function renderCheckoutCoinsHtml(order = {}) {
     font-weight:1000;
     border:1px solid var(--line);
     background:#fff;
+    text-transform:uppercase;
   }
   .statusPending{ color:var(--amber); }
   .statusPaid{ color:var(--green); }
@@ -190,6 +191,7 @@ function renderCheckoutCoinsHtml(order = {}) {
     border:1px solid var(--line);
     padding:12px;
     font:inherit;
+    resize:vertical;
   }
   .hint{
     color:var(--muted);
@@ -268,8 +270,8 @@ function renderCheckoutCoinsHtml(order = {}) {
             </div>
 
             <div class="actions">
-              <button class="btn btnPrimary" id="btnCopyPix">📋 Copiar código PIX</button>
-              <button class="btn btnSoft" id="btnRefresh">🔄 Verificar pagamento</button>
+              <button type="button" class="btn btnPrimary" id="btnCopyPix">📋 Copiar código PIX</button>
+              <button type="button" class="btn btnSoft" id="btnRefresh">🔄 Verificar pagamento</button>
             </div>
 
             <div class="hint" id="statusText">
@@ -285,22 +287,61 @@ function renderCheckoutCoinsHtml(order = {}) {
 (function(){
   const ORDER_ID = ${JSON.stringify(orderId)};
   let paymentPollTimer = null;
-  let currentPaymentRef = "";
 
   function $(id){ return document.getElementById(id); }
 
-  function escHtml(s){
-    return String(s ?? "")
-      .replace(/&/g,"&amp;")
-      .replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;")
-      .replace(/'/g,"&#39;");
+  function normalizeStatus(s){
+    s = String(s || "").trim().toLowerCase();
+    if (!s) return "pending";
+    if (["approved", "paid", "completed"].includes(s)) return "paid";
+    if (["pending", "in_process", "in_mediation", "authorized", "created", "processing"].includes(s)) return "pending";
+    if (["cancelled", "canceled"].includes(s)) return "cancelled";
+    if (["rejected", "failed", "refused", "denied"].includes(s)) return "failed";
+    if (["expired"].includes(s)) return "expired";
+    return s;
+  }
+
+  function statusLabel(s){
+    const v = normalizeStatus(s);
+    if (v === "paid") return "pago";
+    if (v === "pending") return "pendente";
+    if (v === "cancelled") return "cancelado";
+    if (v === "failed") return "falhou";
+    if (v === "expired") return "expirado";
+    return v || "pendente";
+  }
+
+  async function readJsonOrThrow(response){
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    let data = null;
+
+    if (contentType.includes("application/json")) {
+      data = await response.json().catch(() => ({}));
+    } else {
+      const text = await response.text().catch(() => "");
+      if (response.status === 401) {
+        throw new Error("Sua sessão expirou. Faça login novamente.");
+      }
+      throw new Error(text || "Resposta inválida do servidor.");
+    }
+
+    if (response.status === 401) {
+      throw new Error(data?.error === "not_logged_in"
+        ? "Sua sessão expirou. Faça login novamente."
+        : "Acesso não autorizado.");
+    }
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Falha na comunicação com o servidor.");
+    }
+
+    return data;
   }
 
   function setStatus(kind, text, hint){
     const badge = $("statusBadge");
     const st = $("statusText");
+
     if (badge){
       badge.className = "badge " + (
         kind === "paid" ? "statusPaid" :
@@ -309,7 +350,10 @@ function renderCheckoutCoinsHtml(order = {}) {
       );
       badge.textContent = text || "";
     }
-    if (st) st.textContent = hint || "";
+
+    if (st) {
+      st.textContent = hint || "";
+    }
   }
 
   function stopPolling(){
@@ -321,7 +365,11 @@ function renderCheckoutCoinsHtml(order = {}) {
 
   async function copyPix(){
     const txt = $("pixCode")?.value || "";
-    if (!txt) return;
+    if (!txt) {
+      alert("Nenhum código PIX disponível ainda.");
+      return;
+    }
+
     try{
       await navigator.clipboard.writeText(txt);
       alert("Código PIX copiado.");
@@ -341,56 +389,58 @@ function renderCheckoutCoinsHtml(order = {}) {
 
     if (pixCode) pixCode.value = code || "";
 
-    if (qrImg){
-      qrImg.style.display = "none";
-      qrImg.removeAttribute("src");
+    if (!qrImg) return;
 
-      if (qrCodeBase64){
-        qrImg.src = qrCodeBase64.startsWith("data:")
-          ? qrCodeBase64
-          : ("data:image/png;base64," + qrCodeBase64);
-        qrImg.style.display = "block";
-        if (qrFallback) qrFallback.style.display = "none";
-      } else if (qrCodeUrl){
-        qrImg.src = qrCodeUrl;
-        qrImg.style.display = "block";
-        if (qrFallback) qrFallback.style.display = "none";
-      } else {
-        if (qrFallback){
-          qrFallback.style.display = "block";
-          qrFallback.textContent = "QR Code não disponível no momento.";
-        }
-      }
+    qrImg.style.display = "none";
+    qrImg.removeAttribute("src");
+
+    if (qrCodeBase64){
+      qrImg.src = qrCodeBase64.startsWith("data:")
+        ? qrCodeBase64
+        : ("data:image/png;base64," + qrCodeBase64);
+      qrImg.style.display = "block";
+      if (qrFallback) qrFallback.style.display = "none";
+      return;
+    }
+
+    if (qrCodeUrl){
+      qrImg.src = qrCodeUrl;
+      qrImg.style.display = "block";
+      if (qrFallback) qrFallback.style.display = "none";
+      return;
+    }
+
+    if (qrFallback){
+      qrFallback.style.display = "block";
+      qrFallback.textContent = "QR Code não disponível no momento.";
     }
   }
 
   async function createPix(){
-    setStatus("pending", "pending", "Gerando cobrança PIX...");
+    setStatus("pending", statusLabel("pending"), "Gerando cobrança PIX...");
 
     const response = await fetch("/api/coin-orders/" + encodeURIComponent(ORDER_ID) + "/pix", {
       method: "POST",
       headers: {
         "Content-Type":"application/json",
         "Accept":"application/json"
-      }
+      },
+      credentials: "same-origin"
     });
 
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.ok) {
-      throw new Error(result.error || "Falha ao gerar PIX");
-    }
-
-    currentPaymentRef = String(
-      result.paymentReference ||
-      result.payment_reference ||
-      ""
-    ).trim();
+    const result = await readJsonOrThrow(response);
 
     renderPixData(result);
 
+    const normalized = normalizeStatus(result.status);
+    if (normalized === "paid") {
+      setStatus("paid", statusLabel("paid"), "Pagamento já aprovado. Verificando crédito das moedas...");
+      return;
+    }
+
     setStatus(
       "pending",
-      "pending",
+      statusLabel(result.status || "pending"),
       "PIX gerado. Faça o pagamento e esta tela irá atualizar automaticamente."
     );
   }
@@ -398,18 +448,16 @@ function renderCheckoutCoinsHtml(order = {}) {
   async function checkStatusOnce(){
     const response = await fetch("/api/coin-orders/" + encodeURIComponent(ORDER_ID) + "/status", {
       method: "GET",
-      headers: { "Accept":"application/json" }
+      headers: { "Accept":"application/json" },
+      credentials: "same-origin"
     });
 
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.ok) {
-      throw new Error(result.error || "Falha ao consultar status");
-    }
+    const result = await readJsonOrThrow(response);
 
-    const status = String(result.status || "").toLowerCase();
+    const status = normalizeStatus(result.status);
     const credited = !!result.credited;
 
-    if (status === "paid" || status === "approved") {
+    if (status === "paid") {
       if (credited) {
         setStatus(
           "paid",
@@ -417,7 +465,7 @@ function renderCheckoutCoinsHtml(order = {}) {
           "Pagamento aprovado e moedas creditadas com sucesso. Redirecionando..."
         );
         stopPolling();
-        setTimeout(() => {
+        setTimeout(function(){
           window.location.href = "/profile";
         }, 1800);
         return;
@@ -434,7 +482,7 @@ function renderCheckoutCoinsHtml(order = {}) {
     if (status === "expired" || status === "cancelled" || status === "failed") {
       setStatus(
         "error",
-        status,
+        statusLabel(status),
         "O pagamento não foi aprovado. Gere um novo PIX se quiser continuar."
       );
       stopPolling();
@@ -443,14 +491,14 @@ function renderCheckoutCoinsHtml(order = {}) {
 
     setStatus(
       "pending",
-      status || "pending",
+      statusLabel(status || "pending"),
       "Aguardando confirmação do PIX..."
     );
   }
 
   function startPolling(){
     stopPolling();
-    paymentPollTimer = setInterval(async () => {
+    paymentPollTimer = setInterval(async function(){
       try{
         await checkStatusOnce();
       }catch(e){
@@ -460,7 +508,7 @@ function renderCheckoutCoinsHtml(order = {}) {
   }
 
   $("btnCopyPix")?.addEventListener("click", copyPix);
-  $("btnRefresh")?.addEventListener("click", async () => {
+  $("btnRefresh")?.addEventListener("click", async function(){
     try{
       await checkStatusOnce();
     }catch(e){
@@ -474,6 +522,7 @@ function renderCheckoutCoinsHtml(order = {}) {
       startPolling();
       await checkStatusOnce();
     }catch(e){
+      console.error("[checkout-coins] init error:", e);
       setStatus("error", "erro", e.message || "Falha ao abrir checkout.");
     }
   })();

@@ -201,7 +201,31 @@ module.exports = async (req, res) => {
     }
 
     if (String(order.status || "").toLowerCase() === "paid") {
-      return res.status(400).json({ ok: false, error: "coin_order_already_paid" });
+      await applyCoinOrderCreditIfPaid(order.id);
+
+      return res.json({
+        ok: true,
+        reused: true,
+        orderId: order.id,
+        paymentReference:
+          order.mercadopago_external_reference ||
+          order.mercadopago_reference_id ||
+          "",
+        payment_reference:
+          order.mercadopago_external_reference ||
+          order.mercadopago_reference_id ||
+          "",
+        paymentId: order.mercadopago_payment_id || "",
+        payment_id: order.mercadopago_payment_id || "",
+        qrCodeBase64: "",
+        qr_code_base64: "",
+        qrCodeUrl: "",
+        qr_code_url: "",
+        pixCode: "",
+        copyPaste: "",
+        copy_paste: "",
+        status: "paid",
+      });
     }
 
     const existingPaymentId = String(order.payment_id || "").trim();
@@ -218,7 +242,10 @@ module.exports = async (req, res) => {
         const existingStatus = String(existingPayment.status || "").toLowerCase();
         const existingMpStatus = String(existingPayment.mercadopago_status || "").toLowerCase();
 
-        if (["pending"].includes(existingStatus) || ["pending", "in_process"].includes(existingMpStatus)) {
+        if (
+          ["pending"].includes(existingStatus) ||
+          ["pending", "in_process", "authorized", "in_mediation"].includes(existingMpStatus)
+        ) {
           return res.json({
             ok: true,
             reused: true,

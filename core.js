@@ -472,11 +472,13 @@ function requireAuth(req, res, next) {
         const nextUrl = encodeURIComponent(req.originalUrl || "/create");
         return res.redirect(`/login?next=${nextUrl}`);
       }
+
       if (req._newAuthSession?.access && req._newAuthSession?.refresh) {
         setAuthCookies(res, req._newAuthSession.access, req._newAuthSession.refresh);
       }
+
       req.user = user;
-      next();
+      return next();
     })
     .catch(() => {
       const nextUrl = encodeURIComponent(req.originalUrl || "/create");
@@ -484,6 +486,24 @@ function requireAuth(req, res, next) {
     });
 }
 
+function requireApiAuth(req, res, next) {
+  getCurrentUser(req)
+    .then((user) => {
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "not_logged_in" });
+      }
+
+      if (req._newAuthSession?.access && req._newAuthSession?.refresh) {
+        setAuthCookies(res, req._newAuthSession.access, req._newAuthSession.refresh);
+      }
+
+      req.user = user;
+      return next();
+    })
+    .catch(() => {
+      return res.status(401).json({ ok: false, error: "not_logged_in" });
+    });
+}
 // ------------------------------
 // HTTP helpers
 // ------------------------------
@@ -1666,12 +1686,12 @@ apiRouter.get("/partners", async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
-apiRouter.post("/coin-orders/:id/pix", requireAuth, (req, res) => {
+apiRouter.post("/coin-orders/:id/pix", requireApiAuth, (req, res) => {
   req.query.orderId = String(req.params?.id || "").trim();
   return coinOrderPixApi(req, res);
 });
 
-apiRouter.get("/coin-orders/:id/status", requireAuth, (req, res) => {
+apiRouter.get("/coin-orders/:id/status", requireApiAuth, (req, res) => {
   req.query.orderId = String(req.params?.id || "").trim();
   return coinOrderStatusApi(req, res);
 });
@@ -2068,7 +2088,7 @@ apiRouter.post("/uploadPhoto", async (req, res) => {
 });
 
 // Status
-apiRouter.get("/status/:id", requireAuth, async (req, res) => {
+apiRouter.get("/status/:id", requireApiAuth, async (req, res) => {
   try {
     const viewerId = String(req.user?.id || "");
     if (!viewerId) return res.status(401).json({ ok: false, error: "not_logged_in" });
@@ -2103,7 +2123,7 @@ apiRouter.get("/status/:id", requireAuth, async (req, res) => {
 });
 
 // Generate (inicia)
-apiRouter.post("/generate", requireAuth, async (req, res) => {
+apiRouter.post("/generate", requireApiAuth, async (req, res) => {
   const userId = String(req.user?.id || "");
   if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
 
@@ -2156,7 +2176,7 @@ apiRouter.post("/generate", requireAuth, async (req, res) => {
 // ---------------------------------------
 // ✅ GenerateNext (passo) — CORRIGIDO
 // ---------------------------------------
-apiRouter.post("/generateNext", requireAuth, async (req, res) => {
+apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
   let userId = "";
   let id = "";
 
@@ -2556,7 +2576,7 @@ apiRouter.post("/generateNext", requireAuth, async (req, res) => {
 // ---------------------------------------
 // ✅ Regenerar imagem de uma página (NOVO)
 // ---------------------------------------
-apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
+apiRouter.post("/regeneratePage", requireApiAuth, async (req, res) => {
   let userId = "";
   let id = "";
   let page = 0;
@@ -2712,7 +2732,7 @@ apiRouter.post("/regeneratePage", requireAuth, async (req, res) => {
 // ---------------------------------------
 // ✅ Editar texto de uma página
 // ---------------------------------------
-apiRouter.post("/editPageText", requireAuth, async (req, res) => {
+apiRouter.post("/editPageText", requireApiAuth, async (req, res) => {
   try {
     const userId = String(req.user?.id || "");
     if (!userId) return res.status(401).json({ ok: false, error: "not_logged_in" });
@@ -2750,7 +2770,7 @@ apiRouter.post("/editPageText", requireAuth, async (req, res) => {
 });
 
 // Servir imagens
-apiRouter.get("/image/:id/:file", requireAuth, async (req, res) => {
+apiRouter.get("/image/:id/:file", requireApiAuth, async (req, res) => {
   try {
     const viewerId = String(req.user?.id || "");
     if (!viewerId) return res.status(401).send("not_logged_in");
@@ -2794,7 +2814,7 @@ apiRouter.get("/image/:id/:file", requireAuth, async (req, res) => {
 });
 
 // Download PDF (no /api)
-apiRouter.get("/download/:id", requireAuth, async (req, res) => {
+apiRouter.get("/download/:id", requireApiAuth, async (req, res) => {
   try {
     const viewerId = String(req.user?.id || "");
     if (!viewerId) return res.status(401).send("not_logged_in");
@@ -2835,6 +2855,7 @@ module.exports = {
 
   // Funções e constantes necessárias para as páginas
   requireAuth,
+  requireApiAuth,
   getCurrentUser,
   getCurrentUserId,
   isAdminUser,

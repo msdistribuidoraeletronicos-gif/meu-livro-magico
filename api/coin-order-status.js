@@ -209,13 +209,39 @@ async function reconcileCoinOrderStatus(order) {
 
   const paymentRowId = String(order?.payment_id || "").trim();
   if (paymentRowId) {
+    const { data: currentPayment, error: currentPaymentErr } = await supabase
+      .from("payments")
+      .select("metadata")
+      .eq("id", paymentRowId)
+      .maybeSingle();
+
+    if (currentPaymentErr) throw currentPaymentErr;
+
+    const qrCodeBase64 = String(
+      mpPayment?.point_of_interaction?.transaction_data?.qr_code_base64 || ""
+    ).trim();
+
+    const qrCode = String(
+      mpPayment?.point_of_interaction?.transaction_data?.qr_code || ""
+    ).trim();
+
+    const ticketUrl = String(
+      mpPayment?.point_of_interaction?.transaction_data?.ticket_url || ""
+    ).trim();
+
     const paymentUpdate = {
       status: finalStatus,
       mercadopago_status: rawStatus,
       mercadopago_payment_id: String(mpPayment?.id || paymentId),
       mercadopago_external_reference:
         String(mpPayment?.external_reference || order?.mercadopago_external_reference || ""),
-      provider_response: mpPayment,
+      metadata: {
+        ...(currentPayment?.metadata || {}),
+        raw_response: mpPayment,
+        qr_code_available: !!qrCode,
+        qr_code_base64_available: !!qrCodeBase64,
+        ticket_url: ticketUrl || null,
+      },
       updated_at: nowIso,
     };
 
@@ -280,18 +306,34 @@ module.exports = async (req, res) => {
     let finalOrder = order;
     const localStatus = String(order.status || "").toLowerCase();
 
-    if (!order.credited_at && ["pending", "created", "processing", "authorized"].includes(localStatus)) {
+    if (
+      !order.credited_at &&
+      ["pending", "created", "processing", "authorized", "in_process", "in_mediation"].includes(localStatus)
+    ) {
       try {
         finalOrder = await reconcileCoinOrderStatus(order);
       } catch (reconcileErr) {
         console.warn("[coin-order-status] falha ao reconciliar com MP:", reconcileErr?.message || reconcileErr);
+      }
+    } else if (localStatus === "paid" && !order.credited_at) {
+      await applyCoinOrderCreditIfPaid(order.id);
+
+      const { data: refreshedPaidOrder, error: refreshedPaidErr } = await supabase
+        .from("coin_orders")
+        .select("*")
+        .eq("id", order.id)
+        .maybeSingle();
+
+      if (refreshedPaidErr) throw refreshedPaidErr;
+      if (refreshedPaidOrder) {
+        finalOrder = refreshedPaidOrder;
       }
     }
 
     return res.json({
       ok: true,
       orderId: finalOrder.id,
-      status: finalOrder.status,
+      status: String(finalOrder.status || "pending"),
       credited: !!finalOrder.credited_at,
       credited_at: finalOrder.credited_at || null,
       paid_at: finalOrder.paid_at || null,
