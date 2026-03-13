@@ -665,178 +665,180 @@ ${pageCss}
   </div>
 
   <div class="modalBackdrop" id="buyModal">
-    <div class="modal buyModalWide buyModalSales" role="dialog" aria-modal="true" aria-labelledby="buyTitle">
-      <div class="buyModalShell">
-        <div class="buyHero">
-          <div class="buyHeroGlow buyHeroGlow1"></div>
-          <div class="buyHeroGlow buyHeroGlow2"></div>
+    <div class="buyPopup" role="dialog" aria-modal="true" aria-labelledby="buyTitle">
+      <div class="buyPopupScroll">
+        <div class="buyPopupHero">
+          <div class="buyPopupHeroGlow buyPopupHeroGlowA"></div>
+          <div class="buyPopupHeroGlow buyPopupHeroGlowB"></div>
 
-          <div class="buyHeroTop">
-            <div class="buyHeroContent">
-              <div class="buyEyebrow">🪙 Recarregue sua carteira</div>
-              <h3 id="buyTitle">Escolha seu pacote e continue criando histórias sem parar</h3>
-              <p class="buyHeroText">
-                Ganhe mais saldo, aproveite o bônus do seu nível e escolha a opção com melhor vantagem para você.
+          <div class="buyPopupTop">
+            <div class="buyPopupIntro">
+              <div class="buyPopupEyebrow">🪙 Recarregue sua carteira</div>
+              <h3 id="buyTitle">Escolha o pacote ideal e continue criando sem parar</h3>
+              <p class="buyPopupDesc">
+                Mais saldo, mais liberdade e bônus extra de acordo com o seu nível atual.
               </p>
 
-              <div class="buyTrustRow">
-                <span class="buyTrustPill">✨ Liberação rápida</span>
-                <span class="buyTrustPill">🔒 Pagamento seguro</span>
-                <span class="buyTrustPill">🎁 Bônus do seu nível</span>
+              <div class="buyPopupTrust">
+                <span>✨ Liberação rápida</span>
+                <span>🔒 Pagamento seguro</span>
+                <span>🎁 Bônus no pacote</span>
               </div>
             </div>
 
-            <div class="buyLevelBox">
-              <div class="buyLevelLabel">Seu nível atual</div>
-              <div class="buyLevelValue" id="buyCurrentLevelText">—</div>
-              <div class="buyLevelSub">
-                bônus de compra:
+            <div class="buyPopupLevel">
+              <div class="buyPopupLevelMini">Seu nível</div>
+              <div class="buyPopupLevelName" id="buyCurrentLevelText">—</div>
+              <div class="buyPopupLevelBonus">
+                Bônus de compra:
                 <strong id="buyBonusPercentText">—</strong>
               </div>
-              <div class="buyLevelBadge" id="buyLevelBadgeModal">Nível atual: —</div>
+              <div class="buyPopupLevelBadge" id="buyLevelBadgeModal">Nível atual: —</div>
             </div>
           </div>
 
-          <div class="buyInfoStrip">
-            <div class="buyInfoItem">
-              <span class="buyInfoLabel">Para testar</span>
+          <div class="buyPopupHighlights">
+            <div class="buyPopupHighlight">
+              <small>Entrada</small>
               <strong>Essencial</strong>
             </div>
-            <div class="buyInfoItem buyInfoFeatured">
-              <span class="buyInfoLabel">Mais escolhido</span>
+            <div class="buyPopupHighlight buyPopupHighlightHot">
+              <small>Mais escolhido</small>
               <strong>Pacote Pro</strong>
             </div>
-            <div class="buyInfoItem">
-              <span class="buyInfoLabel">Maior saldo</span>
+            <div class="buyPopupHighlight">
+              <small>Maior saldo</small>
               <strong>Master</strong>
             </div>
           </div>
         </div>
 
-        <div class="buyGrid buyGridEnhanced">
-          <div class="buyCard buyCardLite">
-            <div class="buyCardHead">
-              <div class="buyTag">Entrada</div>
-              <div class="buyMiniBadge">Ideal para começar</div>
+        <div class="buyPopupGrid">
+          <div class="buyOption buyOptionEssencial">
+            <div class="buyOptionTop">
+              <span class="buyOptionTag">Entrada</span>
+              <span class="buyOptionMini">Ideal para começar</span>
             </div>
 
-            <div class="buyCardTitle">Pacote Essencial</div>
-            <div class="buyCardSub">10 moedas</div>
-            <div class="buyCardBonus" id="bonus-pack-10">+ bônus do seu nível</div>
+            <div class="buyOptionTitle">Pacote Essencial</div>
+            <div class="buyOptionCoins">10 moedas</div>
+            <div class="buyOptionBonus" id="bonus-pack-10">+ bônus do seu nível</div>
 
-            <div class="buyCardPrice">
-              <span class="buyPriceNow">R$ 10</span>
+            <div class="buyOptionPrice">
+              <strong>R$ 10</strong>
             </div>
 
-            <div class="buyCardTotal" id="total-pack-10">Você recebe — moedas</div>
+            <div class="buyOptionTotal" id="total-pack-10">Você recebe — moedas</div>
 
-            <ul class="buyFeatureList">
+            <ul class="buyOptionList">
               <li>Entrada mais leve</li>
               <li>Compra rápida</li>
               <li>Bom para testar</li>
             </ul>
 
-            <div class="buyCardFooter">
-              <button class="btn btnSoft buyPackBtn" data-pack="10">Escolher Essencial</button>
-            </div>
+            <button class="buyOptionBtn buyOptionBtnSoft buyPackBtn" data-pack="10">
+              Escolher Essencial
+            </button>
           </div>
 
-          <div class="buyCard buyCardFeatured">
-            <div class="buyRibbon">⭐ Melhor escolha</div>
+          <div class="buyOption buyOptionFeatured">
+            <div class="buyOptionRibbon">⭐ Melhor escolha</div>
 
-            <div class="buyCardHead">
-              <div class="buyTag buyTagHot">Mais popular</div>
-              <div class="buyMiniBadge buyMiniBadgeHot">Mais vantagem</div>
+            <div class="buyOptionTop">
+              <span class="buyOptionTag buyOptionTagHot">Mais popular</span>
+              <span class="buyOptionMini buyOptionMiniHot">Melhor custo-benefício</span>
             </div>
 
-            <div class="buyCardTitle">Pacote Pro</div>
-            <div class="buyCardSub">25 moedas</div>
-            <div class="buyCardBonus" id="bonus-pack-25">+ bônus do seu nível</div>
+            <div class="buyOptionTitle">Pacote Pro</div>
+            <div class="buyOptionCoins">25 moedas</div>
+            <div class="buyOptionBonus" id="bonus-pack-25">+ bônus do seu nível</div>
 
-            <div class="buyCardPrice">
-              <span class="buyPriceOld">R$ 30</span>
-              <span class="buyPriceNow">R$ 25</span>
+            <div class="buyOptionPrice">
+              <span class="buyOptionOld">R$ 30</span>
+              <strong>R$ 25</strong>
             </div>
 
-            <div class="buyCardTotal buyCardTotalFeatured" id="total-pack-25">Você recebe — moedas</div>
+            <div class="buyOptionTotal buyOptionTotalFeatured" id="total-pack-25">
+              Você recebe — moedas
+            </div>
 
-            <ul class="buyFeatureList">
+            <ul class="buyOptionList">
               <li>Melhor equilíbrio entre valor e custo</li>
               <li>Mais saldo por compra</li>
-              <li>Ideal para quem cria com frequência</li>
+              <li>Ideal para uso frequente</li>
             </ul>
 
-            <div class="buyCardFooter">
-              <button class="btn btnPrimary buyPackBtn" data-pack="25">Quero o Pro</button>
-            </div>
+            <button class="buyOptionBtn buyOptionBtnPrimary buyPackBtn" data-pack="25">
+              Quero o Pro
+            </button>
           </div>
 
-          <div class="buyCard buyCardStrong">
-            <div class="buyCardHead">
-              <div class="buyTag">Avançado</div>
-              <div class="buyMiniBadge">Uso recorrente</div>
+          <div class="buyOption buyOptionTurbo">
+            <div class="buyOptionTop">
+              <span class="buyOptionTag">Avançado</span>
+              <span class="buyOptionMini">Uso recorrente</span>
             </div>
 
-            <div class="buyCardTitle">Pacote Turbo</div>
-            <div class="buyCardSub">50 moedas</div>
-            <div class="buyCardBonus" id="bonus-pack-50">+ bônus do seu nível</div>
+            <div class="buyOptionTitle">Pacote Turbo</div>
+            <div class="buyOptionCoins">50 moedas</div>
+            <div class="buyOptionBonus" id="bonus-pack-50">+ bônus do seu nível</div>
 
-            <div class="buyCardPrice">
-              <span class="buyPriceOld">R$ 60</span>
-              <span class="buyPriceNow">R$ 50</span>
+            <div class="buyOptionPrice">
+              <span class="buyOptionOld">R$ 60</span>
+              <strong>R$ 50</strong>
             </div>
 
-            <div class="buyCardTotal" id="total-pack-50">Você recebe — moedas</div>
+            <div class="buyOptionTotal" id="total-pack-50">Você recebe — moedas</div>
 
-            <ul class="buyFeatureList">
-              <li>Mais autonomia na conta</li>
-              <li>Excelente para uso contínuo</li>
-              <li>Percepção forte de economia</li>
+            <ul class="buyOptionList">
+              <li>Mais autonomia</li>
+              <li>Ótimo para uso contínuo</li>
+              <li>Maior percepção de economia</li>
             </ul>
 
-            <div class="buyCardFooter">
-              <button class="btn btnInfo buyPackBtn" data-pack="50">Escolher Turbo</button>
-            </div>
+            <button class="buyOptionBtn buyOptionBtnInfo buyPackBtn" data-pack="50">
+              Escolher Turbo
+            </button>
           </div>
 
-          <div class="buyCard buyCardDark">
-            <div class="buyCardHead">
-              <div class="buyTag">Máximo</div>
-              <div class="buyMiniBadge">Maior saldo</div>
+          <div class="buyOption buyOptionMaster">
+            <div class="buyOptionTop">
+              <span class="buyOptionTag">Máximo</span>
+              <span class="buyOptionMini">Maior saldo</span>
             </div>
 
-            <div class="buyCardTitle">Pacote Master</div>
-            <div class="buyCardSub">100 moedas</div>
-            <div class="buyCardBonus" id="bonus-pack-100">+ bônus do seu nível</div>
+            <div class="buyOptionTitle">Pacote Master</div>
+            <div class="buyOptionCoins">100 moedas</div>
+            <div class="buyOptionBonus" id="bonus-pack-100">+ bônus do seu nível</div>
 
-            <div class="buyCardPrice">
-              <span class="buyPriceOld">R$ 120</span>
-              <span class="buyPriceNow">R$ 100</span>
+            <div class="buyOptionPrice">
+              <span class="buyOptionOld">R$ 120</span>
+              <strong>R$ 100</strong>
             </div>
 
-            <div class="buyCardTotal" id="total-pack-100">Você recebe — moedas</div>
+            <div class="buyOptionTotal" id="total-pack-100">Você recebe — moedas</div>
 
-            <ul class="buyFeatureList">
-              <li>Saldo para uso intenso</li>
-              <li>Maior aproveitamento do bônus</li>
-              <li>Menos interrupções para recarregar</li>
+            <ul class="buyOptionList">
+              <li>Maior volume de saldo</li>
+              <li>Máximo aproveitamento do bônus</li>
+              <li>Menos interrupções para recarga</li>
             </ul>
 
-            <div class="buyCardFooter">
-              <button class="btn btnSuccess buyPackBtn" data-pack="100">Quero o Master</button>
-            </div>
+            <button class="buyOptionBtn buyOptionBtnSuccess buyPackBtn" data-pack="100">
+              Quero o Master
+            </button>
           </div>
         </div>
 
-        <div class="buyFooterNote">
-          <div class="buyFooterText">
-            O total mostrado em cada pacote já considera o bônus do seu nível atual.
+        <div class="buyPopupFooter">
+          <div class="buyPopupFooterText">
+            O total exibido em cada pacote já considera o bônus do seu nível atual.
           </div>
         </div>
 
         <div class="hint" id="hintBuyModal"></div>
 
-        <div class="modalActions buyModalActions">
+        <div class="buyPopupActions">
           <button class="btn btnSoft" id="btnCloseBuy">Fechar</button>
         </div>
       </div>
