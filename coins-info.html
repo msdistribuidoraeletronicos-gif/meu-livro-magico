@@ -1,10 +1,14 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>Meu Livro Mágico — Para que servem as moedas</title>
-  <meta name="description" content="Entenda para que servem as moedas no Meu Livro Mágico, como ganhar, como comprar e como usar seu saldo para pagar menos ou até comprar sem gastar dinheiro."/>
+  <meta
+    name="description"
+    content="Entenda para que servem as moedas no Meu Livro Mágico, como ganhar, como comprar e como usar seu saldo para pagar menos ou até comprar sem gastar dinheiro."
+  />
 
   <style>
     :root{
@@ -35,10 +39,18 @@
       --max:1120px;
     }
 
-    *{ box-sizing:border-box; }
-    html,body{ min-height:100%; }
+    *{
+      box-sizing:border-box;
+    }
+
+    html{
+      min-height:100%;
+      -webkit-text-size-adjust:100%;
+      scroll-behavior:smooth;
+    }
 
     body{
+      min-height:100vh;
       margin:0;
       font-family:Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       color:var(--gray-800);
@@ -49,7 +61,15 @@
       overflow-x:hidden;
     }
 
-    a{ color:inherit; text-decoration:none; }
+    img{
+      max-width:100%;
+      display:block;
+    }
+
+    a{
+      color:inherit;
+      text-decoration:none;
+    }
 
     .wrap{
       width:min(calc(100% - 24px), var(--max));
@@ -83,6 +103,7 @@
       border:1px solid rgba(124,58,237,.16);
       box-shadow:var(--shadow2);
       font-size:20px;
+      flex:0 0 auto;
     }
 
     .navRight{
@@ -105,11 +126,16 @@
       border-radius:999px;
       font-weight:900;
       white-space:nowrap;
-      transition:transform .15s ease, box-shadow .15s ease, background .15s ease;
+      transition:transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
     }
 
-    .btn:hover{ transform:translateY(-1px); }
-    .btn:active{ transform:translateY(1px); }
+    .btn:hover{
+      transform:translateY(-1px);
+    }
+
+    .btn:active{
+      transform:translateY(1px);
+    }
 
     .btnPrimary{
       color:#fff;
@@ -162,7 +188,9 @@
     }
 
     @media (min-width:768px){
-      .h1{ font-size:58px; }
+      .h1{
+        font-size:58px;
+      }
     }
 
     .gradText{
@@ -170,6 +198,7 @@
       -webkit-background-clip:text;
       background-clip:text;
       color:transparent;
+      -webkit-text-fill-color:transparent;
     }
 
     .lead{
@@ -244,7 +273,9 @@
     }
 
     @media (min-width:768px){
-      .h2{ font-size:40px; }
+      .h2{
+        font-size:40px;
+      }
     }
 
     .subP{
@@ -264,7 +295,9 @@
     }
 
     @media (min-width:960px){
-      .grid3{ grid-template-columns:repeat(3, 1fr); }
+      .grid3{
+        grid-template-columns:repeat(3, 1fr);
+      }
     }
 
     .grid2{
@@ -276,7 +309,9 @@
     }
 
     @media (min-width:960px){
-      .grid2{ grid-template-columns:repeat(2, 1fr); }
+      .grid2{
+        grid-template-columns:repeat(2, 1fr);
+      }
     }
 
     .card{
@@ -380,6 +415,7 @@
       color:#fff;
       background:linear-gradient(135deg, var(--violet-600), var(--pink-600));
       box-shadow:0 18px 40px rgba(124,58,237,.18);
+      flex:0 0 auto;
     }
 
     .flowT{
@@ -457,7 +493,9 @@
       color:var(--gray-900);
     }
 
-    summary::-webkit-details-marker{ display:none; }
+    summary::-webkit-details-marker{
+      display:none;
+    }
 
     .chev{
       width:26px;
@@ -483,6 +521,10 @@
       line-height:1.7;
     }
 
+    .faqBody p{
+      margin:0;
+    }
+
     .cta{
       padding:82px 0;
       background:linear-gradient(135deg, #7c3aed, #6d28d9, #db2777);
@@ -505,7 +547,9 @@
     }
 
     @media (min-width:768px){
-      .ctaH{ font-size:42px; }
+      .ctaH{
+        font-size:42px;
+      }
     }
 
     .ctaP{
@@ -527,8 +571,59 @@
       border-top:1px solid rgba(17,24,39,.06);
     }
 
+    .footer p{
+      margin:0;
+    }
+
     @media (max-width:900px){
       .heroCards{
+        grid-template-columns:1fr;
+      }
+    }
+
+    @media (max-width:767px){
+      .nav{
+        padding:14px 0;
+      }
+
+      .navRight{
+        width:100%;
+      }
+
+      .navRight .btn{
+        flex:1 1 100%;
+      }
+
+      .h1{
+        font-size:34px;
+      }
+
+      .lead{
+        font-size:16px;
+      }
+
+      .hero{
+        padding:22px 0 40px;
+      }
+
+      .sectionWhite,
+      .sectionSoft{
+        padding:54px 0;
+      }
+
+      .cta{
+        padding:60px 0;
+      }
+
+      .ctaH{
+        font-size:28px;
+      }
+
+      .ctaP{
+        font-size:16px;
+      }
+
+      .flowRow{
         grid-template-columns:1fr;
       }
     }
@@ -536,9 +631,9 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="nav">
+    <nav class="nav" aria-label="Navegação principal">
       <a class="brand" href="/profile" title="Voltar ao perfil">
-        <div class="logo">🪙</div>
+        <div class="logo" aria-hidden="true">🪙</div>
         <div>Meu Livro Mágico</div>
       </a>
 
@@ -546,346 +641,350 @@
         <a class="btn btnOutline" href="/profile">← Voltar ao perfil</a>
         <a class="btn btnPrimary" href="/create">✨ Criar novo livro</a>
       </div>
-    </div>
+    </nav>
   </div>
 
-  <section class="hero">
-    <div class="wrap">
-      <div class="heroCenter">
-        <div class="badge">🪙 Economize nas compras com sua carteira</div>
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <div class="heroCenter">
+          <div class="badge">🪙 Economize nas compras com sua carteira</div>
 
-        <h1 class="h1">
-          <span class="gradText">As moedas servem para você pagar menos</span><br/>
-          <span>ou até comprar sem gastar dinheiro</span>
-        </h1>
+          <h1 class="h1">
+            <span class="gradText">As moedas servem para você pagar menos</span><br />
+            <span>ou até comprar sem gastar dinheiro</span>
+          </h1>
 
-        <p class="lead">
-          O principal objetivo das moedas no Meu Livro Mágico é ajudar você a economizar nas compras dentro da plataforma.
-          Ao acumular saldo, você pode usar suas moedas para reduzir o valor do pedido ou, em alguns casos,
-          fazer a compra usando apenas as moedas da sua carteira.
-        </p>
-
-        <div class="heroCards">
-          <div class="heroCard">
-            <div class="heroCardLabel">Objetivo principal</div>
-            <div class="heroCardValue">Pagar menos nas compras</div>
-            <div class="heroCardSub">Use suas moedas para abater valor e deixar seus pedidos mais baratos.</div>
-          </div>
-
-          <div class="heroCard">
-            <div class="heroCardLabel">Melhor cenário</div>
-            <div class="heroCardValue">Comprar sem gastar dinheiro</div>
-            <div class="heroCardSub">Quando seu saldo for suficiente, você pode finalizar compras usando apenas moedas.</div>
-          </div>
-
-          <div class="heroCard">
-            <div class="heroCardLabel">Como entram</div>
-            <div class="heroCardValue">Pedidos + check-in + compra</div>
-            <div class="heroCardSub">Você pode acumular moedas por pedidos válidos, bônus de check-in e recargas compradas.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sectionWhite">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Para que servem as moedas</h2>
-        <p class="subP">
-          As moedas existem principalmente para transformar seu saldo em vantagem real na hora de comprar.
-        </p>
-      </div>
-
-      <div class="grid3">
-        <div class="card softPurple">
-          <div class="icon i1">🛍️</div>
-          <h3 class="cardT">Pagar menos no pedido</h3>
-          <p class="cardP">
-            O uso mais importante das moedas é reduzir o valor das suas compras dentro da plataforma, ajudando você a economizar de forma prática.
+          <p class="lead">
+            O principal objetivo das moedas no Meu Livro Mágico é ajudar você a economizar nas compras dentro da plataforma.
+            Ao acumular saldo, você pode usar suas moedas para reduzir o valor do pedido ou, em alguns casos,
+            fazer a compra usando apenas as moedas da sua carteira.
           </p>
-        </div>
 
-        <div class="card softPink">
-          <div class="icon i2">💸</div>
-          <h3 class="cardT">Comprar sem gastar dinheiro</h3>
-          <p class="cardP">
-            Quando o seu saldo em moedas for suficiente, você pode utilizar a carteira para concluir compras sem precisar pagar com dinheiro.
-          </p>
-        </div>
-
-        <div class="card softBlue">
-          <div class="icon i3">📊</div>
-          <h3 class="cardT">Controlar seu saldo</h3>
-          <p class="cardP">
-            Além de economizar, você acompanha com clareza quanto já acumulou, de onde vieram suas moedas e como usar melhor sua carteira.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sectionSoft">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Como obter moedas</h2>
-        <p class="subP">
-          Quanto mais moedas você acumula, maior é sua chance de pagar menos ou até fazer compras sem gastar dinheiro.
-        </p>
-      </div>
-
-      <div class="flow">
-        <div class="flowRow">
-          <div class="flowDot">🧾</div>
-          <div>
-            <h3 class="flowT">1) Pedidos concluídos</h3>
-            <p class="flowP">
-              Alguns pedidos válidos podem adicionar moedas à sua carteira. Essas moedas aparecem no resumo como
-              <b>“moedas vindas de pedidos”</b> e ajudam você a economizar nas próximas compras.
-            </p>
-            <div class="pillRow">
-              <span class="pill">Pedidos pagos / finalizados</span>
-              <span class="pill pill2">Entram na base da carteira</span>
+          <div class="heroCards">
+            <div class="heroCard">
+              <div class="heroCardLabel">Objetivo principal</div>
+              <div class="heroCardValue">Pagar menos nas compras</div>
+              <div class="heroCardSub">Use suas moedas para abater valor e deixar seus pedidos mais baratos.</div>
             </div>
-          </div>
-        </div>
 
-        <div class="flowRow">
-          <div class="flowDot">✅</div>
-          <div>
-            <h3 class="flowT">2) Check-in diário</h3>
-            <p class="flowP">
-              Ao entrar na sua conta e fazer check-in, você recebe moedas extras. O valor pode mudar conforme sua sequência
-              e também conforme seu nível atual, aumentando seu poder de compra dentro da plataforma.
-            </p>
-            <div class="pillRow">
-              <span class="pill">Bônus diário</span>
-              <span class="pill pill2">Sequência aumenta valor</span>
-              <span class="pill pill3">Nível influencia recompensa</span>
+            <div class="heroCard">
+              <div class="heroCardLabel">Melhor cenário</div>
+              <div class="heroCardValue">Comprar sem gastar dinheiro</div>
+              <div class="heroCardSub">Quando seu saldo for suficiente, você pode finalizar compras usando apenas moedas.</div>
             </div>
-          </div>
-        </div>
 
-        <div class="flowRow">
-          <div class="flowDot">➕</div>
-          <div>
-            <h3 class="flowT">3) Compra de moedas</h3>
-            <p class="flowP">
-              Você também pode comprar pacotes de moedas. Dependendo do seu nível, o sistema pode adicionar um
-              bônus extra na recarga, deixando sua carteira ainda mais forte para abater pedidos ou pagar compras completas.
-            </p>
-            <div class="pillRow">
-              <span class="pill">Pacotes de 10, 25, 50 e 100</span>
-              <span class="pill pill2">Pode ter bônus</span>
-              <span class="pill pill3">Crédito direto na carteira</span>
+            <div class="heroCard">
+              <div class="heroCardLabel">Como entram</div>
+              <div class="heroCardValue">Pedidos + check-in + compra</div>
+              <div class="heroCardSub">Você pode acumular moedas por pedidos válidos, bônus de check-in e recargas compradas.</div>
             </div>
           </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="sectionWhite">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Como usar suas moedas</h2>
-        <p class="subP">
-          A lógica da carteira foi feita para que seu saldo vire benefício real na hora da compra.
+    <section class="sectionWhite">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Para que servem as moedas</h2>
+          <p class="subP">
+            As moedas existem principalmente para transformar seu saldo em vantagem real na hora de comprar.
+          </p>
+        </div>
+
+        <div class="grid3">
+          <div class="card softPurple">
+            <div class="icon i1">🛍️</div>
+            <h3 class="cardT">Pagar menos no pedido</h3>
+            <p class="cardP">
+              O uso mais importante das moedas é reduzir o valor das suas compras dentro da plataforma, ajudando você a economizar de forma prática.
+            </p>
+          </div>
+
+          <div class="card softPink">
+            <div class="icon i2">💸</div>
+            <h3 class="cardT">Comprar sem gastar dinheiro</h3>
+            <p class="cardP">
+              Quando o seu saldo em moedas for suficiente, você pode utilizar a carteira para concluir compras sem precisar pagar com dinheiro.
+            </p>
+          </div>
+
+          <div class="card softBlue">
+            <div class="icon i3">📊</div>
+            <h3 class="cardT">Controlar seu saldo</h3>
+            <p class="cardP">
+              Além de economizar, você acompanha com clareza quanto já acumulou, de onde vieram suas moedas e como usar melhor sua carteira.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sectionSoft">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Como obter moedas</h2>
+          <p class="subP">
+            Quanto mais moedas você acumula, maior é sua chance de pagar menos ou até fazer compras sem gastar dinheiro.
+          </p>
+        </div>
+
+        <div class="flow">
+          <div class="flowRow">
+            <div class="flowDot">🧾</div>
+            <div>
+              <h3 class="flowT">1) Pedidos concluídos</h3>
+              <p class="flowP">
+                Alguns pedidos válidos podem adicionar moedas à sua carteira. Essas moedas aparecem no resumo como
+                <b>“moedas vindas de pedidos”</b> e ajudam você a economizar nas próximas compras.
+              </p>
+              <div class="pillRow">
+                <span class="pill">Pedidos pagos / finalizados</span>
+                <span class="pill pill2">Entram na base da carteira</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flowRow">
+            <div class="flowDot">✅</div>
+            <div>
+              <h3 class="flowT">2) Check-in diário</h3>
+              <p class="flowP">
+                Ao entrar na sua conta e fazer check-in, você recebe moedas extras. O valor pode mudar conforme sua sequência
+                e também conforme seu nível atual, aumentando seu poder de compra dentro da plataforma.
+              </p>
+              <div class="pillRow">
+                <span class="pill">Bônus diário</span>
+                <span class="pill pill2">Sequência aumenta valor</span>
+                <span class="pill pill3">Nível influencia recompensa</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flowRow">
+            <div class="flowDot">➕</div>
+            <div>
+              <h3 class="flowT">3) Compra de moedas</h3>
+              <p class="flowP">
+                Você também pode comprar pacotes de moedas. Dependendo do seu nível, o sistema pode adicionar um
+                bônus extra na recarga, deixando sua carteira ainda mais forte para abater pedidos ou pagar compras completas.
+              </p>
+              <div class="pillRow">
+                <span class="pill">Pacotes de 10, 25, 50 e 100</span>
+                <span class="pill pill2">Pode ter bônus</span>
+                <span class="pill pill3">Crédito direto na carteira</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sectionWhite">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Como usar suas moedas</h2>
+          <p class="subP">
+            A lógica da carteira foi feita para que seu saldo vire benefício real na hora da compra.
+          </p>
+        </div>
+
+        <div class="grid2">
+          <div class="card softGreen">
+            <div class="icon i4">🪙</div>
+            <h3 class="cardT">Abater valor do pedido</h3>
+            <p class="cardP">
+              Ao usar suas moedas, você pode reduzir o valor total da compra e pagar menos do próprio bolso.
+              Quanto maior seu saldo, maior pode ser a economia.
+            </p>
+          </div>
+
+          <div class="card softAmber">
+            <div class="icon i5">🎯</div>
+            <h3 class="cardT">Comprar usando apenas moedas</h3>
+            <p class="cardP">
+              Quando a quantidade de moedas disponível for suficiente para cobrir o valor necessário, a compra pode ser feita
+              sem gastar dinheiro, usando somente o saldo da sua carteira.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sectionSoft">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Como a carteira é organizada</h2>
+          <p class="subP">
+            Na sua página de perfil, a carteira separa as moedas por origem para você entender exatamente quanto tem disponível para usar nas compras.
+          </p>
+        </div>
+
+        <div class="grid3">
+          <div class="card softAmber">
+            <div class="icon i5">💰</div>
+            <h3 class="cardT">Saldo disponível</h3>
+            <p class="cardP">
+              Você acompanha quanto tem em carteira para usar na redução de pedidos ou em compras feitas com moedas.
+            </p>
+          </div>
+
+          <div class="card softBlue">
+            <div class="icon i3">📌</div>
+            <h3 class="cardT">Origem das moedas</h3>
+            <p class="cardP">
+              O sistema mostra as moedas que vieram de pedidos, bônus, check-in e recargas compradas.
+            </p>
+          </div>
+
+          <div class="card softPink">
+            <div class="icon i2">🧾</div>
+            <h3 class="cardT">Histórico de uso</h3>
+            <p class="cardP">
+              Você pode acompanhar as movimentações da carteira e entender como seu saldo foi acumulado e utilizado.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sectionWhite">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Níveis da conta e benefícios</h2>
+          <p class="subP">
+            Quanto mais você evolui na plataforma, melhores podem ser os bônus que ajudam a aumentar seu saldo e seu poder de economia.
+          </p>
+        </div>
+
+        <div class="grid3">
+          <div class="card softAmber">
+            <div class="icon i5">🥉</div>
+            <h3 class="cardT">Bronze</h3>
+            <p class="cardP">
+              Nível inicial. Você já participa do check-in diário e recebe bônus básico nas compras de moedas.
+            </p>
+          </div>
+
+          <div class="card softBlue">
+            <div class="icon i3">🥈</div>
+            <h3 class="cardT">Prata</h3>
+            <p class="cardP">
+              Com mais pedidos concluídos, seu check-in pode melhorar e o bônus de compra fica mais interessante.
+            </p>
+          </div>
+
+          <div class="card softPink">
+            <div class="icon i2">🥇</div>
+            <h3 class="cardT">Ouro</h3>
+            <p class="cardP">
+              É o nível mais alto. Aqui você aproveita os melhores bônus de check-in e compra disponíveis na conta.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sectionWhite">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2 class="h2">Dúvidas comuns sobre moedas</h2>
+          <p class="subP">As respostas abaixo ajudam o usuário a entender a carteira com mais confiança.</p>
+        </div>
+
+        <div class="faq">
+          <details>
+            <summary>
+              Qual é o principal objetivo das moedas?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>O principal objetivo das moedas é ajudar você a pagar menos nas compras dentro da plataforma ou, quando tiver saldo suficiente, comprar sem gastar dinheiro.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              As moedas têm relação com meus pedidos?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Sim. Parte do saldo pode vir de pedidos válidos e concluídos, dependendo das regras configuradas na plataforma, e depois esse saldo pode ser usado nas próximas compras.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Posso ganhar moedas sem comprar?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Sim. Você pode receber moedas por pedidos válidos e também pelo check-in diário, conforme sua conta e seu nível.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Posso usar moedas para diminuir o valor da compra?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Sim. As moedas podem ser usadas para abater parte do valor do pedido, reduzindo quanto você precisa pagar em dinheiro.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Posso comprar usando somente moedas?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Sim. Quando seu saldo em moedas for suficiente para cobrir o valor necessário da compra, o pedido pode ser concluído usando apenas as moedas da sua carteira.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Comprar moedas aumenta meu saldo na hora?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Após a confirmação do pagamento, o crédito da compra é somado na carteira, incluindo eventual bônus do seu nível.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Onde acompanho tudo isso?
+              <span class="chev">⌄</span>
+            </summary>
+            <div class="faqBody">
+              <p>Tudo fica centralizado na sua página de perfil: saldo disponível, nível, progresso, check-in, atividades e ações rápidas.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="ctaBox">
+        <h2 class="ctaH">Agora você sabe: moedas servem para economizar de verdade</h2>
+        <p class="ctaP">
+          Volte ao perfil para acompanhar seu saldo, fazer check-in diário, comprar moedas e usar sua carteira para pagar menos ou até comprar sem gastar dinheiro.
         </p>
-      </div>
-
-      <div class="grid2">
-        <div class="card softGreen">
-          <div class="icon i4">🪙</div>
-          <h3 class="cardT">Abater valor do pedido</h3>
-          <p class="cardP">
-            Ao usar suas moedas, você pode reduzir o valor total da compra e pagar menos do próprio bolso.
-            Quanto maior seu saldo, maior pode ser a economia.
-          </p>
-        </div>
-
-        <div class="card softAmber">
-          <div class="icon i5">🎯</div>
-          <h3 class="cardT">Comprar usando apenas moedas</h3>
-          <p class="cardP">
-            Quando a quantidade de moedas disponível for suficiente para cobrir o valor necessário, a compra pode ser feita
-            sem gastar dinheiro, usando somente o saldo da sua carteira.
-          </p>
+        <div>
+          <a class="btn btnOutline" href="/profile" style="background:#fff;color:#6d28d9;border:none;">
+            🪙 Voltar para minha carteira
+          </a>
         </div>
       </div>
-    </div>
-  </section>
-
-  <section class="sectionSoft">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Como a carteira é organizada</h2>
-        <p class="subP">
-          Na sua página de perfil, a carteira separa as moedas por origem para você entender exatamente quanto tem disponível para usar nas compras.
-        </p>
-      </div>
-
-      <div class="grid3">
-        <div class="card softAmber">
-          <div class="icon i5">💰</div>
-          <h3 class="cardT">Saldo disponível</h3>
-          <p class="cardP">
-            Você acompanha quanto tem em carteira para usar na redução de pedidos ou em compras feitas com moedas.
-          </p>
-        </div>
-
-        <div class="card softBlue">
-          <div class="icon i3">📌</div>
-          <h3 class="cardT">Origem das moedas</h3>
-          <p class="cardP">
-            O sistema mostra as moedas que vieram de pedidos, bônus, check-in e recargas compradas.
-          </p>
-        </div>
-
-        <div class="card softPink">
-          <div class="icon i2">🧾</div>
-          <h3 class="cardT">Histórico de uso</h3>
-          <p class="cardP">
-            Você pode acompanhar as movimentações da carteira e entender como seu saldo foi acumulado e utilizado.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sectionWhite">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Níveis da conta e benefícios</h2>
-        <p class="subP">
-          Quanto mais você evolui na plataforma, melhores podem ser os bônus que ajudam a aumentar seu saldo e seu poder de economia.
-        </p>
-      </div>
-
-      <div class="grid3">
-        <div class="card softAmber">
-          <div class="icon i5">🥉</div>
-          <h3 class="cardT">Bronze</h3>
-          <p class="cardP">
-            Nível inicial. Você já participa do check-in diário e recebe bônus básico nas compras de moedas.
-          </p>
-        </div>
-
-        <div class="card softBlue">
-          <div class="icon i3">🥈</div>
-          <h3 class="cardT">Prata</h3>
-          <p class="cardP">
-            Com mais pedidos concluídos, seu check-in pode melhorar e o bônus de compra fica mais interessante.
-          </p>
-        </div>
-
-        <div class="card softPink">
-          <div class="icon i2">🥇</div>
-          <h3 class="cardT">Ouro</h3>
-          <p class="cardP">
-            É o nível mais alto. Aqui você aproveita os melhores bônus de check-in e compra disponíveis na conta.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sectionWhite">
-    <div class="wrap">
-      <div class="sectionHead">
-        <h2 class="h2">Dúvidas comuns sobre moedas</h2>
-        <p class="subP">As respostas abaixo ajudam o usuário a entender a carteira com mais confiança.</p>
-      </div>
-
-      <div class="faq">
-        <details>
-          <summary>
-            Qual é o principal objetivo das moedas?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>O principal objetivo das moedas é ajudar você a pagar menos nas compras dentro da plataforma ou, quando tiver saldo suficiente, comprar sem gastar dinheiro.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            As moedas têm relação com meus pedidos?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. Parte do saldo pode vir de pedidos válidos e concluídos, dependendo das regras configuradas na plataforma, e depois esse saldo pode ser usado nas próximas compras.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Posso ganhar moedas sem comprar?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. Você pode receber moedas por pedidos válidos e também pelo check-in diário, conforme sua conta e seu nível.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Posso usar moedas para diminuir o valor da compra?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. As moedas podem ser usadas para abater parte do valor do pedido, reduzindo quanto você precisa pagar em dinheiro.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Posso comprar usando somente moedas?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Sim. Quando seu saldo em moedas for suficiente para cobrir o valor necessário da compra, o pedido pode ser concluído usando apenas as moedas da sua carteira.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Comprar moedas aumenta meu saldo na hora?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Após a confirmação do pagamento, o crédito da compra é somado na carteira, incluindo eventual bônus do seu nível.</p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Onde acompanho tudo isso?
-            <span class="chev">⌄</span>
-          </summary>
-          <div class="faqBody">
-            <p>Tudo fica centralizado na sua página de perfil: saldo disponível, nível, progresso, check-in, atividades e ações rápidas.</p>
-          </div>
-        </details>
-      </div>
-    </div>
-  </section>
-
-  <section class="cta">
-    <div class="ctaBox">
-      <h2 class="ctaH">Agora você sabe: moedas servem para economizar de verdade</h2>
-      <p class="ctaP">
-        Volte ao perfil para acompanhar seu saldo, fazer check-in diário, comprar moedas e usar sua carteira para pagar menos ou até comprar sem gastar dinheiro.
-      </p>
-      <div>
-        <a class="btn btnOutline" href="/profile" style="background:#fff;color:#6d28d9;border:none;">🪙 Voltar para minha carteira</a>
-      </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
   <footer class="footer">
     <div class="wrap">
-      <p style="margin:0">
+      <p>
         Meu Livro Mágico •
         <a href="/profile" style="text-decoration:underline;">Perfil</a> •
         <a href="/create" style="text-decoration:underline;">Criar livro</a>
