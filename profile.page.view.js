@@ -72,6 +72,7 @@ ${pageCss}
             <button class="btn btnPrimary" id="btnGoWalletHero">🪙 Abrir carteira</button>
             <a class="btn btnSuccess" href="/create">✨ Criar novo livro mágico</a>
             <a class="btn btnSoft" href="/books">📚 Ver minha biblioteca</a>
+            <a class="btn btnCoinsHelp" href="/coins-info">❓ Para que servem as moedas</a>
           </div>
 
           <div class="heroStats">
@@ -126,6 +127,15 @@ ${pageCss}
               <button class="btn btnSoft" id="btnGoOrdersQuick">🧾 Pedidos</button>
               <button class="btn btnSoft" id="btnGoBooksQuick">📚 Livros</button>
             </div>
+
+            <div class="helpCoinsCard">
+              <div class="helpCoinsEyebrow">🪙 Carteira</div>
+              <h3 class="helpCoinsTitle">Ainda com dúvida sobre as moedas?</h3>
+              <p class="helpCoinsText">
+                Veja uma explicação simples sobre como ganhar, comprar, acompanhar e sacar seu saldo.
+              </p>
+              <a class="helpCoinsBtn" href="/coins-info">Ver explicação das moedas</a>
+            </div>
           </div>
         </aside>
       </div>
@@ -145,6 +155,14 @@ ${pageCss}
             <span class="badge amber" id="walletLevelBadge">—</span>
             <span class="badge violet" id="walletStreakBadge">Sequência: 0</span>
           </div>
+        </div>
+
+        <div class="walletInfoBanner">
+          <div class="walletInfoBannerText">
+            <strong>Não entendeu ainda como as moedas funcionam?</strong>
+            <span>Abra a página explicativa e veja para que servem, como obter e como acompanhar seu saldo.</span>
+          </div>
+          <a class="walletInfoBannerBtn" href="/coins-info">❓ Para que servem as moedas</a>
         </div>
 
         <div class="walletShell">
@@ -290,6 +308,7 @@ ${pageCss}
             <div class="actionRow">
               <a class="linkBtn primaryLink" href="/create">✨ Criar novo livro</a>
               <a class="linkBtn infoLink" href="/parceiros">🔗 Conhecer parceiros</a>
+              <a class="linkBtn coinsInfoLink" href="/coins-info">❓ Entender moedas</a>
             </div>
           </div>
         </div>

@@ -8,16 +8,17 @@ const LANDING_HTML = path.join(__dirname, "landing.html");
 const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
 const EXEMPLOS_HTML = path.join(__dirname, "exemplos.html");
 const PREVIEW_HTML = path.join(__dirname, "preview.html");
+const COINS_INFO_HTML = path.join(__dirname, "coins-info.html");
 
 module.exports = function mountPages(app) {
   // Middleware para capturar referência de parceiro (cookies)
   app.use((req, res, next) => {
     if (req.query.ref) {
-      res.cookie('partner_ref', req.query.ref, {
+      res.cookie("partner_ref", req.query.ref, {
         maxAge: 30 * 24 * 60 * 60 * 1000,
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
       });
       res.locals.partnerRef = req.query.ref;
     } else {
@@ -27,7 +28,12 @@ module.exports = function mountPages(app) {
   });
 
   // Servir arquivos estáticos de exemplos
-  app.use("/examples", express.static(path.join(__dirname, "public/examples"), { fallthrough: true }));
+  app.use(
+    "/examples",
+    express.static(path.join(__dirname, "public/examples"), {
+      fallthrough: true,
+    })
+  );
 
   // ========== Páginas de parceiros (já modulares) ==========
   require("./partners.central.page.js")(app);
@@ -46,7 +52,7 @@ module.exports = function mountPages(app) {
   mountAdminPage(app, {
     OUT_DIR: core.OUT_DIR,
     USERS_FILE: core.USERS_FILE,
-    requireAuth: core.requireAuth
+    requireAuth: core.requireAuth,
   });
 
   // ========== Login ==========
@@ -299,6 +305,52 @@ module.exports = function mountPages(app) {
 </html>`);
   });
 
+  // ========== Página explicativa das moedas ==========
+  app.get("/coins-info", (req, res) => {
+    if (fs.existsSync(COINS_INFO_HTML)) return res.sendFile(COINS_INFO_HTML);
+    res.type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Moedas — Meu Livro Mágico</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827;}
+  .card{max-width:860px;margin:24px;padding:24px;border-radius:18px;background:#fff;border:1px solid rgba(0,0,0,.08);box-shadow:0 20px 50px rgba(0,0,0,.10);}
+  h1{margin:0 0 10px 0;font-size:28px;}
+  p{opacity:.92;line-height:1.7;margin:0 0 12px 0;font-weight:700;}
+  ul{margin:10px 0 0; padding-left:18px; line-height:1.7; font-weight:800;}
+  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#f97316);color:#fff;text-decoration:none;font-weight:1000;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+  .muted{opacity:.7;font-size:12px;margin-top:10px;font-weight:800;}
+  code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:8px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🪙 Para que servem as moedas</h1>
+    <p>As moedas organizam o saldo e as recompensas da sua carteira dentro da plataforma.</p>
+    <ul>
+      <li>1) Você pode ganhar moedas por pedidos válidos</li>
+      <li>2) Você pode receber moedas no check-in diário</li>
+      <li>3) Você pode comprar pacotes de moedas</li>
+      <li>4) Você acompanha tudo na sua carteira do perfil</li>
+      <li>5) Pode solicitar saque do saldo disponível</li>
+    </ul>
+
+    <div class="row">
+      <a class="btn" href="/profile">🪙 Ir para minha carteira</a>
+      <a class="btn" href="/create">✨ Criar livro</a>
+    </div>
+
+    <div class="muted">
+      Dica: crie um arquivo <code>coins-info.html</code> ao lado do <code>app.js</code> para personalizar esta página.
+    </div>
+  </div>
+</body>
+</html>`);
+  });
+
   // ========== Exemplos ==========
   app.get("/exemplos", (req, res) => {
     if (fs.existsSync(EXEMPLOS_HTML)) return res.sendFile(EXEMPLOS_HTML);
@@ -314,9 +366,14 @@ module.exports = function mountPages(app) {
   app.get("/create", core.requireAuth, (req, res) => renderGeneratorHtml(req, res));
 
   function renderGeneratorHtml(req, res) {
-    const imageInfo = core.IMAGE_PROVIDER === "replicate"
-      ? `Replicate: <span class="mono">${core.escapeHtml(core.REPLICATE_MODEL)}</span>`
-      : `OpenAI (fallback): <span class="mono">${core.escapeHtml(core.IMAGE_MODEL)}</span>`;
+    const imageInfo =
+      core.IMAGE_PROVIDER === "replicate"
+        ? `Replicate: <span class="mono">${core.escapeHtml(
+            core.REPLICATE_MODEL
+          )}</span>`
+        : `OpenAI (fallback): <span class="mono">${core.escapeHtml(
+            core.IMAGE_MODEL
+          )}</span>`;
 
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
@@ -536,6 +593,7 @@ module.exports = function mountPages(app) {
         <a class="pill" href="/sales">🛒 Pagina Inicial</a>
         <a class="pill" href="/books">📚 Meus Livros</a>
         <a class="pill" href="/como-funciona">❓ Como funciona</a>
+        <a class="pill" href="/coins-info">🪙 Para que servem as moedas</a>
         <button class="pill" id="btnReset" style="cursor:pointer">♻️ Reiniciar</button>
         <button class="pill" id="btnProfile" style="cursor:pointer">👤 Perfil</button>
         <button class="pill" id="btnLogout" style="cursor:pointer">🚪 Sair</button>
@@ -1013,7 +1071,7 @@ module.exports = function mountPages(app) {
 </html>`);
   }
 
-  // ========== Página de geração em andamento (CORRIGIDA) ==========
+  // ========== Página de geração em andamento ==========
   app.get("/generate", core.requireAuth, async (req, res) => {
     const bookId = String(req.query?.id || "").trim();
 
@@ -1041,9 +1099,9 @@ module.exports = function mountPages(app) {
   .imgCard{border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}
   .imgCard img{width:100%;display:block}
   .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-  a.btn{display:inline-flex;align-items:center;gap:10px;padding:12px 14px;border-radius:999px;text-decoration:none;font-weight:1000}
+  a.btn, button.btn{display:inline-flex;align-items:center;gap:10px;padding:12px 14px;border-radius:999px;text-decoration:none;font-weight:1000;border:none;cursor:pointer}
   a.primary{background:linear-gradient(90deg,var(--violet),var(--pink));color:#fff}
-  a.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
+  a.ghost, button.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
 </style>
 </head>
 <body>
@@ -1109,7 +1167,6 @@ module.exports = function mountPages(app) {
     }
 
     try {
-      // 1. Chama generateNext e verifica a resposta
       const genRes = await fetch("/api/generateNext", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1117,7 +1174,6 @@ module.exports = function mountPages(app) {
       });
       const genData = await genRes.json().catch(() => ({}));
 
-      // Se houver nextTryAt e for no futuro, aguarda
       if (genData.nextTryAt && genData.nextTryAt > Date.now()) {
         const waitMs = genData.nextTryAt - Date.now();
         setSub(\`⏳ Aguardando \${Math.round(waitMs / 1000)}s para nova tentativa...\`);
@@ -1126,7 +1182,6 @@ module.exports = function mountPages(app) {
         return;
       }
 
-      // 2. Busca o status atual
       const r = await fetch("/api/status/" + encodeURIComponent(bookId));
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
@@ -1177,51 +1232,53 @@ module.exports = function mountPages(app) {
 </html>`);
   });
 
-  // ========== Preview do livro ==========
-// ========== Preview do livro (REDIRECIONA PARA O NOVO PREVIEW) ==========
-app.get("/preview", core.requireAuth, async (req, res) => {
-  try {
-    const userId = String(req.user?.id || "");
-    if (!userId) {
-      return res.redirect("/login?next=" + encodeURIComponent(req.originalUrl || "/books"));
+  // ========== Preview do livro (redireciona para o preview novo) ==========
+  app.get("/preview", core.requireAuth, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || "");
+      if (!userId) {
+        return res.redirect(
+          "/login?next=" + encodeURIComponent(req.originalUrl || "/books")
+        );
+      }
+
+      const id = String(req.query?.id || "").trim();
+      if (!id) {
+        return res
+          .status(400)
+          .type("html")
+          .send("<h1>ID ausente</h1><p>Use /preview?id=...</p>");
+      }
+
+      const m = await core.loadManifestAsViewer(userId, id, req.user);
+      if (!m) {
+        return res.status(404).type("html").send("<h1>Livro não encontrado</h1>");
+      }
+
+      if (!core.canAccessBook(userId, m, req.user)) {
+        return res.status(403).type("html").send("<h1>Forbidden</h1>");
+      }
+
+      if (m.status !== "done") {
+        return res.redirect("/generate?id=" + encodeURIComponent(id));
+      }
+
+      return res.redirect("/books/" + encodeURIComponent(id));
+    } catch (e) {
+      res.status(500).type("html").send(
+        "<h1>Erro no preview</h1><pre>" +
+          core.escapeHtml(String(e?.message || e || "Erro")) +
+          "</pre>"
+      );
     }
+  });
 
-    const id = String(req.query?.id || "").trim();
-    if (!id) {
-      return res.status(400).type("html").send("<h1>ID ausente</h1><p>Use /preview?id=...</p>");
-    }
-
-    const m = await core.loadManifestAsViewer(userId, id, req.user);
-    if (!m) {
-      return res.status(404).type("html").send("<h1>Livro não encontrado</h1>");
-    }
-
-    if (!core.canAccessBook(userId, m, req.user)) {
-      return res.status(403).type("html").send("<h1>Forbidden</h1>");
-    }
-
-    // se ainda estiver gerando
-    if (m.status !== "done") {
-      return res.redirect("/generate?id=" + encodeURIComponent(id));
-    }
-
-    // ✅ preview agora usa o sistema novo
-    return res.redirect("/books/" + encodeURIComponent(id));
-
-  } catch (e) {
-    res.status(500).type("html").send(
-      "<h1>Erro no preview</h1><pre>" +
-      core.escapeHtml(String(e?.message || e || "Erro")) +
-      "</pre>"
-    );
-  }
-});
-  // ========== Galeria de livros (rota já existente em módulo separado) ==========
+  // ========== Galeria de livros (rota em módulo separado) ==========
   const mountBooksRoutes = require("./books/routes.js");
-mountBooksRoutes(app, {
-  OUT_DIR: core.OUT_DIR,
-  USERS_DIR: core.USERS_DIR,
-  requireAuth: core.requireAuth,
-  supabaseAdmin: core.supabaseAdmin
-});
+  mountBooksRoutes(app, {
+    OUT_DIR: core.OUT_DIR,
+    USERS_DIR: core.USERS_DIR,
+    requireAuth: core.requireAuth,
+    supabaseAdmin: core.supabaseAdmin,
+  });
 };

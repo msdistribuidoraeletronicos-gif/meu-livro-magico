@@ -1739,11 +1739,231 @@ function PROFILE_PAGE_CSS() {
     justify-content:flex-end;
     padding:0 18px 18px;
   }
+      .btnCoinsHelp{
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 38px rgba(245,158,11,.22);
+  }
+
+  .helpCoinsCard{
+    margin-top:2px;
+    border-radius:22px;
+    padding:18px;
+    background:
+      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
+      linear-gradient(180deg, #fff, #fff9f2);
+    border:1px solid rgba(245,158,11,.16);
+    box-shadow:var(--shadow-1);
+  }
+
+  .helpCoinsEyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    min-height:32px;
+    padding:0 12px;
+    border-radius:999px;
+    background:rgba(245,158,11,.12);
+    color:#92400e;
+    font-size:12px;
+    font-weight:1000;
+    border:1px solid rgba(245,158,11,.14);
+  }
+
+  .helpCoinsTitle{
+    margin:12px 0 0;
+    font-size:20px;
+    line-height:1.15;
+    letter-spacing:-.02em;
+    font-weight:1000;
+    color:var(--ink);
+  }
+
+  .helpCoinsText{
+    margin:10px 0 0;
+    color:var(--muted-2);
+    line-height:1.7;
+    font-weight:700;
+    font-size:14px;
+  }
+
+  .helpCoinsBtn{
+    margin-top:14px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:48px;
+    padding:12px 16px;
+    border-radius:15px;
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 36px rgba(245,158,11,.20);
+    font-weight:1000;
+    transition:transform .14s ease, box-shadow .14s ease;
+  }
+
+  .helpCoinsBtn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 18px 40px rgba(245,158,11,.24);
+  }
+
+  .walletInfoBanner{
+    margin-bottom:18px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    flex-wrap:wrap;
+    border-radius:22px;
+    padding:16px 18px;
+    background:
+      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
+      linear-gradient(180deg, #fff, #fff8ef);
+    border:1px solid rgba(245,158,11,.16);
+    box-shadow:var(--shadow-1);
+  }
+
+  .walletInfoBannerText{
+    display:grid;
+    gap:6px;
+    min-width:0;
+  }
+
+  .walletInfoBannerText strong{
+    font-size:16px;
+    line-height:1.35;
+    color:var(--ink);
+    font-weight:1000;
+  }
+
+  .walletInfoBannerText span{
+    color:var(--muted-2);
+    line-height:1.6;
+    font-weight:700;
+    font-size:14px;
+  }
+
+  .walletInfoBannerBtn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:48px;
+    padding:12px 16px;
+    border-radius:15px;
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 36px rgba(245,158,11,.20);
+    font-weight:1000;
+    white-space:nowrap;
+    transition:transform .14s ease, box-shadow .14s ease;
+  }
+
+  .walletInfoBannerBtn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 18px 40px rgba(245,158,11,.24);
+  }
+
+  .linkBtn.coinsInfoLink{
+    color:#fff;
+    border:none;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+  }
+
+  .hidden{
+    display:none !important;
+  }
+
+  .toastWrap{
+    position:fixed;
+    right:16px;
+    bottom:16px;
+    z-index:120;
+    display:grid;
+    gap:10px;
+    pointer-events:none;
+  }
+
+  .toast{
+    min-width:280px;
+    max-width:360px;
+    border-radius:18px;
+    padding:14px 16px;
+    background:rgba(17,24,39,.94);
+    color:#fff;
+    box-shadow:0 22px 60px rgba(0,0,0,.26);
+    opacity:0;
+    transform:translateY(10px);
+    transition:opacity .22s ease, transform .22s ease;
+    pointer-events:auto;
+  }
+
+  .toast.show{
+    opacity:1;
+    transform:translateY(0);
+  }
+
+  .toastTitle{
+    font-weight:1000;
+    line-height:1.35;
+  }
+
+  .toastText{
+    margin-top:4px;
+    color:rgba(255,255,255,.84);
+    line-height:1.55;
+    font-size:14px;
+    font-weight:700;
+  }
+
+  .spin{
+    width:16px;
+    height:16px;
+    border-radius:999px;
+    border:2px solid rgba(255,255,255,.35);
+    border-top-color:#fff;
+    display:inline-block;
+    animation:spin .7s linear infinite;
+  }
+
+  @keyframes spin{
+    to{ transform:rotate(360deg); }
+  }
+
+  .footerSpace{
+    height:28px;
+  }
 
   @media (max-width: 980px){
     #buyModal .buyPopupTop{
       grid-template-columns:1fr;
     }
+
+    #buyModal .buyPopupHighlights{
+      grid-template-columns:1fr;
+    }
+
+    #buyModal .buyPopupGrid{
+      grid-template-columns:1fr;
+    }
+
+    #buyModal .buyPopupIntro h3{
+      font-size:30px;
+    }
+
+    .heroGrid,
+    .walletShell,
+    .promoGrid,
+    .twoCols,
+    .threeCols{
+      grid-template-columns:1fr;
+    }
+
+    .summaryGrid{
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+    }
+  }
 
     #buyModal .buyPopupHighlights{
       grid-template-columns:1fr;
@@ -1763,6 +1983,93 @@ function PROFILE_PAGE_CSS() {
       padding:8px;
       align-items:flex-end;
     }
+
+    #buyModal .buyPopup{
+      width:100%;
+      max-height:94vh;
+      border-radius:22px 22px 0 0;
+    }
+
+    #buyModal .buyPopupHero{
+      padding:16px 14px 14px;
+    }
+
+    #buyModal .buyPopupGrid{
+      padding:14px;
+      gap:12px;
+    }
+
+    #buyModal .buyPopupFooter,
+    #buyModal .buyPopupActions{
+      padding-left:14px;
+      padding-right:14px;
+    }
+
+    #buyModal .buyPopupIntro h3{
+      font-size:24px;
+    }
+
+    #buyModal .buyOption{
+      padding:15px;
+      border-radius:18px;
+    }
+
+    #buyModal .buyOptionTitle{
+      font-size:24px;
+    }
+
+    #buyModal .buyOptionPrice strong{
+      font-size:26px;
+    }
+
+    #buyModal .buyOptionRibbon{
+      right:-40px;
+      font-size:10px;
+    }
+
+    .heroMain,
+    .heroSide,
+    .sectionCard,
+    .walletMain,
+    .walletSide,
+    .panel,
+    .modal{
+      padding:16px;
+      border-radius:20px;
+    }
+
+    .summaryGrid,
+    .benefitGrid,
+    .tierGrid,
+    .heroStats{
+      grid-template-columns:1fr;
+    }
+
+    .tabs{
+      top:74px;
+    }
+
+    .walletInfoBanner{
+      align-items:flex-start;
+    }
+
+    .walletInfoBannerBtn,
+    .helpCoinsBtn{
+      width:100%;
+    }
+
+    .toastWrap{
+      left:12px;
+      right:12px;
+      bottom:12px;
+    }
+
+    .toast{
+      min-width:0;
+      max-width:none;
+      width:100%;
+    }
+  }
 
     #buyModal .buyPopup{
       width:100%;
