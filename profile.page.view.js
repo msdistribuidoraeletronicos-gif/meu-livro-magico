@@ -665,145 +665,180 @@ ${pageCss}
   </div>
 
   <div class="modalBackdrop" id="buyModal">
-    <div class="modal buyModalWide" role="dialog" aria-modal="true" aria-labelledby="buyTitle">
-      <div class="buyHero">
-        <div class="buyHeroTop">
-          <div>
-            <div class="buyEyebrow">🪙 Recarregue sua carteira</div>
-            <h3 id="buyTitle">Escolha o pacote ideal para continuar criando</h3>
-            <p class="buyHeroText">
-              Quanto maior o pacote, melhor a percepção de valor. O bônus do seu nível atual
-              aparece em cada opção para ajudar na decisão.
-            </p>
+    <div class="modal buyModalWide buyModalSales" role="dialog" aria-modal="true" aria-labelledby="buyTitle">
+      <div class="buyModalShell">
+        <div class="buyHero">
+          <div class="buyHeroGlow buyHeroGlow1"></div>
+          <div class="buyHeroGlow buyHeroGlow2"></div>
+
+          <div class="buyHeroTop">
+            <div class="buyHeroContent">
+              <div class="buyEyebrow">🪙 Recarregue sua carteira</div>
+              <h3 id="buyTitle">Escolha seu pacote e continue criando histórias sem parar</h3>
+              <p class="buyHeroText">
+                Ganhe mais saldo, aproveite o bônus do seu nível e escolha a opção com melhor vantagem para você.
+              </p>
+
+              <div class="buyTrustRow">
+                <span class="buyTrustPill">✨ Liberação rápida</span>
+                <span class="buyTrustPill">🔒 Pagamento seguro</span>
+                <span class="buyTrustPill">🎁 Bônus do seu nível</span>
+              </div>
+            </div>
+
+            <div class="buyLevelBox">
+              <div class="buyLevelLabel">Seu nível atual</div>
+              <div class="buyLevelValue" id="buyCurrentLevelText">—</div>
+              <div class="buyLevelSub">
+                bônus de compra:
+                <strong id="buyBonusPercentText">—</strong>
+              </div>
+              <div class="buyLevelBadge" id="buyLevelBadgeModal">Nível atual: —</div>
+            </div>
           </div>
 
-          <div class="buyLevelBadge" id="buyLevelBadgeModal">Nível atual: —</div>
-        </div>
-
-        <div class="buyInfoStrip">
-          <div class="buyInfoItem">
-            <span class="buyInfoLabel">Seu nível</span>
-            <strong id="buyCurrentLevelText">—</strong>
-          </div>
-          <div class="buyInfoItem">
-            <span class="buyInfoLabel">Bônus de compra</span>
-            <strong id="buyBonusPercentText">—</strong>
-          </div>
-          <div class="buyInfoItem">
-            <span class="buyInfoLabel">Melhor custo-benefício</span>
-            <strong>Pacote Pro</strong>
-          </div>
-        </div>
-      </div>
-
-      <div class="buyGrid buyGridEnhanced">
-        <div class="buyCard buyCardLite">
-          <div class="buyTag">Entrada</div>
-          <div class="buyCardTitle">Pacote Essencial</div>
-          <div class="buyCardSub">10 moedas</div>
-          <div class="buyCardBonus" id="bonus-pack-10">+ bônus do seu nível</div>
-
-          <div class="buyCardPrice">
-            <span class="buyPriceNow">R$ 10</span>
-          </div>
-
-          <div class="buyCardTotal" id="total-pack-10">Você recebe — moedas</div>
-
-          <ul class="buyFeatureList">
-            <li>Ideal para começar</li>
-            <li>Compra rápida</li>
-            <li>Menor investimento</li>
-          </ul>
-
-          <div class="actionRow">
-            <button class="btn btnSoft buyPackBtn" data-pack="10">Escolher Essencial</button>
+          <div class="buyInfoStrip">
+            <div class="buyInfoItem">
+              <span class="buyInfoLabel">Para testar</span>
+              <strong>Essencial</strong>
+            </div>
+            <div class="buyInfoItem buyInfoFeatured">
+              <span class="buyInfoLabel">Mais escolhido</span>
+              <strong>Pacote Pro</strong>
+            </div>
+            <div class="buyInfoItem">
+              <span class="buyInfoLabel">Maior saldo</span>
+              <strong>Master</strong>
+            </div>
           </div>
         </div>
 
-        <div class="buyCard buyCardFeatured">
-          <div class="buyRibbon">⭐ Mais vantajoso</div>
-          <div class="buyTag buyTagHot">Mais popular</div>
-          <div class="buyCardTitle">Pacote Pro</div>
-          <div class="buyCardSub">25 moedas</div>
-          <div class="buyCardBonus" id="bonus-pack-25">+ bônus do seu nível</div>
+        <div class="buyGrid buyGridEnhanced">
+          <div class="buyCard buyCardLite">
+            <div class="buyCardHead">
+              <div class="buyTag">Entrada</div>
+              <div class="buyMiniBadge">Ideal para começar</div>
+            </div>
 
-          <div class="buyCardPrice">
-            <span class="buyPriceOld">R$ 30</span>
-            <span class="buyPriceNow">R$ 25</span>
+            <div class="buyCardTitle">Pacote Essencial</div>
+            <div class="buyCardSub">10 moedas</div>
+            <div class="buyCardBonus" id="bonus-pack-10">+ bônus do seu nível</div>
+
+            <div class="buyCardPrice">
+              <span class="buyPriceNow">R$ 10</span>
+            </div>
+
+            <div class="buyCardTotal" id="total-pack-10">Você recebe — moedas</div>
+
+            <ul class="buyFeatureList">
+              <li>Entrada mais leve</li>
+              <li>Compra rápida</li>
+              <li>Bom para testar</li>
+            </ul>
+
+            <div class="buyCardFooter">
+              <button class="btn btnSoft buyPackBtn" data-pack="10">Escolher Essencial</button>
+            </div>
           </div>
 
-          <div class="buyCardTotal" id="total-pack-25">Você recebe — moedas</div>
+          <div class="buyCard buyCardFeatured">
+            <div class="buyRibbon">⭐ Melhor escolha</div>
 
-          <ul class="buyFeatureList">
-            <li>Melhor equilíbrio entre custo e valor</li>
-            <li>Mais moedas por compra</li>
-            <li>Escolha ideal para uso frequente</li>
-          </ul>
+            <div class="buyCardHead">
+              <div class="buyTag buyTagHot">Mais popular</div>
+              <div class="buyMiniBadge buyMiniBadgeHot">Mais vantagem</div>
+            </div>
 
-          <div class="actionRow">
-            <button class="btn btnPrimary buyPackBtn" data-pack="25">Quero o Pro</button>
+            <div class="buyCardTitle">Pacote Pro</div>
+            <div class="buyCardSub">25 moedas</div>
+            <div class="buyCardBonus" id="bonus-pack-25">+ bônus do seu nível</div>
+
+            <div class="buyCardPrice">
+              <span class="buyPriceOld">R$ 30</span>
+              <span class="buyPriceNow">R$ 25</span>
+            </div>
+
+            <div class="buyCardTotal buyCardTotalFeatured" id="total-pack-25">Você recebe — moedas</div>
+
+            <ul class="buyFeatureList">
+              <li>Melhor equilíbrio entre valor e custo</li>
+              <li>Mais saldo por compra</li>
+              <li>Ideal para quem cria com frequência</li>
+            </ul>
+
+            <div class="buyCardFooter">
+              <button class="btn btnPrimary buyPackBtn" data-pack="25">Quero o Pro</button>
+            </div>
+          </div>
+
+          <div class="buyCard buyCardStrong">
+            <div class="buyCardHead">
+              <div class="buyTag">Avançado</div>
+              <div class="buyMiniBadge">Uso recorrente</div>
+            </div>
+
+            <div class="buyCardTitle">Pacote Turbo</div>
+            <div class="buyCardSub">50 moedas</div>
+            <div class="buyCardBonus" id="bonus-pack-50">+ bônus do seu nível</div>
+
+            <div class="buyCardPrice">
+              <span class="buyPriceOld">R$ 60</span>
+              <span class="buyPriceNow">R$ 50</span>
+            </div>
+
+            <div class="buyCardTotal" id="total-pack-50">Você recebe — moedas</div>
+
+            <ul class="buyFeatureList">
+              <li>Mais autonomia na conta</li>
+              <li>Excelente para uso contínuo</li>
+              <li>Percepção forte de economia</li>
+            </ul>
+
+            <div class="buyCardFooter">
+              <button class="btn btnInfo buyPackBtn" data-pack="50">Escolher Turbo</button>
+            </div>
+          </div>
+
+          <div class="buyCard buyCardDark">
+            <div class="buyCardHead">
+              <div class="buyTag">Máximo</div>
+              <div class="buyMiniBadge">Maior saldo</div>
+            </div>
+
+            <div class="buyCardTitle">Pacote Master</div>
+            <div class="buyCardSub">100 moedas</div>
+            <div class="buyCardBonus" id="bonus-pack-100">+ bônus do seu nível</div>
+
+            <div class="buyCardPrice">
+              <span class="buyPriceOld">R$ 120</span>
+              <span class="buyPriceNow">R$ 100</span>
+            </div>
+
+            <div class="buyCardTotal" id="total-pack-100">Você recebe — moedas</div>
+
+            <ul class="buyFeatureList">
+              <li>Saldo para uso intenso</li>
+              <li>Maior aproveitamento do bônus</li>
+              <li>Menos interrupções para recarregar</li>
+            </ul>
+
+            <div class="buyCardFooter">
+              <button class="btn btnSuccess buyPackBtn" data-pack="100">Quero o Master</button>
+            </div>
           </div>
         </div>
 
-        <div class="buyCard buyCardStrong">
-          <div class="buyTag">Avançado</div>
-          <div class="buyCardTitle">Pacote Turbo</div>
-          <div class="buyCardSub">50 moedas</div>
-          <div class="buyCardBonus" id="bonus-pack-50">+ bônus do seu nível</div>
-
-          <div class="buyCardPrice">
-            <span class="buyPriceOld">R$ 60</span>
-            <span class="buyPriceNow">R$ 50</span>
-          </div>
-
-          <div class="buyCardTotal" id="total-pack-50">Você recebe — moedas</div>
-
-          <ul class="buyFeatureList">
-            <li>Mais autonomia na conta</li>
-            <li>Ótimo para uso recorrente</li>
-            <li>Maior percepção de vantagem</li>
-          </ul>
-
-          <div class="actionRow">
-            <button class="btn btnInfo buyPackBtn" data-pack="50">Escolher Turbo</button>
+        <div class="buyFooterNote">
+          <div class="buyFooterText">
+            O total mostrado em cada pacote já considera o bônus do seu nível atual.
           </div>
         </div>
 
-        <div class="buyCard buyCardDark">
-          <div class="buyTag">Máximo</div>
-          <div class="buyCardTitle">Pacote Master</div>
-          <div class="buyCardSub">100 moedas</div>
-          <div class="buyCardBonus" id="bonus-pack-100">+ bônus do seu nível</div>
+        <div class="hint" id="hintBuyModal"></div>
 
-          <div class="buyCardPrice">
-            <span class="buyPriceOld">R$ 120</span>
-            <span class="buyPriceNow">R$ 100</span>
-          </div>
-
-          <div class="buyCardTotal" id="total-pack-100">Você recebe — moedas</div>
-
-          <ul class="buyFeatureList">
-            <li>Maior volume de saldo</li>
-            <li>Melhor para uso intenso</li>
-            <li>Máximo aproveitamento do bônus</li>
-          </ul>
-
-          <div class="actionRow">
-            <button class="btn btnSuccess buyPackBtn" data-pack="100">Quero o Master</button>
-          </div>
+        <div class="modalActions buyModalActions">
+          <button class="btn btnSoft" id="btnCloseBuy">Fechar</button>
         </div>
-      </div>
-
-      <div class="buyFooterNote">
-        <div class="buyFooterText">
-          O bônus mostrado abaixo de cada pacote já considera o seu nível atual na plataforma.
-        </div>
-      </div>
-
-      <div class="hint" id="hintBuyModal"></div>
-
-      <div class="modalActions">
-        <button class="btn btnSoft" id="btnCloseBuy">Fechar</button>
       </div>
     </div>
   </div>
