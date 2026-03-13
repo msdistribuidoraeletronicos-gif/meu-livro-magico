@@ -155,7 +155,13 @@ async function applyCoinOrderCreditIfPaid(orderId) {
     type: "buy",
     title: "Compra de moedas aprovada",
     amount: Number(order.credit_coins || 0),
-    meta: "Pacote " + String(order.pack || ""),
+    meta: {
+      source: "coin_order",
+      order_id: order.id,
+      pack: Number(order.pack || 0),
+      bonus_coins: Number(order.bonus_coins || 0),
+      credit_coins: Number(order.credit_coins || 0),
+    },
   });
 
   console.log("[coin credit] moedas creditadas:", order.credit_coins);
@@ -361,8 +367,14 @@ module.exports = async (req, res) => {
       payment_method: "pix",
       status: appStatus,
       amount: Number(order.price_amount || 0),
+
+      // ✅ compra de moedas não depende de livro
       book_id: null,
       user_id: order.user_id,
+
+      // ✅ campos de classificação
+      purpose: "coin_purchase",
+      reference_type: "user",
 
       customer_name: order.customer_name || null,
       customer_email: order.customer_email || null,
@@ -403,7 +415,7 @@ module.exports = async (req, res) => {
 
       if (updPaymentErr) throw updPaymentErr;
 
-      paymentRowId = String(existingPaymentByMpId.id);
+      paymentRowId = String(existingPaymentByMpId.id || "");
     } else {
       const { data: insertedPayment, error: payErr } = await supabase
         .from("payments")
