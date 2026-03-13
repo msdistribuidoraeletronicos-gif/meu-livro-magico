@@ -55,6 +55,20 @@ module.exports = function mountPages(app) {
     requireAuth: core.requireAuth,
   });
 
+  function sendHtmlFileNoCache(res, absPath) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    );
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+
+    const html = fs.readFileSync(absPath, "utf8");
+    return res.status(200).send(html);
+  }
+
   // ========== Login ==========
   app.get("/login", async (req, res) => {
     const nextUrl = String(req.query?.next || "/create");
@@ -127,8 +141,8 @@ module.exports = function mountPages(app) {
     <p>Para criar o livro mágico, você precisa estar logado.</p>
 
     <div class="tabs">
-      <button class="tab active" id="tabLogin">Entrar</button>
-      <button class="tab" id="tabSignup">Criar conta</button>
+      <button class="tab active" id="tabLogin" type="button">Entrar</button>
+      <button class="tab" id="tabSignup" type="button">Criar conta</button>
     </div>
 
     <div id="panelLogin">
@@ -140,7 +154,7 @@ module.exports = function mountPages(app) {
         <div class="label">Senha</div>
         <input id="loginPass" type="password" placeholder="••••••••" />
       </div>
-      <button class="btn" id="btnDoLogin">Entrar</button>
+      <button class="btn" id="btnDoLogin" type="button">Entrar</button>
     </div>
 
     <div id="panelSignup" style="display:none">
@@ -156,7 +170,7 @@ module.exports = function mountPages(app) {
         <div class="label">Senha (mín. 6)</div>
         <input id="signPass" type="password" placeholder="••••••••" />
       </div>
-      <button class="btn" id="btnDoSignup">Criar conta</button>
+      <button class="btn" id="btnDoSignup" type="button">Criar conta</button>
     </div>
 
     <div class="hint" id="hint"></div>
@@ -233,7 +247,14 @@ module.exports = function mountPages(app) {
 
   // ========== Página de vendas (landing) ==========
   app.get("/sales", (req, res) => {
-    if (fs.existsSync(LANDING_HTML)) return res.sendFile(LANDING_HTML);
+    try {
+      if (fs.existsSync(LANDING_HTML)) {
+        return sendHtmlFileNoCache(res, LANDING_HTML);
+      }
+    } catch (e) {
+      console.error("[pages.js] erro ao abrir landing.html:", e);
+    }
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -262,7 +283,14 @@ module.exports = function mountPages(app) {
 
   // ========== Como funciona ==========
   app.get("/como-funciona", (req, res) => {
-    if (fs.existsSync(HOW_IT_WORKS_HTML)) return res.sendFile(HOW_IT_WORKS_HTML);
+    try {
+      if (fs.existsSync(HOW_IT_WORKS_HTML)) {
+        return sendHtmlFileNoCache(res, HOW_IT_WORKS_HTML);
+      }
+    } catch (e) {
+      console.error("[pages.js] erro ao abrir how-it-works.html:", e);
+    }
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -307,20 +335,54 @@ module.exports = function mountPages(app) {
 
   // ========== Página explicativa das moedas ==========
   app.get("/coins-info", (req, res) => {
-    if (fs.existsSync(COINS_INFO_HTML)) return res.sendFile(COINS_INFO_HTML);
-    res.type("html").send(`<!doctype html>
+    try {
+      if (fs.existsSync(COINS_INFO_HTML)) {
+        return sendHtmlFileNoCache(res, COINS_INFO_HTML);
+      }
+    } catch (e) {
+      console.error("[pages.js] erro ao abrir coins-info.html:", e);
+    }
+
+    return res.status(200).type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <title>Moedas — Meu Livro Mágico</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827;}
-  .card{max-width:860px;margin:24px;padding:24px;border-radius:18px;background:#fff;border:1px solid rgba(0,0,0,.08);box-shadow:0 20px 50px rgba(0,0,0,.10);}
+  body{
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    margin:0;
+    min-height:100vh;
+    display:grid;
+    place-items:center;
+    background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);
+    color:#111827;
+  }
+  .card{
+    max-width:860px;
+    margin:24px;
+    padding:24px;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(0,0,0,.08);
+    box-shadow:0 20px 50px rgba(0,0,0,.10);
+  }
   h1{margin:0 0 10px 0;font-size:28px;}
   p{opacity:.92;line-height:1.7;margin:0 0 12px 0;font-weight:700;}
   ul{margin:10px 0 0; padding-left:18px; line-height:1.7; font-weight:800;}
-  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#f97316);color:#fff;text-decoration:none;font-weight:1000;}
+  a.btn{
+    display:inline-flex;
+    gap:10px;
+    align-items:center;
+    padding:12px 16px;
+    border-radius:999px;
+    background:linear-gradient(90deg,#f59e0b,#f97316);
+    color:#fff;
+    text-decoration:none;
+    font-weight:1000;
+  }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
   .muted{opacity:.7;font-size:12px;margin-top:10px;font-weight:800;}
   code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:8px}
@@ -353,7 +415,14 @@ module.exports = function mountPages(app) {
 
   // ========== Exemplos ==========
   app.get("/exemplos", (req, res) => {
-    if (fs.existsSync(EXEMPLOS_HTML)) return res.sendFile(EXEMPLOS_HTML);
+    try {
+      if (fs.existsSync(EXEMPLOS_HTML)) {
+        return sendHtmlFileNoCache(res, EXEMPLOS_HTML);
+      }
+    } catch (e) {
+      console.error("[pages.js] erro ao abrir exemplos.html:", e);
+    }
+
     res.status(404).type("html").send(`
       <h1>exemplos.html não encontrado</h1>
       <p>Coloque um arquivo <code>exemplos.html</code> ao lado do <code>app.js</code>.</p>
@@ -594,9 +663,9 @@ module.exports = function mountPages(app) {
         <a class="pill" href="/books">📚 Meus Livros</a>
         <a class="pill" href="/como-funciona">❓ Como funciona</a>
         <a class="pill" href="/coins-info">🪙 Para que servem as moedas</a>
-        <button class="pill" id="btnReset" style="cursor:pointer">♻️ Reiniciar</button>
-        <button class="pill" id="btnProfile" style="cursor:pointer">👤 Perfil</button>
-        <button class="pill" id="btnLogout" style="cursor:pointer">🚪 Sair</button>
+        <button class="pill" id="btnReset" style="cursor:pointer" type="button">♻️ Reiniciar</button>
+        <button class="pill" id="btnProfile" style="cursor:pointer" type="button">👤 Perfil</button>
+        <button class="pill" id="btnLogout" style="cursor:pointer" type="button">🚪 Sair</button>
       </div>
     </div>
 
@@ -664,22 +733,22 @@ module.exports = function mountPages(app) {
         <div class="field">
           <div class="label">Tema</div>
           <div class="grid3">
-            <button class="pick" data-theme="space"><div class="ico">🚀</div><div class="tt">Viagem Espacial</div><div class="dd">Explore planetas e mistérios.</div></button>
-            <button class="pick" data-theme="dragon"><div class="ico">🐉</div><div class="tt">Reino dos Dragões</div><div class="dd">Mundo medieval mágico.</div></button>
-            <button class="pick" data-theme="ocean"><div class="ico">🧜‍♀️</div><div class="tt">Fundo do Mar</div><div class="dd">Tesouros e amigos marinhos.</div></button>
-            <button class="pick" data-theme="jungle"><div class="ico">🦁</div><div class="tt">Safari na Selva</div><div class="dd">Aventura com animais.</div></button>
-            <button class="pick" data-theme="superhero"><div class="ico">🦸</div><div class="tt">Super Herói</div><div class="dd">Salvar o dia com poderes.</div></button>
-            <button class="pick" data-theme="dinosaur"><div class="ico">🦕</div><div class="tt">Dinossauros</div><div class="dd">Uma jornada jurássica.</div></button>
+            <button class="pick" data-theme="space" type="button"><div class="ico">🚀</div><div class="tt">Viagem Espacial</div><div class="dd">Explore planetas e mistérios.</div></button>
+            <button class="pick" data-theme="dragon" type="button"><div class="ico">🐉</div><div class="tt">Reino dos Dragões</div><div class="dd">Mundo medieval mágico.</div></button>
+            <button class="pick" data-theme="ocean" type="button"><div class="ico">🧜‍♀️</div><div class="tt">Fundo do Mar</div><div class="dd">Tesouros e amigos marinhos.</div></button>
+            <button class="pick" data-theme="jungle" type="button"><div class="ico">🦁</div><div class="tt">Safari na Selva</div><div class="dd">Aventura com animais.</div></button>
+            <button class="pick" data-theme="superhero" type="button"><div class="ico">🦸</div><div class="tt">Super Herói</div><div class="dd">Salvar o dia com poderes.</div></button>
+            <button class="pick" data-theme="dinosaur" type="button"><div class="ico">🦕</div><div class="tt">Dinossauros</div><div class="dd">Uma jornada jurássica.</div></button>
           </div>
         </div>
 
         <div class="field">
           <div class="label">Estilo do livro</div>
           <div class="grid3">
-            <button class="pick styleBtn" data-style="read">
+            <button class="pick styleBtn" data-style="read" type="button">
               <div class="ico">📖</div><div class="tt">Livro para leitura</div><div class="dd">Ilustrações coloridas (semi-realista).</div>
             </button>
-            <button class="pick styleBtn" data-style="color">
+            <button class="pick styleBtn" data-style="color" type="button">
               <div class="ico">🖍️</div><div class="tt">Leitura + colorir</div><div class="dd">Preto e branco (contornos).</div>
             </button>
           </div>
@@ -704,8 +773,8 @@ module.exports = function mountPages(app) {
 
   <div class="footer">
     <div class="footerInner">
-      <button class="btn" id="btnBack" style="background:transparent;color:#6b7280;font-weight:1000;">← Voltar</button>
-      <button class="btn btnPrimary" id="btnNext">Próximo →</button>
+      <button class="btn" id="btnBack" style="background:transparent;color:#6b7280;font-weight:1000;" type="button">← Voltar</button>
+      <button class="btn btnPrimary" id="btnNext" type="button">Próximo →</button>
     </div>
   </div>
 
@@ -1120,7 +1189,7 @@ module.exports = function mountPages(app) {
     <div class="imgs" id="imgs"></div>
 
     <div class="btns">
-      <button class="btn ghost" id="btnLogout">🚪 Sair</button>
+      <button class="btn ghost" id="btnLogout" type="button">🚪 Sair</button>
       <a class="btn ghost" href="/create">← Voltar</a>
       <a class="btn ghost" href="/books">📚 Meus Livros</a>
       <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
@@ -1261,6 +1330,10 @@ module.exports = function mountPages(app) {
 
       if (m.status !== "done") {
         return res.redirect("/generate?id=" + encodeURIComponent(id));
+      }
+
+      if (fs.existsSync(PREVIEW_HTML)) {
+        return sendHtmlFileNoCache(res, PREVIEW_HTML);
       }
 
       return res.redirect("/books/" + encodeURIComponent(id));
