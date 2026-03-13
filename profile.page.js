@@ -45,9 +45,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     throw new Error("mountProfilePage: requireAuth ausente");
   }
 
-  // ---------------------------------------------------
-  // Brevo / Email admin
-  // ---------------------------------------------------
   const BREVO_API_KEY = String(process.env.BREVO_API_KEY || "").trim();
   const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS || "").trim();
   const WITHDRAW_FROM_EMAIL = String(
@@ -70,9 +67,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     brevoClient = new SibApiV3Sdk.TransactionalEmailsApi();
   }
 
-  // ---------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------
   function escapeHtml(s) {
     return String(s ?? "")
       .replace(/&/g, "&amp;")
@@ -316,7 +310,11 @@ module.exports = function mountProfilePage(app, options = {}) {
         180
       ),
       pix_bank_name: safeTrim(
-        row.pix_bank_name || row.pixBankName || row.instituicao_conta || row.banco || "",
+        row.pix_bank_name ||
+          row.pixBankName ||
+          row.instituicao_conta ||
+          row.banco ||
+          "",
         180
       ),
       pix_holder_document: onlyDigits(
@@ -346,9 +344,7 @@ module.exports = function mountProfilePage(app, options = {}) {
       address_state: normalizeUF(
         row.address_state || row.uf || row.state || ""
       ),
-      address_zip: normalizeCep(
-        row.address_zip || row.cep || row.zip || ""
-      ),
+      address_zip: normalizeCep(row.address_zip || row.cep || row.zip || ""),
       address_complement: safeTrim(
         row.address_complement || row.complemento || row.comp || "",
         180
@@ -415,12 +411,8 @@ module.exports = function mountProfilePage(app, options = {}) {
         input.address_city ?? current.address_city,
         120
       ),
-      address_state: normalizeUF(
-        input.address_state ?? current.address_state
-      ),
-      address_zip: normalizeCep(
-        input.address_zip ?? current.address_zip
-      ),
+      address_state: normalizeUF(input.address_state ?? current.address_state),
+      address_zip: normalizeCep(input.address_zip ?? current.address_zip),
       address_complement: safeTrim(
         input.address_complement ?? current.address_complement,
         180
@@ -739,9 +731,8 @@ module.exports = function mountProfilePage(app, options = {}) {
       userId,
       email: String(sessionEmail || profile?.email || "").trim(),
       name:
-        String(
-          profile?.name || profile?.full_name || profile?.nome || ""
-        ).trim() || "Não informado",
+        String(profile?.name || profile?.full_name || profile?.nome || "").trim() ||
+        "Não informado",
       requestedAmount: toNum(requestedAmount, 0),
       requestedAmountFormatted: fmtCoins(requestedAmount),
       note: String(note || "").trim(),
@@ -982,9 +973,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     return { subject, html, text };
   }
 
-  // ------------------------------
-  // API: /api/me
-  // ------------------------------
   app.get("/api/me", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1019,9 +1007,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-books
-  // ------------------------------
   app.get("/api/my-books", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1059,9 +1044,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-orders
-  // ------------------------------
   app.get("/api/my-orders", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1102,9 +1084,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-wallet
-  // ------------------------------
   app.get("/api/my-wallet", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1159,9 +1138,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-wallet/checkin
-  // ------------------------------
   app.post("/api/my-wallet/checkin", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1260,9 +1236,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-wallet/withdraw
-  // ------------------------------
   app.post("/api/my-wallet/withdraw", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1390,14 +1363,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-wallet/buy
-  // ------------------------------
-   // ------------------------------
-  // API: /api/my-wallet/buy
-  // Agora: cria um pedido de compra de moedas
-  // e retorna a URL do checkout
-  // ------------------------------
   app.post("/api/my-wallet/buy", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1470,9 +1435,7 @@ module.exports = function mountProfilePage(app, options = {}) {
       });
     }
   });
-  // ------------------------------
-  // API: /api/my-account
-  // ------------------------------
+
   app.get("/api/my-account", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1526,9 +1489,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-account/verify-password
-  // ------------------------------
   app.post("/api/my-account/verify-password", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1556,9 +1516,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // API: /api/my-account/update
-  // ------------------------------
   app.post("/api/my-account/update", requireAuth, async (req, res) => {
     try {
       const userId = String(req.user?.id || "");
@@ -1688,9 +1645,6 @@ module.exports = function mountProfilePage(app, options = {}) {
     }
   });
 
-  // ------------------------------
-  // UI: /profile
-  // ------------------------------
   app.get("/profile", requireAuth, async (req, res) => {
     try {
       const email = escapeHtml(req.user?.email || "");
