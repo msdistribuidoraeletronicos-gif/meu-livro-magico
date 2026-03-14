@@ -723,30 +723,33 @@ module.exports = function mountRoutes(app, opts = {}) {
     }
   });
 
-  app.get("/books", requireAuth, async (req, res) => {
-    try {
-      const html = renderBooksHtml({
-        user: req.user || null,
-        books: [],
-        OUT_DIR,
-        isAdmin: isAdmin(req),
-      });
+ async function handleBooksPage(req, res) {
+  try {
+    const html = renderBooksHtml({
+      user: req.user || null,
+      books: [],
+      OUT_DIR,
+      isAdmin: isAdmin(req),
+    });
 
-      return res.type("html").send(html);
-    } catch (e) {
-      console.error("ERRO /books:");
-      console.error(e && e.stack ? e.stack : e);
+    return res.type("html").send(html);
+  } catch (e) {
+    console.error("ERRO /books:");
+    console.error(e && e.stack ? e.stack : e);
 
-      return res
-        .status(500)
-        .type("html")
-        .send(
-          `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
-            String(e?.message || e || "Erro")
-          )}</pre></body></html>`
-        );
-    }
-  });
+    return res
+      .status(500)
+      .type("html")
+      .send(
+        `<!doctype html><html><body><h1>Erro</h1><pre>${escapeHtmlText(
+          String(e?.message || e || "Erro")
+        )}</pre></body></html>`
+      );
+  }
+}
+
+app.get("/books", requireAuth, handleBooksPage);
+app.get("/meus-livros", requireAuth, handleBooksPage);
 
   app.get("/preview", requireAuth, async (req, res) => {
     try {
