@@ -6,13 +6,19 @@
 // Requer API no app.js:
 //   POST /api/editPageText
 //     body: { id: "<dirId|id>", page: <number>, text: "<novo texto>" }
-//   POST /api/regeneratePage  (NOVO)
+//   POST /api/regeneratePage
 //     body: { id: "<dirId|id>", page: <number>, text: "<texto atual>" }
 //
 // Export:
 //   module.exports = { renderBookEditorHtml }
 
 "use strict";
+
+const {
+  SHARED_HEADER_CSS,
+  SHARED_HEADER_JS,
+  renderSharedHeader,
+} = require("./shared.header");
 
 function escapeHtml(s) {
   s = String(s == null ? "" : s);
@@ -65,14 +71,12 @@ function normalizeTexts(book, pageCount) {
 
   const map = new Map();
 
-  // 1) book.pages[].text
   for (const p of pages) {
     const n = Number(p?.page || p?.index || 0);
     const t = p?.text != null ? String(p.text) : "";
     if (n > 0 && t) map.set(n, t);
   }
 
-  // 2) overrides.pagesText (array ou objeto)
   if (Array.isArray(ovText)) {
     ovText.forEach((v, i) => {
       if (v && typeof v === "object") {
@@ -133,6 +137,30 @@ function renderBookEditorHtml(book) {
     texts,
   };
 
+  const sharedHeaderHtml = renderSharedHeader({
+    brandText: "Meu Livro Mágico",
+    brandHref: "/sales",
+    brandIcon: "📚",
+    menuLabel: "☰ Menu",
+    menuId: "editorSharedMenuPanel",
+    toggleId: "editorSharedMenuToggle",
+    showProfile: true,
+    showLogout: true,
+    profileHref: "/profile",
+    menuItems: [
+      { label: "Página Inicial", href: "/sales", icon: "🏠" },
+      { label: "Criar Livro", href: "/create", icon: "✨" },
+      { label: "Meus Livros", href: "/books", icon: "📚" },
+      { label: "Como funciona", href: "/como-funciona", icon: "❓" },
+      { label: "Para que servem as moedas", href: "/coins-info", icon: "🪙" },
+      { label: "Parceiros", href: "/parceiros", icon: "🤝" },
+    ],
+    actions: [
+      { id: "editorPreviewHeaderBtn", label: "👁️ Preview", kind: "soft", href: "/books/" + encodeURIComponent(id) },
+      { id: "editorCreateHeaderBtn", label: "✨ Criar Livro", kind: "primary", href: "/create" },
+    ],
+  });
+
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -140,7 +168,6 @@ function renderBookEditorHtml(book) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Editar Livro ${escapeHtml(book?.id || id)} — Meu Livro Mágico</title>
 <style>
-  /* ===== ESTILOS UNIFICADOS (mesmo do layout de referência) ===== */
   :root{
     --violet-50:#f5f3ff;
     --pink-50:#fff1f2;
@@ -160,7 +187,6 @@ function renderBookEditorHtml(book) {
     --shadow: 0 22px 55px rgba(124,58,237,.18);
     --shadow2: 0 12px 30px rgba(17,24,39,.10);
     --r: 22px;
-
     --good:#10b981;
     --bad:#ef4444;
   }
@@ -180,71 +206,43 @@ function renderBookEditorHtml(book) {
   a{ color:inherit; text-decoration:none; }
   .wrap{ max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
 
-  /* Nav */
-  .nav{
-    padding: 16px 0;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:12px;
-  }
-  .brand{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    font-weight:1000;
-    letter-spacing:-.2px;
-  }
-  .brand .logo{
-    width:42px;height:42px;border-radius:14px;
-    display:grid;place-items:center;
-    background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
-    border: 1px solid rgba(124,58,237,.18);
-    box-shadow: var(--shadow2);
-    font-size:20px;
-  }
-  .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  ${SHARED_HEADER_CSS()}
 
-  /* Buttons / Pills */
-  .btn{
-    border:0;
-    cursor:pointer;
-    user-select:none;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    padding: 14px 18px;
-    border-radius: 999px;
-    font-weight: 900;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
-    white-space:nowrap;
+  .card{
+    background: rgba(255,255,255,.92);
+    border: 1px solid rgba(17,24,39,.06);
+    border-radius: 24px;
+    box-shadow: var(--shadow2);
+    overflow:hidden;
   }
-  .btn:active{ transform: translateY(1px); }
-  .btnPrimary{
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    box-shadow: 0 18px 40px rgba(124,58,237,.20);
+
+  .banner{
+    margin-top:12px;
+    padding:12px 12px;
+    border-radius:16px;
+    border: 1px solid rgba(0,0,0,.08);
+    background: rgba(255,255,255,.70);
+    box-shadow: var(--shadow2);
+    font-weight:900;
   }
-  .btnPrimary:hover{
-    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-    box-shadow: 0 18px 46px rgba(124,58,237,.26);
+  .banner.err{ border-color: rgba(239,68,68,.22); background: rgba(239,68,68,.06); color:#7f1d1d; }
+  .banner.ok{ border-color: rgba(16,185,129,.22); background: rgba(16,185,129,.08); color:#065f46; }
+  .banner.info{ border-color: rgba(124,58,237,.18); background: rgba(124,58,237,.06); color:#4c1d95; }
+
+  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+
+  .container{max-width: 1100px; margin:0 auto; padding: 18px 16px;}
+  .topRow{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin-bottom: 12px;
   }
-  .btnOutline{
-    color: var(--violet-700);
-    background: rgba(255,255,255,.78);
-    border: 2px solid rgba(221,214,254,.95);
-    box-shadow: 0 12px 26px rgba(17,24,39,.06);
+  .head{
+    display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between;
+    padding:16px;
   }
-  .btnOutline:hover{
-    background: rgba(245,243,255,.95);
-    border-color: rgba(196,181,253,.95);
-  }
-  .btnTiny{
-    padding: 10px 12px;
-    font-size: 13px;
-    font-weight: 900;
-  }
+  .ttl{margin:0;font-size:18px;font-weight:1100}
+  .meta{margin-top:6px;color:var(--gray-600);font-weight:850;font-size:13px;line-height:1.35}
+  .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
 
   .pill{
     display:inline-flex; gap:8px; align-items:center;
@@ -267,54 +265,58 @@ function renderBookEditorHtml(book) {
   }
   .pill.ghost{
     background:#fff;
-    border-color: var(--gray-200);
     color:#6d28d9;
   }
 
-  .card{
-    background: rgba(255,255,255,.92);
-    border: 1px solid rgba(17,24,39,.06);
-    border-radius: 24px;
-    box-shadow: var(--shadow2);
-    overflow:hidden;
+  .btn{
+    border:0;
+    cursor:pointer;
+    user-select:none;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding: 14px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
+    white-space:nowrap;
   }
-  .cardIn{
-    padding: 16px;
+  .btn:active{ transform: translateY(1px); }
+
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 40px rgba(124,58,237,.20);
+  }
+  .btnPrimary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 18px 46px rgba(124,58,237,.26);
   }
 
-  .banner{
-    margin-top:12px;
-    padding:12px 12px;
-    border-radius:16px;
-    border: 1px solid rgba(0,0,0,.08);
-    background: rgba(255,255,255,.70);
-    box-shadow: var(--shadow2);
-    font-weight:900;
+  .btnOutline{
+    color: var(--violet-700);
+    background: rgba(255,255,255,.78);
+    border: 2px solid rgba(221,214,254,.95);
+    box-shadow: 0 12px 26px rgba(17,24,39,.06);
   }
-  .banner.err{ border-color: rgba(239,68,68,.22); background: rgba(239,68,68,.06); color:#7f1d1d; }
-  .banner.ok{ border-color: rgba(16,185,129,.22); background: rgba(16,185,129,.08); color:#065f46; }
-  .banner.info{ border-color: rgba(124,58,237,.18); background: rgba(124,58,237,.06); color:#4c1d95; }
+  .btnOutline:hover{
+    background: rgba(245,243,255,.95);
+    border-color: rgba(196,181,253,.95);
+  }
 
-  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
-
-  /* ===== ESTILOS ESPECÍFICOS DO EDITOR ===== */
-  .container{max-width: 1100px; margin:0 auto; padding: 18px 16px;}
-  .topRow{
-    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-    margin-bottom: 12px;
+  .btnTiny{
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 900;
   }
-  .head{
-    display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between;
-  }
-  .ttl{margin:0;font-size:18px;font-weight:1100}
-  .meta{margin-top:6px;color:var(--gray-600);font-weight:850;font-size:13px;line-height:1.35}
-  .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
 
   .grid{
     margin-top:14px;
     display:grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: 12px;
+    padding: 0 16px 16px;
   }
   .pageCard{
     grid-column: span 12;
@@ -424,34 +426,19 @@ function renderBookEditorHtml(book) {
     color:#6d28d9;
     border:1px solid rgba(221,214,254,.95);
   }
-  .btnPrimary:disabled, .btnGhost:disabled{ opacity:.55; cursor:not-allowed; box-shadow:none; }
+  .btnPrimary:disabled, .btnGhost:disabled, .btnOutline:disabled{
+    opacity:.55;
+    cursor:not-allowed;
+    box-shadow:none;
+  }
+
   .muted{color:var(--gray-500)}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <!-- Navbar igual ao dos outros -->
-  <div class="nav">
-    <div class="brand">
-      <div class="logo">📚</div>
-      <div>Meu Livro Mágico</div>
-    </div>
-    <div class="navRight">
-      <a class="pill" href="/sales" title="Vendas">🛒 Pagina Inicial</a>
-      <a class="btn btnPrimary" href="/create" title="Criar agora">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        Criar Livro
-      </a>
-      <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
-    </div>
-  </div>
+<div class="container">
+  ${sharedHeaderHtml}
 
-  <!-- Conteúdo do editor -->
   <div class="topRow">
     <a class="pill ghost" href="/books/${encodeURIComponent(id)}">← Voltar pro preview</a>
     <div class="actions">
@@ -481,30 +468,24 @@ function renderBookEditorHtml(book) {
 
     ${errBox}
 
-    <div class="banner info" id="msgInfo">
+    <div class="banner info" id="msgInfo" style="margin:0 16px 12px;">
       Dica: edite o texto e clique em <b>Salvar</b> na página, ou <b>Salvar tudo</b> no topo. Para gerar uma nova imagem, use <b>Refazer cena</b>.
     </div>
-    <div class="banner ok" id="msgOk" style="display:none;"></div>
-    <div class="banner err" id="msgErr" style="display:none;"></div>
+    <div class="banner ok" id="msgOk" style="display:none; margin:0 16px 12px;"></div>
+    <div class="banner err" id="msgErr" style="display:none; margin:0 16px 12px;"></div>
 
     <div class="grid" id="gridPages"></div>
   </div>
 </div>
 
 <script>
+${SHARED_HEADER_JS()}
+</script>
+
+<script>
 (function(){
   const DATA = ${safeJsonForScript(data)};
   const $ = (id) => document.getElementById(id);
-
-  // Logout
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/sales';
-    } catch (e) {
-      alert('Erro ao sair');
-    }
-  });
 
   function showOk(msg){
     const el = $("msgOk");
@@ -512,6 +493,7 @@ function renderBookEditorHtml(book) {
     el.style.display = "";
     $("msgErr").style.display = "none";
   }
+
   function showErr(msg){
     const el = $("msgErr");
     el.textContent = msg || "Erro.";
@@ -520,7 +502,6 @@ function renderBookEditorHtml(book) {
   }
 
   function qs(root, sel){ return root ? root.querySelector(sel) : null; }
-  function qsa(root, sel){ return root ? Array.from(root.querySelectorAll(sel)) : []; }
 
   function findImageUrl(page){
     const it = (DATA.images || []).find(x => Number(x.page) === Number(page));
@@ -555,7 +536,6 @@ function renderBookEditorHtml(book) {
     if (msg) el.classList.add(ok ? "ok" : "bad");
   }
 
-  // NOVO: desabilita/habilita os botões da página (Salvar e Refazer)
   function setPageControlsDisabled(page, disabled, savingLabel){
     const btnsSave = document.querySelectorAll("button[data-save='"+page+"']");
     const btnsRegen = document.querySelectorAll("button[data-regen='"+page+"']");
@@ -587,7 +567,10 @@ function renderBookEditorHtml(book) {
     const busted = base + sep + "v=" + encodeURIComponent(v);
 
     if (bg) bg.src = busted;
-    if (fg) fg.src = busted;
+    if (fg) {
+      fg.src = busted;
+      fg.setAttribute("data-base-url", base);
+    }
 
     const a = qs(card, "a[data-open-image='1']");
     if (a) a.href = base;
@@ -628,7 +611,6 @@ function renderBookEditorHtml(book) {
     }
   }
 
-  // NOVO: regenerar imagem da página
   async function regeneratePage(page){
     const card = document.querySelector(".pageCard[data-page-card='"+page+"']");
     if (!card) return { ok:false, error:"Card não encontrado" };
@@ -728,15 +710,14 @@ function renderBookEditorHtml(book) {
     const right = document.createElement("div");
     right.style.display = "flex";
     right.style.gap = "8px";
+    right.style.flexWrap = "wrap";
 
-    // Botão Refazer (NOVO)
     const btnRegen = document.createElement("button");
-    btnRegen.className = "btn btnOutline btnTiny"; // estilo outline pequeno
+    btnRegen.className = "btn btnOutline btnTiny";
     btnRegen.textContent = "🔄 Refazer cena";
     btnRegen.setAttribute("data-regen", String(page));
     btnRegen.onclick = () => regeneratePage(page);
 
-    // Botão Salvar
     const btnSave = document.createElement("button");
     btnSave.className = "btn btnPrimary btnTiny";
     btnSave.textContent = "💾 Salvar";
@@ -811,7 +792,7 @@ function renderBookEditorHtml(book) {
     row.className = "rowBtn";
 
     const btnSave2 = document.createElement("button");
-    btnSave2.className = "btn btnGhost";
+    btnSave2.className = "btn btnGhost btnTiny";
     btnSave2.textContent = "💾 Salvar";
     btnSave2.setAttribute("data-save", String(page));
     btnSave2.onclick = () => savePage(page);

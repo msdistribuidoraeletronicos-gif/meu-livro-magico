@@ -26,6 +26,7 @@
  * - orders
  * - user_wallets
  * - user_wallet_activities
+ * - coin_orders
  */
 
 "use strict";
@@ -287,6 +288,7 @@ module.exports = function mountProfilePage(app, options = {}) {
       name: safeTrim(row.name || row.full_name || row.nome || "", 180),
       email: normalizeEmail(row.email || ""),
       phone: normalizePhone(row.phone || row.telefone || row.whatsapp || ""),
+
       pix_key: safeTrim(
         row.pix_key ||
           row.pixKey ||
@@ -546,6 +548,7 @@ module.exports = function mountProfilePage(app, options = {}) {
       streak_days: 0,
       cycle_count: 0,
       last_checkin_date: null,
+      updated_at: new Date().toISOString(),
     };
 
     const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -694,7 +697,12 @@ module.exports = function mountProfilePage(app, options = {}) {
     return { ok: true, data };
   }
 
-  async function getUserFullAdminData(userId, sessionEmail, requestedAmount, note) {
+  async function getUserFullAdminData(
+    userId,
+    sessionEmail,
+    requestedAmount,
+    note
+  ) {
     if (!supabaseAdmin) throw new Error("supabase_client_missing");
 
     const [profileRes, walletSummary, booksRes, ordersRes] = await Promise.all([
@@ -1426,7 +1434,8 @@ module.exports = function mountProfilePage(app, options = {}) {
       return res.json({
         ok: true,
         orderId: inserted.id,
-        checkoutUrl: "/checkout/coins?order=" + encodeURIComponent(inserted.id),
+        checkoutUrl:
+          "/checkout/coins?order=" + encodeURIComponent(inserted.id),
       });
     } catch (e) {
       return res.status(500).json({
@@ -1655,9 +1664,9 @@ module.exports = function mountProfilePage(app, options = {}) {
         pageJs: buildProfilePageJS(),
       });
 
-      res.type("html").send(html);
+      return res.type("html").send(html);
     } catch (e) {
-      res
+      return res
         .status(500)
         .type("html")
         .send(

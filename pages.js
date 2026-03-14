@@ -3,6 +3,11 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const core = require("./core");
+const {
+  SHARED_HEADER_CSS,
+  SHARED_HEADER_JS,
+  renderSharedHeader,
+} = require("./shared.header");
 
 const LANDING_HTML = path.join(__dirname, "landing.html");
 const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
@@ -69,11 +74,97 @@ module.exports = function mountPages(app) {
     return res.status(200).send(html);
   }
 
+  function esc(s) {
+    return core.escapeHtml(String(s ?? ""));
+  }
+
+  function sharedBaseCss() {
+    return `
+      ${SHARED_HEADER_CSS()}
+      :root{
+        --bg1:#ede9fe;
+        --bg2:#ffffff;
+        --bg3:#fdf2f8;
+        --text:#111827;
+        --muted:#6b7280;
+        --border:#e5e7eb;
+        --violet:#7c3aed;
+        --pink:#db2777;
+        --shadow:0 20px 50px rgba(0,0,0,.10);
+        --shadow2:0 10px 24px rgba(0,0,0,.08);
+      }
+      *{box-sizing:border-box}
+      body{
+        margin:0;
+        font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+        color:var(--text);
+        background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));
+        min-height:100vh;
+      }
+      .pageWrap{
+        width:min(calc(100% - 24px), 1240px);
+        margin:18px auto 0;
+      }
+      .card{
+        background:#fff;
+        border:1px solid var(--border);
+        border-radius:24px;
+        box-shadow:var(--shadow);
+      }
+    `;
+  }
+
+  function buildDefaultMenuItems() {
+    return [
+      { label: "Página Inicial", href: "/sales", icon: "🏠" },
+      { label: "Meus Livros", href: "/books", icon: "📚" },
+      { label: "Como funciona", href: "/como-funciona", icon: "❓" },
+      { label: "Para que servem as moedas", href: "/coins-info", icon: "🪙" },
+      { label: "Parceiros", href: "/parceiros", icon: "🤝" },
+    ];
+  }
+
+  function buildAuthHeader(req, extra = {}) {
+    return renderSharedHeader({
+      brandText: "Meu Livro Mágico",
+      brandHref: "/sales",
+      brandIcon: "📚",
+      email: req?.user?.email || "",
+      menuItems: buildDefaultMenuItems(),
+      showProfile: extra.showProfile !== false,
+      showLogout: extra.showLogout !== false,
+      actions: Array.isArray(extra.actions) ? extra.actions : [],
+      menuId: extra.menuId || "sharedMenuPanelMain",
+      toggleId: extra.toggleId || "sharedMenuToggleMain",
+    });
+  }
+
+  function buildPublicHeader(extra = {}) {
+    return renderSharedHeader({
+      brandText: "Meu Livro Mágico",
+      brandHref: "/sales",
+      brandIcon: "📚",
+      email: "",
+      menuItems: buildDefaultMenuItems(),
+      showProfile: false,
+      showLogout: false,
+      actions: Array.isArray(extra.actions) ? extra.actions : [],
+      menuId: extra.menuId || "sharedMenuPanelPublic",
+      toggleId: extra.toggleId || "sharedMenuTogglePublic",
+    });
+  }
+
   // ========== Login ==========
   app.get("/login", async (req, res) => {
     const nextUrl = String(req.query?.next || "/create");
     const user = await core.getCurrentUser(req).catch(() => null);
     if (user) return res.redirect(nextUrl || "/create");
+
+    const header = buildPublicHeader({
+      actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+      menuId: "loginMenuPanel",
+      toggleId: "loginMenuToggle",
+    });
 
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
@@ -82,28 +173,28 @@ module.exports = function mountPages(app) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Login — Meu Livro Mágico</title>
 <style>
-  :root{
-    --bg1:#ede9fe; --bg2:#ffffff; --bg3:#fdf2f8;
-    --text:#111827; --muted:#6b7280; --border:#e5e7eb;
-    --violet:#7c3aed; --pink:#db2777;
-  }
-  *{box-sizing:border-box}
+  ${sharedBaseCss()}
   body{
-    margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
-    min-height:100vh; display:grid; place-items:center; padding:24px;
+    margin:0;
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));
+    min-height:100vh;
     color:var(--text);
   }
+  .loginWrap{
+    width:min(calc(100% - 24px), 560px);
+    margin:26px auto 34px;
+  }
   .card{
-    width:min(520px, 100%);
+    width:100%;
     background:#fff;
     border:1px solid var(--border);
     border-radius:22px;
-    box-shadow: 0 20px 50px rgba(0,0,0,.10);
+    box-shadow:var(--shadow);
     padding:18px;
   }
   h1{margin:8px 0 0; font-size:26px; font-weight:1000; text-align:center;}
-  p{margin:8px 0 0; text-align:center; color:var(--muted); font-weight:800;}
+  p{margin:8px 0 0; text-align:center; color:var(--muted); font-weight:800; line-height:1.6;}
   .tabs{display:flex; gap:10px; margin-top:16px;}
   .tab{
     flex:1; border:1px solid var(--border); background:#fff;
@@ -122,13 +213,17 @@ module.exports = function mountPages(app) {
     width:100%; margin-top:14px;
     border:0; border-radius:999px; padding:12px 14px;
     font-weight:1000; cursor:pointer; color:#fff;
-    background: linear-gradient(90deg,var(--violet),var(--pink));
-    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    box-shadow:0 16px 34px rgba(124,58,237,.22);
+  }
+  .btn[disabled]{
+    opacity:.7;
+    cursor:not-allowed;
   }
   .hint{
     margin-top:12px; padding:10px 12px; border-radius:14px;
-    background: rgba(219,39,119,.06);
-    border: 1px solid rgba(219,39,119,.14);
+    background:rgba(219,39,119,.06);
+    border:1px solid rgba(219,39,119,.14);
     color:#7f1d1d; font-weight:900; display:none; white-space:pre-wrap;
   }
   a.link{display:block; text-align:center; margin-top:12px; color:#4c1d95; font-weight:1000; text-decoration:none;}
@@ -136,64 +231,96 @@ module.exports = function mountPages(app) {
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>🔐 Entrar / Criar Conta</h1>
-    <p>Para criar o livro mágico, você precisa estar logado.</p>
+  ${header}
 
-    <div class="tabs">
-      <button class="tab active" id="tabLogin" type="button">Entrar</button>
-      <button class="tab" id="tabSignup" type="button">Criar conta</button>
+  <div class="loginWrap">
+    <div class="card">
+      <h1>🔐 Entrar / Criar Conta</h1>
+      <p>Para criar o livro mágico, você precisa estar logado.</p>
+
+      <div class="tabs">
+        <button class="tab active" id="tabLogin" type="button">Entrar</button>
+        <button class="tab" id="tabSignup" type="button">Criar conta</button>
+      </div>
+
+      <form id="formLogin">
+        <div id="panelLogin">
+          <div class="field">
+            <div class="label">E-mail</div>
+            <input id="loginEmail" type="email" autocomplete="email" placeholder="seu@email.com" />
+          </div>
+          <div class="field">
+            <div class="label">Senha</div>
+            <input id="loginPass" type="password" autocomplete="current-password" placeholder="••••••••" />
+          </div>
+          <button class="btn" id="btnDoLogin" type="submit">Entrar</button>
+        </div>
+      </form>
+
+      <form id="formSignup" style="display:none">
+        <div id="panelSignup">
+          <div class="field">
+            <div class="label">Nome</div>
+            <input id="signName" autocomplete="name" placeholder="Seu nome" />
+          </div>
+          <div class="field">
+            <div class="label">E-mail</div>
+            <input id="signEmail" type="email" autocomplete="email" placeholder="seu@email.com" />
+          </div>
+          <div class="field">
+            <div class="label">Senha (mín. 6)</div>
+            <input id="signPass" type="password" autocomplete="new-password" placeholder="••••••••" />
+          </div>
+          <button class="btn" id="btnDoSignup" type="submit">Criar conta</button>
+        </div>
+      </form>
+
+      <div class="hint" id="hint"></div>
+
+      <a class="link" href="/sales">← Voltar para Vendas</a>
     </div>
-
-    <div id="panelLogin">
-      <div class="field">
-        <div class="label">E-mail</div>
-        <input id="loginEmail" placeholder="seu@email.com" />
-      </div>
-      <div class="field">
-        <div class="label">Senha</div>
-        <input id="loginPass" type="password" placeholder="••••••••" />
-      </div>
-      <button class="btn" id="btnDoLogin" type="button">Entrar</button>
-    </div>
-
-    <div id="panelSignup" style="display:none">
-      <div class="field">
-        <div class="label">Nome</div>
-        <input id="signName" placeholder="Seu nome" />
-      </div>
-      <div class="field">
-        <div class="label">E-mail</div>
-        <input id="signEmail" placeholder="seu@email.com" />
-      </div>
-      <div class="field">
-        <div class="label">Senha (mín. 6)</div>
-        <input id="signPass" type="password" placeholder="••••••••" />
-      </div>
-      <button class="btn" id="btnDoSignup" type="button">Criar conta</button>
-    </div>
-
-    <div class="hint" id="hint"></div>
-
-    <a class="link" href="/sales">← Voltar para Vendas</a>
   </div>
 
 <script>
+  ${SHARED_HEADER_JS()}
+
   const nextUrl = ${JSON.stringify(nextUrl || "/create")};
 
   const $ = (id) => document.getElementById(id);
+
   function setHint(msg){
     const el = $("hint");
     el.textContent = msg || "";
     el.style.display = msg ? "block" : "none";
   }
 
+  function setLoading(button, loadingText){
+    if (!button) return;
+    if (button.dataset.loading === "1") return;
+    button.dataset.originalText = button.textContent;
+    button.textContent = loadingText;
+    button.disabled = true;
+    button.dataset.loading = "1";
+  }
+
+  function clearLoading(button){
+    if (!button) return;
+    if (button.dataset.originalText) {
+      button.textContent = button.dataset.originalText;
+    }
+    button.disabled = false;
+    button.dataset.loading = "0";
+  }
+
   function setTab(which){
     const isLogin = which === "login";
+
     $("tabLogin").classList.toggle("active", isLogin);
     $("tabSignup").classList.toggle("active", !isLogin);
-    $("panelLogin").style.display = isLogin ? "block" : "none";
-    $("panelSignup").style.display = isLogin ? "none" : "block";
+
+    $("formLogin").style.display = isLogin ? "block" : "none";
+    $("formSignup").style.display = isLogin ? "none" : "block";
+
     setHint("");
   }
 
@@ -211,38 +338,65 @@ module.exports = function mountPages(app) {
     return j;
   }
 
-  $("btnDoLogin").onclick = async () => {
+  async function doLogin(){
     setHint("");
+    const btn = $("btnDoLogin");
     try{
       const email = $("loginEmail").value.trim();
       const password = $("loginPass").value;
+
       if (!email) return setHint("Digite o e-mail.");
       if (!password) return setHint("Digite a senha.");
+
+      setLoading(btn, "Entrando...");
       await postJson("/api/auth/login", { email, password });
       window.location.href = nextUrl || "/create";
     }catch(e){
       setHint(String(e.message || e));
+    }finally{
+      clearLoading(btn);
     }
-  };
+  }
 
-  $("btnDoSignup").onclick = async () => {
+  async function doSignup(){
     setHint("");
+    const btn = $("btnDoSignup");
     try{
       const name = $("signName").value.trim();
       const email = $("signEmail").value.trim();
       const password = $("signPass").value;
+
       if (!name || name.length < 2) return setHint("Digite seu nome (mín. 2 letras).");
       if (!email) return setHint("Digite o e-mail.");
       if (!password || password.length < 6) return setHint("Senha muito curta (mín. 6).");
+
+      setLoading(btn, "Criando conta...");
       await postJson("/api/auth/signup", { name, email, password });
       window.location.href = nextUrl || "/create";
     }catch(e){
       setHint(String(e.message || e));
+    }finally{
+      clearLoading(btn);
     }
-  };
+  }
+
+  $("formLogin").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await doLogin();
+  });
+
+  $("formSignup").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await doSignup();
+  });
 </script>
 </body>
 </html>`);
+  });
+
+  // ========== Página inicial da aplicação ==========
+  app.get("/", (req, res) => {
+    return res.redirect("/sales");
   });
 
   // ========== Página de vendas (landing) ==========
@@ -255,28 +409,151 @@ module.exports = function mountPages(app) {
       console.error("[pages.js] erro ao abrir landing.html:", e);
     }
 
+    const header = buildPublicHeader({
+      actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+      menuId: "salesMenuPanel",
+      toggleId: "salesMenuToggle",
+    });
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Meu Livro Mágico — Vendas</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#fff;}
-  .card{max-width:820px;margin:24px;padding:24px;border-radius:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);}
-  h1{margin:0 0 10px 0;font-size:28px;}
-  p{opacity:.9;line-height:1.6;margin:0 0 14px 0;}
-  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:14px;background:#ff6b6b;color:#fff;text-decoration:none;font-weight:900;}
-  .muted{opacity:.75;font-size:13px;margin-top:12px;}
+  ${sharedBaseCss()}
+  .heroWrap{
+    width:min(calc(100% - 24px), 1240px);
+    margin:20px auto 34px;
+  }
+  .hero{
+    padding:70px 24px 56px;
+    border-radius:30px;
+    border:1px solid rgba(255,255,255,.86);
+    background:
+      radial-gradient(circle at top left, rgba(124,58,237,.14), transparent 28%),
+      radial-gradient(circle at top right, rgba(236,72,153,.10), transparent 22%),
+      linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,248,252,.96));
+    box-shadow:var(--shadow);
+    text-align:center;
+    position:relative;
+    overflow:hidden;
+  }
+  .hero::before,
+  .hero::after{
+    content:"✦";
+    position:absolute;
+    color:rgba(245,158,11,.35);
+    font-size:26px;
+    font-weight:1000;
+  }
+  .hero::before{ left:46px; top:110px; }
+  .hero::after{ right:56px; bottom:84px; }
+  .eyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    min-height:40px;
+    padding:0 18px;
+    border-radius:999px;
+    background:#f5f3ff;
+    border:1px solid rgba(124,58,237,.12);
+    color:#6d28d9;
+    font-size:14px;
+    font-weight:1000;
+  }
+  h1{
+    margin:22px auto 0;
+    max-width:980px;
+    font-size:clamp(2.5rem, 6vw, 5.2rem);
+    line-height:.98;
+    letter-spacing:-.05em;
+    font-weight:1000;
+    color:#0f172a;
+  }
+  .grad{
+    background:linear-gradient(90deg,#7c3aed,#db2777,#f59e0b);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    -webkit-text-fill-color:transparent;
+  }
+  .lead{
+    margin:18px auto 0;
+    max-width:760px;
+    font-size:20px;
+    line-height:1.75;
+    color:#4b5563;
+    font-weight:800;
+  }
+  .actions{
+    margin-top:28px;
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    justify-content:center;
+  }
+  .ctaBtn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:54px;
+    padding:14px 22px;
+    border-radius:999px;
+    text-decoration:none;
+    font-weight:1000;
+  }
+  .ctaPrimary{
+    color:#fff;
+    background:linear-gradient(90deg,#7c3aed,#db2777);
+    box-shadow:0 18px 38px rgba(124,58,237,.20);
+  }
+  .ctaSoft{
+    color:#6d28d9;
+    background:#fff;
+    border:1px solid rgba(124,58,237,.16);
+    box-shadow:var(--shadow2);
+  }
+  @media (max-width: 640px){
+    .hero{
+      padding:48px 18px 36px;
+    }
+    .lead{
+      font-size:17px;
+    }
+    .actions{
+      flex-direction:column;
+    }
+    .ctaBtn{
+      width:100%;
+    }
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>📚 Meu Livro Mágico</h1>
-    <p>Gere um livro infantil personalizado com a foto da criança, história e imagens — tudo automático.</p>
-    <a class="btn" href="/create">✨ Ir para o gerador</a>
-    <div class="muted">Dica: crie um <code>landing.html</code> ao lado do <code>app.js</code> para personalizar.</div>
+  ${header}
+
+  <div class="heroWrap">
+    <section class="hero">
+      <div class="eyebrow">✨ Histórias mágicas personalizadas</div>
+      <h1>Crie livros <span class="grad">personalizados</span> para seu pequeno!</h1>
+      <p class="lead">
+        Gere um livro infantil único com a foto da criança, cenas encantadoras,
+        história especial e páginas prontas para ler e guardar para sempre.
+      </p>
+
+      <div class="actions">
+        <a class="ctaBtn ctaPrimary" href="/create">✨ Criar Livro Mágico</a>
+        <a class="ctaBtn ctaSoft" href="/como-funciona">❓ Ver como funciona</a>
+      </div>
+    </section>
   </div>
+
+<script>
+  ${SHARED_HEADER_JS()}
+</script>
 </body>
 </html>`);
   });
@@ -291,44 +568,184 @@ module.exports = function mountPages(app) {
       console.error("[pages.js] erro ao abrir how-it-works.html:", e);
     }
 
+    const header = buildPublicHeader({
+      actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+      menuId: "howMenuPanel",
+      toggleId: "howMenuToggle",
+    });
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Como funciona — Meu Livro Mágico</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);color:#111827;}
-  .card{max-width:860px;margin:24px;padding:24px;border-radius:18px;background:#fff;border:1px solid rgba(0,0,0,.08);box-shadow:0 20px 50px rgba(0,0,0,.10);}
-  h1{margin:0 0 10px 0;font-size:28px;}
-  p{opacity:.92;line-height:1.7;margin:0 0 12px 0;font-weight:700;}
-  ul{margin:10px 0 0; padding-left:18px; line-height:1.7; font-weight:800;}
-  a.btn{display:inline-flex;gap:10px;align-items:center;padding:12px 16px;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#db2777);color:#fff;text-decoration:none;font-weight:1000;}
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
-  .muted{opacity:.7;font-size:12px;margin-top:10px;font-weight:800;}
-  code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:8px}
+  ${sharedBaseCss()}
+  .wrap{
+    width:min(calc(100% - 24px), 1100px);
+    margin:24px auto 34px;
+  }
+  .hero{
+    padding:56px 22px 34px;
+    border-radius:28px;
+    background:
+      radial-gradient(circle at top left, rgba(124,58,237,.12), transparent 28%),
+      linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,248,252,.96));
+    border:1px solid rgba(255,255,255,.92);
+    box-shadow:var(--shadow);
+    text-align:center;
+  }
+  .eyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    min-height:38px;
+    padding:0 16px;
+    border-radius:999px;
+    background:#f5f3ff;
+    border:1px solid rgba(124,58,237,.12);
+    color:#6d28d9;
+    font-size:13px;
+    font-weight:1000;
+  }
+  h1{
+    margin:18px auto 0;
+    max-width:900px;
+    font-size:clamp(2.2rem, 5vw, 4.6rem);
+    line-height:1.02;
+    letter-spacing:-.05em;
+    font-weight:1000;
+    color:#0f172a;
+  }
+  .grad{
+    background:linear-gradient(90deg,#7c3aed,#db2777,#f59e0b);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    -webkit-text-fill-color:transparent;
+  }
+  .lead{
+    margin:16px auto 0;
+    max-width:860px;
+    color:#4b5563;
+    line-height:1.8;
+    font-weight:800;
+    font-size:20px;
+  }
+  .steps{
+    margin-top:18px;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:14px;
+  }
+  .step{
+    background:#fff;
+    border:1px solid rgba(15,23,42,.06);
+    border-radius:22px;
+    box-shadow:var(--shadow2);
+    padding:18px;
+    text-align:left;
+  }
+  .stepNo{
+    width:40px;
+    height:40px;
+    border-radius:14px;
+    display:grid;
+    place-items:center;
+    color:#fff;
+    font-weight:1000;
+    background:linear-gradient(135deg,#7c3aed,#db2777);
+    box-shadow:0 14px 28px rgba(124,58,237,.18);
+  }
+  .step h3{
+    margin:14px 0 0;
+    font-size:20px;
+    line-height:1.2;
+    font-weight:1000;
+  }
+  .step p{
+    margin:10px 0 0;
+    color:#4b5563;
+    line-height:1.7;
+    font-weight:800;
+  }
+  .actions{
+    margin-top:24px;
+    display:flex;
+    justify-content:center;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .ctaBtn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:52px;
+    padding:14px 20px;
+    border-radius:999px;
+    text-decoration:none;
+    font-weight:1000;
+  }
+  .ctaPrimary{
+    color:#fff;
+    background:linear-gradient(90deg,#7c3aed,#db2777);
+    box-shadow:0 18px 38px rgba(124,58,237,.20);
+  }
+  .ctaSoft{
+    color:#6d28d9;
+    background:#fff;
+    border:1px solid rgba(124,58,237,.16);
+    box-shadow:var(--shadow2);
+  }
+  @media (max-width: 860px){
+    .steps{
+      grid-template-columns:1fr;
+    }
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>✨ Como funciona</h1>
-    <p>Você envia a foto da criança, escolhe o tema e o estilo do livro.</p>
-    <ul>
-      <li>1) Envie a foto</li>
-      <li>2) Informe nome/idade e escolha o tema</li>
-      <li>3) O sistema cria a história (texto) e gera as imagens uma por vez</li>
-      <li>4) O texto é carimbado dentro do PNG e no final sai um PDF</li>
-    </ul>
+  ${header}
 
-    <div class="row">
-      <a class="btn" href="/sales">🛒 Voltar para Vendas</a>
-      <a class="btn" href="/create">📚 Ir para o Gerador</a>
-    </div>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">✨ Entenda o passo a passo</div>
+      <h1>Como o <span class="grad">Meu Livro Mágico</span> funciona na prática</h1>
+      <p class="lead">
+        Você envia a foto, escolhe o tema e o estilo do livro.
+        Nós criamos a história, geramos as cenas e montamos tudo em um livro mágico especial.
+      </p>
 
-    <div class="muted">
-      Dica: crie um arquivo <code>how-it-works.html</code> ao lado do <code>app.js</code> para personalizar esta página.
-    </div>
+      <div class="steps">
+        <div class="step">
+          <div class="stepNo">1</div>
+          <h3>Envie a foto</h3>
+          <p>Escolha uma imagem da criança. Ela será usada como base para ilustrar as páginas do livro.</p>
+        </div>
+        <div class="step">
+          <div class="stepNo">2</div>
+          <h3>Escolha a aventura</h3>
+          <p>Defina o tema, o estilo e os dados da criança para personalizar a história do jeito certo.</p>
+        </div>
+        <div class="step">
+          <div class="stepNo">3</div>
+          <h3>Receba o livro</h3>
+          <p>O sistema cria as páginas, monta o PDF e deixa tudo pronto para visualizar e baixar.</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="ctaBtn ctaPrimary" href="/create">✨ Criar meu livro agora</a>
+        <a class="ctaBtn ctaSoft" href="/sales">🏠 Voltar para a página inicial</a>
+      </div>
+    </section>
   </div>
+
+<script>
+  ${SHARED_HEADER_JS()}
+</script>
 </body>
 </html>`);
   });
@@ -343,72 +760,183 @@ module.exports = function mountPages(app) {
       console.error("[pages.js] erro ao abrir coins-info.html:", e);
     }
 
-    return res.status(200).type("html").send(`<!doctype html>
+    const user = req.user || null;
+    const header = user
+      ? buildAuthHeader(req, {
+          actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+          menuId: "coinsMenuPanelAuth",
+          toggleId: "coinsMenuToggleAuth",
+        })
+      : buildPublicHeader({
+          actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+          menuId: "coinsMenuPanelPublic",
+          toggleId: "coinsMenuTogglePublic",
+        });
+
+    res.status(200).type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta http-equiv="X-UA-Compatible" content="IE=edge"/>
 <title>Moedas — Meu Livro Mágico</title>
 <style>
-  body{
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-    margin:0;
-    min-height:100vh;
-    display:grid;
-    place-items:center;
-    background:linear-gradient(180deg,#ede9fe,#fff,#fdf2f8);
-    color:#111827;
+  ${sharedBaseCss()}
+  .wrap{
+    width:min(calc(100% - 24px), 1100px);
+    margin:24px auto 34px;
   }
-  .card{
-    max-width:860px;
-    margin:24px;
-    padding:24px;
-    border-radius:18px;
-    background:#fff;
-    border:1px solid rgba(0,0,0,.08);
-    box-shadow:0 20px 50px rgba(0,0,0,.10);
+  .hero{
+    padding:54px 22px 34px;
+    border-radius:28px;
+    background:
+      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
+      linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,250,244,.96));
+    border:1px solid rgba(255,255,255,.92);
+    box-shadow:var(--shadow);
+    text-align:center;
   }
-  h1{margin:0 0 10px 0;font-size:28px;}
-  p{opacity:.92;line-height:1.7;margin:0 0 12px 0;font-weight:700;}
-  ul{margin:10px 0 0; padding-left:18px; line-height:1.7; font-weight:800;}
-  a.btn{
+  .eyebrow{
     display:inline-flex;
-    gap:10px;
     align-items:center;
-    padding:12px 16px;
+    gap:8px;
+    min-height:38px;
+    padding:0 16px;
     border-radius:999px;
-    background:linear-gradient(90deg,#f59e0b,#f97316);
-    color:#fff;
+    background:#fff7ed;
+    border:1px solid rgba(245,158,11,.18);
+    color:#b45309;
+    font-size:13px;
+    font-weight:1000;
+  }
+  h1{
+    margin:18px auto 0;
+    max-width:900px;
+    font-size:clamp(2.2rem, 5vw, 4.5rem);
+    line-height:1.02;
+    letter-spacing:-.05em;
+    font-weight:1000;
+    color:#0f172a;
+  }
+  .grad{
+    background:linear-gradient(90deg,#7c3aed,#db2777,#f59e0b);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    -webkit-text-fill-color:transparent;
+  }
+  .lead{
+    margin:16px auto 0;
+    max-width:860px;
+    color:#4b5563;
+    line-height:1.8;
+    font-weight:800;
+    font-size:19px;
+  }
+  .grid{
+    margin-top:22px;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:14px;
+  }
+  .cardInfo{
+    background:#fff;
+    border:1px solid rgba(15,23,42,.06);
+    border-radius:22px;
+    box-shadow:var(--shadow2);
+    padding:18px;
+    text-align:left;
+  }
+  .cardInfo h3{
+    margin:0;
+    font-size:20px;
+    line-height:1.2;
+    font-weight:1000;
+  }
+  .cardInfo p{
+    margin:10px 0 0;
+    color:#4b5563;
+    line-height:1.7;
+    font-weight:800;
+  }
+  .actions{
+    margin-top:24px;
+    display:flex;
+    justify-content:center;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .ctaBtn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:52px;
+    padding:14px 20px;
+    border-radius:999px;
     text-decoration:none;
     font-weight:1000;
   }
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
-  .muted{opacity:.7;font-size:12px;margin-top:10px;font-weight:800;}
-  code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:8px}
+  .ctaPrimary{
+    color:#fff;
+    background:linear-gradient(90deg,#f59e0b,#f97316);
+    box-shadow:0 18px 38px rgba(245,158,11,.20);
+  }
+  .ctaSoft{
+    color:#6d28d9;
+    background:#fff;
+    border:1px solid rgba(124,58,237,.16);
+    box-shadow:var(--shadow2);
+  }
+  @media (max-width: 860px){
+    .grid{
+      grid-template-columns:1fr;
+    }
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>🪙 Para que servem as moedas</h1>
-    <p>As moedas organizam o saldo e as recompensas da sua carteira dentro da plataforma.</p>
-    <ul>
-      <li>1) Você pode ganhar moedas por pedidos válidos</li>
-      <li>2) Você pode receber moedas no check-in diário</li>
-      <li>3) Você pode comprar pacotes de moedas</li>
-      <li>4) Você acompanha tudo na sua carteira do perfil</li>
-      <li>5) Pode solicitar saque do saldo disponível</li>
-    </ul>
+  ${header}
 
-    <div class="row">
-      <a class="btn" href="/profile">🪙 Ir para minha carteira</a>
-      <a class="btn" href="/create">✨ Criar livro</a>
-    </div>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">🪙 Carteira e descontos</div>
+      <h1>Entenda como as <span class="grad">moedas</span> funcionam</h1>
+      <p class="lead">
+        As moedas servem para gerar desconto nas compras. Cada moeda equivale a
+        R$ 1,00 em abatimento no valor do pedido. Se o saldo for suficiente,
+        o próprio saldo em moedas pode pagar o livro inteiro.
+      </p>
 
-    <div class="muted">
-      Dica: crie um arquivo <code>coins-info.html</code> ao lado do <code>app.js</code> para personalizar esta página.
-    </div>
+      <div class="grid">
+        <div class="cardInfo">
+          <h3>✅ Como ganhar moedas</h3>
+          <p>Você ganha moedas ao fazer check-in, ao realizar compras válidas e também pode receber bônus ao comprar pacotes de moedas.</p>
+        </div>
+        <div class="cardInfo">
+          <h3>💸 Como usar</h3>
+          <p>No checkout, você pode escolher usar moedas. O sistema abate seu saldo no valor da compra automaticamente.</p>
+        </div>
+        <div class="cardInfo">
+          <h3>🎁 Exemplo prático</h3>
+          <p>Se um livro custa R$ 100 e você tem 100 moedas, o valor em dinheiro cai para zero e as moedas viram o pagamento total.</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        ${
+          user
+            ? `<a class="ctaBtn ctaPrimary" href="/profile">🪙 Ir para minha carteira</a>`
+            : `<a class="ctaBtn ctaPrimary" href="/login?next=%2Fprofile">🪙 Ver minha carteira</a>`
+        }
+        <a class="ctaBtn ctaSoft" href="/create">✨ Criar livro</a>
+      </div>
+    </section>
   </div>
+
+<script>
+  ${SHARED_HEADER_JS()}
+</script>
 </body>
 </html>`);
   });
@@ -423,15 +951,67 @@ module.exports = function mountPages(app) {
       console.error("[pages.js] erro ao abrir exemplos.html:", e);
     }
 
-    res.status(404).type("html").send(`
-      <h1>exemplos.html não encontrado</h1>
-      <p>Coloque um arquivo <code>exemplos.html</code> ao lado do <code>app.js</code>.</p>
-      <p><a href="/sales">Voltar</a></p>
-    `);
+    const header = req.user
+      ? buildAuthHeader(req, {
+          actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+          menuId: "examplesMenuPanelAuth",
+          toggleId: "examplesMenuToggleAuth",
+        })
+      : buildPublicHeader({
+          actions: [{ label: "✨ Criar Livro", kind: "primary", href: "/create" }],
+          menuId: "examplesMenuPanelPublic",
+          toggleId: "examplesMenuTogglePublic",
+        });
+
+    res.status(404).type("html").send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Exemplos — Meu Livro Mágico</title>
+<style>
+  ${sharedBaseCss()}
+  .wrap{
+    width:min(calc(100% - 24px), 980px);
+    margin:24px auto 34px;
+  }
+  .card{
+    padding:28px;
+    text-align:center;
+  }
+  h1{margin:0;font-size:34px;line-height:1.1;font-weight:1000}
+  p{margin:14px auto 0;max-width:680px;color:#4b5563;line-height:1.8;font-weight:800}
+  .actions{margin-top:22px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    min-height:50px;padding:12px 18px;border-radius:999px;text-decoration:none;font-weight:1000;
+  }
+  .primary{color:#fff;background:linear-gradient(90deg,#7c3aed,#db2777);box-shadow:0 18px 38px rgba(124,58,237,.20)}
+  .soft{color:#6d28d9;background:#fff;border:1px solid rgba(124,58,237,.16);box-shadow:var(--shadow2)}
+</style>
+</head>
+<body>
+  ${header}
+
+  <div class="wrap">
+    <div class="card">
+      <h1>Exemplos ainda não configurados</h1>
+      <p>O arquivo <code>exemplos.html</code> não foi encontrado. Coloque esse arquivo ao lado do <code>app.js</code> para personalizar essa página.</p>
+      <div class="actions">
+        <a class="btn soft" href="/sales">🏠 Voltar</a>
+        <a class="btn primary" href="/create">✨ Criar livro</a>
+      </div>
+    </div>
+  </div>
+
+<script>
+  ${SHARED_HEADER_JS()}
+</script>
+</body>
+</html>`);
   });
 
-  // ========== Gerador (páginas protegidas) ==========
-  app.get("/", core.requireAuth, (req, res) => renderGeneratorHtml(req, res));
+  // ========== Gerador (página protegida) ==========
   app.get("/create", core.requireAuth, (req, res) => renderGeneratorHtml(req, res));
 
   function renderGeneratorHtml(req, res) {
@@ -444,6 +1024,14 @@ module.exports = function mountPages(app) {
             core.IMAGE_MODEL
           )}</span>`;
 
+    const header = buildAuthHeader(req, {
+      actions: [
+        { id: "btnReset", label: "♻️ Reiniciar", kind: "success", type: "button" },
+      ],
+      menuId: "createMenuPanel",
+      toggleId: "createMenuToggle",
+    });
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -451,102 +1039,77 @@ module.exports = function mountPages(app) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Meu Livro Mágico — Criar</title>
 <style>
+  ${sharedBaseCss()}
   :root{
-    --bg1:#ede9fe;
-    --bg2:#ffffff;
-    --bg3:#fdf2f8;
     --card:#ffffff;
-    --text:#111827;
-    --muted:#6b7280;
-    --border:#e5e7eb;
-    --shadow: 0 20px 50px rgba(0,0,0,.10);
-    --shadow2: 0 10px 24px rgba(0,0,0,.08);
-    --violet:#7c3aed;
-    --pink:#db2777;
     --disabled:#e5e7eb;
     --disabledText:#9ca3af;
   }
-  *{box-sizing:border-box}
   body{
     margin:0;
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
     color:var(--text);
-    background: linear-gradient(to bottom, var(--bg1), var(--bg2), var(--bg3));
+    background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));
     min-height:100vh;
     padding-bottom:110px;
   }
-  .container{max-width: 980px; margin:0 auto; padding: 24px 16px;}
-  .topRow{
-    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-    margin-bottom: 16px;
-  }
-  .topActions{display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end;}
-  .pill{
-    background: rgba(124,58,237,.10);
-    color: #4c1d95;
-    border:1px solid rgba(124,58,237,.16);
-    padding:6px 10px;
-    border-radius:999px;
-    font-weight:900;
-    text-decoration:none;
-    cursor:pointer;
-  }
-  .pill:hover{filter:brightness(1.05)}
+  .container{max-width:980px; margin:0 auto; padding:24px 16px 0;}
+
   .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
 
-  .stepper{display:flex; align-items:center; justify-content:center; gap: 10px; flex-wrap:wrap; margin: 10px 0 22px;}
+  .stepper{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin:10px 0 22px;}
   .stepItem{ display:flex; flex-direction:column; align-items:center; gap:8px; }
   .stepDot{
     width:40px; height:40px; border-radius:999px;
     display:grid; place-items:center;
     font-weight:1000; font-size:14px;
     transition: transform .2s ease;
-    border: 1px solid rgba(0,0,0,.06);
+    border:1px solid rgba(0,0,0,.06);
   }
-  .stepDot.done{ background: linear-gradient(135deg,#34d399,#10b981); color:#fff; border-color:transparent;}
-  .stepDot.active{ background: linear-gradient(135deg,var(--violet),var(--pink)); color:#fff; border-color:transparent; box-shadow: 0 10px 24px rgba(124,58,237,.25); transform: scale(1.08); }
+  .stepDot.done{ background:linear-gradient(135deg,#34d399,#10b981); color:#fff; border-color:transparent;}
+  .stepDot.active{ background:linear-gradient(135deg,var(--violet),var(--pink)); color:#fff; border-color:transparent; box-shadow:0 10px 24px rgba(124,58,237,.25); transform: scale(1.08); }
   .stepDot.todo{ background:#e5e7eb; color:#9ca3af; }
   .stepLabel{ font-size:12px; font-weight:900; color:#9ca3af; display:none; }
   @media (min-width: 640px){ .stepLabel{ display:block; } }
-  .stepLabel.active{ color: var(--violet); }
-  .stepLine{width: 56px; height: 6px; border-radius:999px; background:#e5e7eb;}
-  @media (min-width: 768px){ .stepLine{ width: 90px; } }
-  .stepLine.done{ background: linear-gradient(90deg,#34d399,#10b981); }
+  .stepLabel.active{ color:var(--violet); }
+  .stepLine{width:56px; height:6px; border-radius:999px; background:#e5e7eb;}
+  @media (min-width: 768px){ .stepLine{ width:90px; } }
+  .stepLine.done{ background:linear-gradient(90deg,#34d399,#10b981); }
 
   .card{
-    background: var(--card);
+    background:var(--card);
     border:1px solid var(--border);
-    border-radius: 26px;
-    box-shadow: var(--shadow);
-    padding: 18px;
+    border-radius:26px;
+    box-shadow:var(--shadow);
+    padding:18px;
   }
-  .head{text-align:center; padding: 14px 10px 6px;}
-  .head h1{ margin:0; font-size: 26px; font-weight:1000; }
-  .head p{ margin:8px 0 0; color: var(--muted); font-weight:800; }
+  .head{text-align:center; padding:14px 10px 6px;}
+  .head h1{ margin:0; font-size:26px; font-weight:1000; }
+  .head p{ margin:8px 0 0; color:var(--muted); font-weight:800; }
 
-  .panel{ margin-top: 12px; display:none; animation: fadeIn .18s ease; }
+  .panel{ margin-top:12px; display:none; animation:fadeIn .18s ease; }
   .panel.active{ display:block; }
   @keyframes fadeIn{ from{opacity:0; transform: translateX(10px)} to{opacity:1; transform: translateX(0)} }
 
   .drop{
     border:2px dashed rgba(124,58,237,.35);
-    border-radius: 18px;
-    padding: 26px 16px;
+    border-radius:18px;
+    padding:26px 16px;
     text-align:center;
     cursor:pointer;
-    background: rgba(124,58,237,.04);
-    box-shadow: var(--shadow2);
+    background:rgba(124,58,237,.04);
+    box-shadow:var(--shadow2);
   }
-  .drop.drag{ border-color: rgba(219,39,119,.55); background: rgba(219,39,119,.04); }
-  .drop .big{ font-size: 40px; }
+  .drop.drag{ border-color:rgba(219,39,119,.55); background:rgba(219,39,119,.04); }
+  .drop .big{ font-size:40px; }
   .drop .t{ font-weight:1000; font-size:18px; margin-top:10px; }
-  .drop .s{ color: var(--muted); font-weight:800; margin-top:6px; }
+  .drop .s{ color:var(--muted); font-weight:800; margin-top:6px; }
 
   .twoCol{
-    margin-top: 16px;
+    margin-top:16px;
     display:grid;
-    grid-template-columns: 180px 1fr;
-    gap: 14px;
+    grid-template-columns:180px 1fr;
+    gap:14px;
     align-items:center;
   }
   @media (max-width: 640px){ .twoCol{ grid-template-columns:1fr; } }
@@ -555,86 +1118,86 @@ module.exports = function mountPages(app) {
   .previewImg{
     width:160px; height:160px; border-radius:999px;
     object-fit:cover;
-    border: 6px solid rgba(250,204,21,.65);
-    box-shadow: var(--shadow2);
+    border:6px solid rgba(250,204,21,.65);
+    box-shadow:var(--shadow2);
     display:none;
     background:#fff;
   }
   .previewEmpty{
     width:160px; height:160px; border-radius:999px;
-    background: rgba(0,0,0,.04);
+    background:rgba(0,0,0,.04);
     display:grid; place-items:center;
-    font-size: 42px;
+    font-size:42px;
   }
 
   .hint{
     margin-top:10px;
     padding:12px;
-    border-radius: 14px;
-    background: rgba(219,39,119,.06);
-    border: 1px solid rgba(219,39,119,.14);
+    border-radius:14px;
+    background:rgba(219,39,119,.06);
+    border:1px solid rgba(219,39,119,.14);
     color:#7f1d1d;
     font-weight:900;
     white-space:pre-wrap;
     display:none;
   }
 
-  .field{ margin-top: 14px; }
+  .field{ margin-top:14px; }
   .label{ font-weight:1000; margin-bottom:8px; }
   .input,.select{
     width:100%;
     border:1px solid var(--border);
-    border-radius: 16px;
-    padding: 14px 14px;
-    font-size: 16px;
+    border-radius:16px;
+    padding:14px 14px;
+    font-size:16px;
     font-weight:900;
     outline:none;
     background:#fff;
   }
-  .input:focus,.select:focus{ border-color: rgba(124,58,237,.4); box-shadow: 0 0 0 4px rgba(124,58,237,.12); }
+  .input:focus,.select:focus{ border-color:rgba(124,58,237,.4); box-shadow:0 0 0 4px rgba(124,58,237,.12); }
 
-  .rangeMeta{display:flex; justify-content:space-between; color: var(--muted); font-weight:900; margin-top: 8px; font-size: 12px;}
+  .rangeMeta{display:flex; justify-content:space-between; color:var(--muted); font-weight:900; margin-top:8px; font-size:12px;}
 
-  .grid3{display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px;}
-  @media (max-width: 900px){ .grid3{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 520px){ .grid3{ grid-template-columns: 1fr; } }
+  .grid3{display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin-top:10px;}
+  @media (max-width: 900px){ .grid3{ grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px){ .grid3{ grid-template-columns:1fr; } }
 
   .pick{
     border:1px solid var(--border);
-    border-radius: 18px;
-    padding: 14px;
+    border-radius:18px;
+    padding:14px;
     background:#fff;
     cursor:pointer;
-    box-shadow: var(--shadow2);
+    box-shadow:var(--shadow2);
     text-align:left;
-    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+    transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
   }
-  .pick:active{ transform: translateY(1px); }
+  .pick:active{ transform:translateY(1px); }
   .pick.active{
-    border-color: rgba(124,58,237,.45);
-    box-shadow: 0 16px 40px rgba(124,58,237,.18);
-    outline: 3px solid rgba(124,58,237,.16);
+    border-color:rgba(124,58,237,.45);
+    box-shadow:0 16px 40px rgba(124,58,237,.18);
+    outline:3px solid rgba(124,58,237,.16);
   }
-  .pick .ico{ font-size: 34px; }
-  .pick .tt{ margin-top: 10px; font-weight:1000; font-size: 18px; }
-  .pick .dd{ margin-top: 6px; color: var(--muted); font-weight:800; }
+  .pick .ico{ font-size:34px; }
+  .pick .tt{ margin-top:10px; font-weight:1000; font-size:18px; }
+  .pick .dd{ margin-top:6px; color:var(--muted); font-weight:800; }
 
   .footer{
-    position: fixed;
+    position:fixed;
     left:0; right:0; bottom:0;
-    background: rgba(255,255,255,.82);
-    backdrop-filter: blur(12px);
-    border-top: 1px solid rgba(0,0,0,.06);
-    padding: 14px 16px;
+    background:rgba(255,255,255,.82);
+    backdrop-filter:blur(12px);
+    border-top:1px solid rgba(0,0,0,.06);
+    padding:14px 16px;
   }
   .footerInner{
-    max-width: 980px; margin:0 auto;
+    max-width:980px; margin:0 auto;
     display:flex; justify-content:space-between; align-items:center; gap:10px;
   }
   .btn{
     border:0; cursor:pointer;
-    border-radius: 999px;
-    padding: 12px 18px;
+    border-radius:999px;
+    padding:12px 18px;
     font-weight:1000;
     display:inline-flex;
     align-items:center;
@@ -643,12 +1206,12 @@ module.exports = function mountPages(app) {
   }
   .btnPrimary{
     color:#fff;
-    background: linear-gradient(90deg, var(--violet), var(--pink));
-    box-shadow: 0 16px 34px rgba(124,58,237,.22);
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    box-shadow:0 16px 34px rgba(124,58,237,.22);
   }
   .btnPrimary:disabled{
-    background: var(--disabled);
-    color: var(--disabledText);
+    background:var(--disabled);
+    color:var(--disabledText);
     box-shadow:none;
     cursor:not-allowed;
   }
@@ -656,19 +1219,9 @@ module.exports = function mountPages(app) {
 </head>
 
 <body>
-  <div class="container">
-    <div class="topRow">
-      <div class="topActions">
-        <a class="pill" href="/sales">🛒 Pagina Inicial</a>
-        <a class="pill" href="/books">📚 Meus Livros</a>
-        <a class="pill" href="/como-funciona">❓ Como funciona</a>
-        <a class="pill" href="/coins-info">🪙 Para que servem as moedas</a>
-        <button class="pill" id="btnReset" style="cursor:pointer" type="button">♻️ Reiniciar</button>
-        <button class="pill" id="btnProfile" style="cursor:pointer" type="button">👤 Perfil</button>
-        <button class="pill" id="btnLogout" style="cursor:pointer" type="button">🚪 Sair</button>
-      </div>
-    </div>
+  ${header}
 
+  <div class="container">
     <div style="text-align:center;font-weight:900;color:#6b7280;margin:10px 0 18px;">${imageInfo}</div>
 
     <div class="stepper" id="stepper"></div>
@@ -779,39 +1332,55 @@ module.exports = function mountPages(app) {
   </div>
 
 <script>
+  ${SHARED_HEADER_JS()}
+
   const steps = [
     { id: "photo",   title: "Foto Mágica",        sub: "Envie uma foto da criança" },
     { id: "profile", title: "Quem é o Herói?",    sub: "Conte-nos sobre a criança" },
     { id: "theme",   title: "Escolha a Aventura", sub: "Selecione o tema e estilo" }
   ];
 
+  const CREATE_STORAGE_KEYS = [
+    "currentStep",
+    "bookId",
+    "photo",
+    "mask",
+    "theme",
+    "style",
+    "childName",
+    "childAge",
+    "childGender",
+    "consent",
+    "city"
+  ];
+
+  function resetCreateFlowStorage() {
+    try {
+      for (const key of CREATE_STORAGE_KEYS) {
+        localStorage.removeItem(key);
+      }
+    } catch {}
+  }
+
+  // ✅ IMPORTANTE:
+  // Sempre que entrar em /create, o fluxo começa do zero.
+  resetCreateFlowStorage();
+
   const state = {
-    currentStep: Number(localStorage.getItem("currentStep") || "0"),
-    bookId: localStorage.getItem("bookId") || "",
-    photo: localStorage.getItem("photo") || "",
-    mask: localStorage.getItem("mask") || "",
-    theme: localStorage.getItem("theme") || "",
-    style: localStorage.getItem("style") || "read",
-    childName: localStorage.getItem("childName") || "",
-    childAge: Number(localStorage.getItem("childAge") || "6"),
-    childGender: localStorage.getItem("childGender") || "neutral",
-    consent: localStorage.getItem("consent") === "1",
+    currentStep: 0,
+    bookId: "",
+    photo: "",
+    mask: "",
+    theme: "",
+    style: "read",
+    childName: "",
+    childAge: 6,
+    childGender: "neutral",
+    consent: false,
+    city: ""
   };
 
   const $ = (id) => document.getElementById(id);
-
-  document.getElementById('btnProfile')?.addEventListener('click', () => {
-    window.location.href = '/profile';
-  });
-
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/sales';
-    } catch (e) {
-      alert('Erro ao sair');
-    }
-  });
 
   function setHint(el, msg) {
     el.textContent = msg || "";
@@ -867,7 +1436,6 @@ module.exports = function mountPages(app) {
   }
 
   function setStepUI() {
-    localStorage.setItem("currentStep", String(state.currentStep));
     buildStepper();
 
     $("stepTitle").textContent = steps[state.currentStep].title;
@@ -886,7 +1454,6 @@ module.exports = function mountPages(app) {
 
   function selectTheme(themeKey) {
     state.theme = themeKey || "";
-    localStorage.setItem("theme", state.theme);
     document.querySelectorAll("[data-theme]").forEach(b => {
       const active = b.getAttribute("data-theme") === state.theme;
       b.classList.toggle("active", active);
@@ -896,7 +1463,6 @@ module.exports = function mountPages(app) {
 
   function selectStyle(styleKey) {
     state.style = styleKey || "read";
-    localStorage.setItem("style", state.style);
     document.querySelectorAll(".styleBtn").forEach(b => {
       const active = b.getAttribute("data-style") === state.style;
       b.classList.toggle("active", active);
@@ -905,20 +1471,7 @@ module.exports = function mountPages(app) {
   }
 
   async function ensureBook() {
-    if (state.bookId) {
-      try {
-        const rr = await fetch("/api/status/" + encodeURIComponent(state.bookId), { method: "GET" });
-        if (rr.ok) {
-          const jj = await rr.json().catch(()=> ({}));
-          if (jj && jj.ok) return state.bookId;
-        }
-        state.bookId = "";
-        localStorage.removeItem("bookId");
-      } catch {
-        state.bookId = "";
-        localStorage.removeItem("bookId");
-      }
-    }
+    if (state.bookId) return state.bookId;
 
     const r = await fetch("/api/create", {
       method: "POST",
@@ -930,7 +1483,6 @@ module.exports = function mountPages(app) {
     if (!r.ok || !j.ok || !j.id) throw new Error(j.error || "Falha ao criar book");
 
     state.bookId = j.id;
-    localStorage.setItem("bookId", state.bookId);
     return state.bookId;
   }
 
@@ -1038,8 +1590,6 @@ module.exports = function mountPages(app) {
 
         state.photo = photoPng;
         state.mask = maskPng;
-        localStorage.setItem("photo", photoPng);
-        localStorage.setItem("mask", maskPng);
         showPhoto(photoPng);
 
         await ensureBook();
@@ -1068,22 +1618,18 @@ module.exports = function mountPages(app) {
 
   $("childName").addEventListener("input", (e) => {
     state.childName = e.target.value;
-    localStorage.setItem("childName", state.childName);
     setStepUI();
   });
   $("childAge").addEventListener("input", (e) => {
     state.childAge = Number(e.target.value || "6");
     $("ageLabel").textContent = String(state.childAge);
-    localStorage.setItem("childAge", String(state.childAge));
     setStepUI();
   });
   $("childGender").addEventListener("change", (e) => {
     state.childGender = e.target.value;
-    localStorage.setItem("childGender", state.childGender);
   });
   $("consent").addEventListener("change", (e) => {
     state.consent = !!e.target.checked;
-    localStorage.setItem("consent", state.consent ? "1" : "0");
     setStepUI();
   });
 
@@ -1117,22 +1663,20 @@ module.exports = function mountPages(app) {
   });
 
   $("btnReset").addEventListener("click", () => {
-    localStorage.clear();
+    resetCreateFlowStorage();
     location.reload();
   });
 
   (function init(){
-    showPhoto(state.photo);
-    $("childName").value = state.childName;
-    $("childAge").value = String(state.childAge);
-    $("ageLabel").textContent = String(state.childAge);
-    $("childGender").value = state.childGender;
-    $("consent").checked = state.consent;
+    showPhoto("");
+    $("childName").value = "";
+    $("childAge").value = "6";
+    $("ageLabel").textContent = "6";
+    $("childGender").value = "neutral";
+    $("consent").checked = false;
 
-    if (state.theme) selectTheme(state.theme);
-    selectStyle(state.style || "read");
-
-    if (state.currentStep < 0 || state.currentStep > 2) state.currentStep = 0;
+    selectStyle("read");
+    state.currentStep = 0;
     setStepUI();
   })();
 </script>
@@ -1144,6 +1688,12 @@ module.exports = function mountPages(app) {
   app.get("/generate", core.requireAuth, async (req, res) => {
     const bookId = String(req.query?.id || "").trim();
 
+    const header = buildAuthHeader(req, {
+      actions: [],
+      menuId: "generateMenuPanel",
+      toggleId: "generateMenuToggle",
+    });
+
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -1151,10 +1701,8 @@ module.exports = function mountPages(app) {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Gerando… — Meu Livro Mágico</title>
 <style>
-  :root{--bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;--text:#111827;--muted:#6b7280;--violet:#7c3aed;--pink:#db2777;--border:#e5e7eb}
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));min-height:100vh;color:var(--text)}
-  .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
+  ${sharedBaseCss()}
+  .wrap{max-width:980px;margin:24px auto 34px;padding:0 16px}
   .card{background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px}
   .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between}
   h1{margin:0;font-size:22px;font-weight:1000}
@@ -1174,30 +1722,33 @@ module.exports = function mountPages(app) {
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
-    <div class="row">
-      <div>
-        <h1>⏳ Gerando seu livro…</h1>
-        <div class="muted" id="sub">Preparando…</div>
+  ${header}
+
+  <div class="wrap">
+    <div class="card">
+      <div class="row">
+        <div>
+          <h1>⏳ Gerando seu livro…</h1>
+          <div class="muted" id="sub">Preparando…</div>
+        </div>
+        <div class="muted" id="meta">—</div>
       </div>
-      <div class="muted" id="meta">—</div>
-    </div>
-    <div class="bar"><div id="barFill"></div></div>
-    <div class="log" id="log">Iniciando…</div>
+      <div class="bar"><div id="barFill"></div></div>
+      <div class="log" id="log">Iniciando…</div>
 
-    <div class="imgs" id="imgs"></div>
+      <div class="imgs" id="imgs"></div>
 
-    <div class="btns">
-      <button class="btn ghost" id="btnLogout" type="button">🚪 Sair</button>
-      <a class="btn ghost" href="/create">← Voltar</a>
-      <a class="btn ghost" href="/books">📚 Meus Livros</a>
-      <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
+      <div class="btns">
+        <a class="btn ghost" href="/create">← Voltar</a>
+        <a class="btn ghost" href="/books">📚 Meus Livros</a>
+        <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
+      </div>
     </div>
   </div>
-</div>
 
 <script>
+  ${SHARED_HEADER_JS()}
+
   const bookId = ${JSON.stringify(bookId || "")};
 
   const $ = (id) => document.getElementById(id);
@@ -1205,15 +1756,6 @@ module.exports = function mountPages(app) {
   function setSub(s){ $("sub").textContent = String(s||""); }
   function setMeta(s){ $("meta").textContent = String(s||""); }
   function setBar(p){ $("barFill").style.width = Math.max(0, Math.min(100, p)) + "%"; }
-
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/sales';
-    } catch (e) {
-      alert('Erro ao sair');
-    }
-  });
 
   function renderImages(coverUrl, images){
     const root = $("imgs");

@@ -5,6 +5,12 @@
 
 "use strict";
 
+const {
+  SHARED_HEADER_CSS,
+  SHARED_HEADER_JS,
+  renderSharedHeader,
+} = require("./shared.header");
+
 function esc(s) {
   s = String(s == null ? "" : s);
   return s
@@ -35,6 +41,30 @@ function renderCheckoutHtml(book, opts = {}) {
 
   const coverUrl = String(book?.coverUrl || "").trim();
   const partnerRef = opts.partnerRef ? JSON.stringify(opts.partnerRef) : "null";
+
+  const sharedHeaderHtml = renderSharedHeader({
+    brandText: "Meu Livro Mágico",
+    brandHref: "/sales",
+    brandIcon: "🛒",
+    menuLabel: "☰ Menu",
+    menuId: "checkoutSharedMenuPanel",
+    toggleId: "checkoutSharedMenuToggle",
+    showProfile: true,
+    showLogout: true,
+    profileHref: "/profile",
+    menuItems: [
+      { label: "Página Inicial", href: "/sales", icon: "🏠" },
+      { label: "Criar Livro", href: "/create", icon: "✨" },
+      { label: "Meus Livros", href: "/books", icon: "📚" },
+      { label: "Como funciona", href: "/como-funciona", icon: "❓" },
+      { label: "Para que servem as moedas", href: "/coins-info", icon: "🪙" },
+      { label: "Parceiros", href: "/parceiros", icon: "🤝" },
+    ],
+    actions: [
+      { id: "checkoutBackBooksBtn", label: "📚 Meus Livros", kind: "soft", href: "/books" },
+      { id: "checkoutViewBookBtn", label: "👀 Ver Livro", kind: "primary", href: "/books/" + encodeURIComponent(dirId) },
+    ],
+  });
 
   return `<!doctype html>
 <html lang="pt-BR">
@@ -80,69 +110,7 @@ function renderCheckoutHtml(book, opts = {}) {
   a{ color:inherit; text-decoration:none; }
   .wrap{ max-width: 1100px; margin: 0 auto; padding: 0 16px; }
 
-  .nav{
-    padding: 16px 0;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:12px;
-  }
-  .brand{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    font-weight:1000;
-    letter-spacing:-.2px;
-  }
-  .brand .logo{
-    width:42px;height:42px;border-radius:14px;
-    display:grid;place-items:center;
-    background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
-    border: 1px solid rgba(124,58,237,.18);
-    box-shadow: var(--shadow2);
-    font-size:20px;
-  }
-  .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-
-  .btn{
-    border:0;
-    cursor:pointer;
-    user-select:none;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    padding: 14px 18px;
-    border-radius: 999px;
-    font-weight: 900;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
-    white-space:nowrap;
-  }
-  .btn:active{ transform: translateY(1px); }
-  .btn[disabled]{
-    cursor:not-allowed;
-    opacity:.72;
-    filter: grayscale(.08);
-  }
-  .btnPrimary{
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    box-shadow: 0 18px 40px rgba(124,58,237,.20);
-  }
-  .btnPrimary:hover{
-    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-    box-shadow: 0 18px 46px rgba(124,58,237,.26);
-  }
-  .btnOutline{
-    color: var(--violet-700);
-    background: rgba(255,255,255,.78);
-    border: 2px solid rgba(221,214,254,.95);
-    box-shadow: 0 12px 26px rgba(17,24,39,.06);
-  }
-  .btnOutline:hover{
-    background: rgba(245,243,255,.95);
-    border-color: rgba(196,181,253,.95);
-  }
+  ${SHARED_HEADER_CSS()}
 
   .hero{ padding: 16px 0 26px; }
   .panel{
@@ -513,6 +481,46 @@ function renderCheckoutHtml(book, opts = {}) {
     flex-wrap:wrap;
     align-items:center;
   }
+  .btn{
+    border:0;
+    cursor:pointer;
+    user-select:none;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding: 14px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
+    white-space:nowrap;
+  }
+  .btn:active{ transform: translateY(1px); }
+  .btn[disabled]{
+    cursor:not-allowed;
+    opacity:.72;
+    filter: grayscale(.08);
+  }
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 40px rgba(124,58,237,.20);
+  }
+  .btnPrimary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 18px 46px rgba(124,58,237,.26);
+  }
+  .btnOutline{
+    color: var(--violet-700);
+    background: rgba(255,255,255,.78);
+    border: 2px solid rgba(221,214,254,.95);
+    box-shadow: 0 12px 26px rgba(17,24,39,.06);
+  }
+  .btnOutline:hover{
+    background: rgba(245,243,255,.95);
+    border-color: rgba(196,181,253,.95);
+  }
+
   .btnOrder{
     border:0;
     color:#fff;
@@ -881,17 +889,7 @@ function renderCheckoutHtml(book, opts = {}) {
 
 <body>
   <div class="wrap">
-    <div class="nav">
-      <div class="brand">
-        <div class="logo">🛒</div>
-        <div>Meu Livro Mágico</div>
-      </div>
-      <div class="navRight">
-        <a class="btn btnOutline" href="/books">← Voltar para Meus Livros</a>
-        <a class="btn btnPrimary" href="/books/${encodeURIComponent(dirId)}">👀 Ver o livro</a>
-        <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
-      </div>
-    </div>
+    ${sharedHeaderHtml}
   </div>
 
   <section class="hero">
@@ -1233,6 +1231,10 @@ function renderCheckoutHtml(book, opts = {}) {
   </div>
 
 <script>
+${SHARED_HEADER_JS()}
+</script>
+
+<script>
 (function(){
   const BOOK_ID = ${JSON.stringify(String(id || ""))};
   const BASE = ${JSON.stringify(basePrice)};
@@ -1252,15 +1254,6 @@ function renderCheckoutHtml(book, opts = {}) {
     loaded: false,
     availableCoins: 0
   };
-
-  document.getElementById("btnLogout")?.addEventListener("click", async () => {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/sales";
-    } catch (e) {
-      alert("Erro ao sair");
-    }
-  });
 
   const DRAFT_KEY = "mlm_checkout_draft_" + BOOK_ID;
   const TIMER_KEY = "mlm_checkout_timer_" + BOOK_ID;

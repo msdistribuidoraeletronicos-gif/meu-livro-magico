@@ -5,12 +5,40 @@
 
 "use strict";
 
+const {
+  SHARED_HEADER_CSS,
+  SHARED_HEADER_JS,
+  renderSharedHeader,
+} = require("../shared.header");
+
 function renderBooksHtml() {
   const ratioNum = 1020;
   const ratioDen = 797;
 
-  return `<!doctype html>
+  const sharedHeaderHtml = renderSharedHeader({
+    brandText: "Meu Livro Mágico",
+    brandHref: "/sales",
+    brandIcon: "📚",
+    menuLabel: "☰ Menu",
+    menuId: "booksSharedMenuPanel",
+    toggleId: "booksSharedMenuToggle",
+    showProfile: true,
+    showLogout: true,
+    profileHref: "/profile",
+    menuItems: [
+      { label: "Página Inicial", href: "/sales", icon: "🏠" },
+      { label: "Criar Livro", href: "/create", icon: "✨" },
+      { label: "Meus Livros", href: "/books", icon: "📚" },
+      { label: "Como funciona", href: "/como-funciona", icon: "❓" },
+      { label: "Para que servem as moedas", href: "/coins-info", icon: "🪙" },
+      { label: "Parceiros", href: "/parceiros", icon: "🤝" },
+    ],
+    actions: [
+      { id: "booksCreateHeaderBtn", label: "✨ Criar Livro", kind: "primary", href: "/create" },
+    ],
+  });
 
+  return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"/>
@@ -54,95 +82,7 @@ function renderBooksHtml() {
   a{ color:inherit; text-decoration:none; }
   .wrap{ max-width: 1100px; margin: 0 auto; padding: 0 16px; }
 
-  .nav{
-    padding: 16px 0;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:12px;
-  }
-  .brand{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    font-weight:1000;
-    letter-spacing:-.2px;
-  }
-  .brand .logo{
-    width:42px;height:42px;border-radius:14px;
-    display:grid;place-items:center;
-    background: linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
-    border: 1px solid rgba(124,58,237,.18);
-    box-shadow: var(--shadow2);
-    font-size:20px;
-  }
-  .navRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-
-  @media (min-width: 900px) {
-    .navRight {
-      flex-wrap: nowrap;
-    }
-  }
-
-  .btn{
-    border:0;
-    cursor:pointer;
-    user-select:none;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    padding: 14px 18px;
-    border-radius: 999px;
-    font-weight: 900;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
-    white-space:nowrap;
-  }
-  .btn:active{ transform: translateY(1px); }
-  .btnPrimary{
-    color:#fff;
-    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
-    box-shadow: 0 18px 40px rgba(124,58,237,.20);
-  }
-  .btnPrimary:hover{
-    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
-    box-shadow: 0 18px 46px rgba(124,58,237,.26);
-  }
-  .btnOutline{
-    color: var(--violet-700);
-    background: rgba(255,255,255,.78);
-    border: 2px solid rgba(221,214,254,.95);
-    box-shadow: 0 12px 26px rgba(17,24,39,.06);
-  }
-  .btnOutline:hover{
-    background: rgba(245,243,255,.95);
-    border-color: rgba(196,181,253,.95);
-  }
-  .btnTiny{
-    padding: 10px 12px;
-    font-size: 13px;
-    font-weight: 900;
-  }
-
-  .pill{
-    display:inline-flex; gap:8px; align-items:center;
-    padding:10px 12px; border-radius:999px;
-    background: rgba(255,255,255,.76);
-    border:1px solid rgba(221,214,254,.92);
-    color: rgba(109,40,217,1);
-    font-weight:950;
-    box-shadow: 0 14px 30px rgba(17,24,39,.08);
-    cursor:pointer;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
-    text-decoration:none;
-    white-space:nowrap;
-  }
-  .pill:hover{
-    background: rgba(245,243,255,.92);
-    border-color: rgba(196,181,253,.95);
-    transform: translateY(-1px);
-    box-shadow: 0 18px 44px rgba(17,24,39,.10);
-  }
+  ${SHARED_HEADER_CSS()}
 
   .hero{
     position:relative;
@@ -284,6 +224,42 @@ function renderBooksHtml() {
     gap:10px;
     flex-wrap:wrap;
     align-items:center;
+  }
+
+  .btn{
+    border:0;
+    cursor:pointer;
+    user-select:none;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding: 14px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, opacity .15s ease;
+    white-space:nowrap;
+    text-decoration:none;
+  }
+  .btn:active{ transform: translateY(1px); }
+  .btnPrimary{
+    color:#fff;
+    background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
+    box-shadow: 0 18px 40px rgba(124,58,237,.20);
+  }
+  .btnPrimary:hover{
+    background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
+    box-shadow: 0 18px 46px rgba(124,58,237,.26);
+  }
+  .btnOutline{
+    color: var(--violet-700);
+    background: rgba(255,255,255,.78);
+    border: 2px solid rgba(221,214,254,.95);
+    box-shadow: 0 12px 26px rgba(17,24,39,.06);
+  }
+  .btnOutline:hover{
+    background: rgba(245,243,255,.95);
+    border-color: rgba(196,181,253,.95);
   }
 
   .panelT{
@@ -468,7 +444,7 @@ function renderBooksHtml() {
   }
   @media (max-width: 980px){ .controls{ grid-template-columns: 1fr 1fr; } }
 
-  input, select, button{
+  input, select, button.filterBtn{
     width:100%;
     padding: 12px 14px;
     border-radius: 16px;
@@ -481,14 +457,14 @@ function renderBooksHtml() {
   }
   input::placeholder{ color: rgba(107,114,128,.85); }
   select{ cursor:pointer; }
-  button{
+  button.filterBtn{
     cursor:pointer;
     border:0;
     color:#fff;
     background: linear-gradient(90deg, var(--violet-600), var(--pink-600));
     box-shadow: 0 18px 40px rgba(124,58,237,.18);
   }
-  button:hover{
+  button.filterBtn:hover{
     background: linear-gradient(90deg, var(--violet-700), var(--pink-700));
     box-shadow: 0 18px 44px rgba(124,58,237,.24);
   }
@@ -699,15 +675,6 @@ function renderBooksHtml() {
     box-shadow: 0 12px 26px rgba(0,0,0,.12);
   }
 
-  .aBtn .sub{
-    display:block;
-    font-size: 11px;
-    font-weight: 900;
-    opacity: .92;
-    margin-top: 2px;
-    line-height: 1.05;
-  }
-
   @keyframes ctaPulse{
     0%   { box-shadow: 0 18px 44px rgba(239,68,68,.20); }
     50%  { box-shadow: 0 22px 56px rgba(239,68,68,.30); }
@@ -877,25 +844,7 @@ function renderBooksHtml() {
 
 <body>
   <div class="wrap">
-    <div class="nav">
-      <div class="brand">
-        <div class="logo">📚</div>
-        <div>Meu Livro Mágico</div>
-      </div>
-      <div class="navRight">
-        <a class="pill" href="/sales" title="Vendas">🛒 Pagina Inicial</a>
-        <a class="btn btnPrimary" href="/create" title="Criar agora">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M3 21l9-9" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <path d="M14 4l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <path d="M12 6l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <path d="M7 11l6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-          Criar Livro
-        </a>
-        <button class="btn btnOutline" id="btnLogout">🚪 Sair</button>
-      </div>
-    </div>
+    ${sharedHeaderHtml}
   </div>
 
   <section class="hero">
@@ -959,7 +908,7 @@ function renderBooksHtml() {
                   <option value="superhero">superhero</option>
                   <option value="dinosaur">dinosaur</option>
                 </select>
-                <button id="refresh">🔄 Atualizar</button>
+                <button class="filterBtn" id="refresh">🔄 Atualizar</button>
               </div>
 
               <div id="grid" class="gridBooks"></div>
@@ -1213,6 +1162,10 @@ function renderBooksHtml() {
   </section>
 
 <script>
+${SHARED_HEADER_JS()}
+</script>
+
+<script>
 (function(){
   function esc(s){
     s = String(s == null ? "" : s);
@@ -1220,15 +1173,6 @@ function renderBooksHtml() {
             .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
   function $(id){ return document.getElementById(id); }
-
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-      window.location.href = '/sales';
-    } catch (e) {
-      alert('Erro ao sair');
-    }
-  });
 
   (function renderStars(){
     var root = $("stars");

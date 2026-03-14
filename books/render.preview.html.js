@@ -23,6 +23,12 @@
  */
 "use strict";
 
+const {
+  SHARED_HEADER_CSS,
+  SHARED_HEADER_JS,
+  renderSharedHeader,
+} = require("./shared.header");
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -55,7 +61,6 @@ function asArray(v) {
 }
 
 function normalizePageItem(it) {
-  // aceita {page,url} ou {pageNum,url} ou {n,url}
   const page =
     Number(it?.page ?? it?.pageNum ?? it?.n ?? it?.index ?? 0) || 0;
   const url = pickFirstString(it?.url, it?.src, it?.image, it?.imageUrl);
@@ -92,7 +97,6 @@ function extractStoryPages(book) {
     .filter(Boolean)
     .sort((a, b) => (a.page || 0) - (b.page || 0));
 
-  // remove duplicadas por page (fica a última com URL válida)
   const map = new Map();
   for (const p of pages) map.set(Number(p.page), p.url);
   const out = Array.from(map.entries())
@@ -114,7 +118,6 @@ function renderBookPreviewHtml(book) {
 
   const storyPages = extractStoryPages(book);
 
-  // ✅ Páginas do livro ABERTO: SOMENTE páginas da história (sem capa).
   const pages = [];
   for (const p of storyPages) {
     pages.push({
@@ -124,7 +127,6 @@ function renderBookPreviewHtml(book) {
       pageNum: Number(p.page) || null,
     });
   }
-  // completa par
   if (pages.length % 2 !== 0) pages.push({ kind: "blank", label: "", pageNum: null });
 
   const errBox = book?.error ? `<div class="err">❌ Erro: ${escapeHtml(book.error)}</div>` : "";
@@ -145,6 +147,30 @@ function renderBookPreviewHtml(book) {
   const safeCoverJson = JSON.stringify(String(safeCoverUrl || ""))
     .replace(/</g, "\\u003c")
     .replace(/<\/script/gi, "<\\/script");
+
+  const sharedHeaderHtml = renderSharedHeader({
+    brandText: "Meu Livro Mágico",
+    brandHref: "/sales",
+    brandIcon: "📘",
+    menuLabel: "☰ Menu",
+    menuId: "previewSharedMenuPanel",
+    toggleId: "previewSharedMenuToggle",
+    showProfile: true,
+    showLogout: true,
+    profileHref: "/profile",
+    menuItems: [
+      { label: "Página Inicial", href: "/sales", icon: "🏠" },
+      { label: "Criar Livro", href: "/create", icon: "✨" },
+      { label: "Meus Livros", href: "/books", icon: "📚" },
+      { label: "Como funciona", href: "/como-funciona", icon: "❓" },
+      { label: "Para que servem as moedas", href: "/coins-info", icon: "🪙" },
+      { label: "Parceiros", href: "/parceiros", icon: "🤝" },
+    ],
+    actions: [
+      { id: "previewBackBooksHeaderBtn", label: "📚 Meus Livros", kind: "soft", href: "/books" },
+      { id: "previewEditHeaderBtn", label: "✏️ Editar Livro", kind: "primary", href: "/books/" + encodeURIComponent(id) + "/edit" },
+    ],
+  });
 
   return `<!doctype html>
 <html lang="pt-BR">
@@ -194,26 +220,7 @@ function renderBookPreviewHtml(book) {
   a{ color:inherit; text-decoration:none; }
   .wrap{ max-width: 1180px; margin: 0 auto; padding: 18px 16px; }
 
-  .top{
-    display:flex; gap:12px;
-    align-items:center;
-    justify-content:space-between;
-    flex-wrap:wrap;
-    margin-bottom: 12px;
-  }
-  .pill{
-    display:inline-flex; gap:8px; align-items:center;
-    padding:10px 12px; border-radius:999px;
-    background: rgba(255,255,255,.76);
-    border:1px solid rgba(221,214,254,.92);
-    color: rgba(109,40,217,1);
-    font-weight:950;
-    box-shadow: 0 14px 30px rgba(17,24,39,.08);
-  }
-  .pill:hover{
-    background: rgba(245,243,255,.92);
-    border-color: rgba(196,181,253,.95);
-  }
+  ${SHARED_HEADER_CSS()}
 
   .head{
     background: rgba(255,255,255,.86);
@@ -226,7 +233,7 @@ function renderBookPreviewHtml(book) {
     align-items:flex-start;
     justify-content:space-between;
     flex-wrap:wrap;
-    margin-bottom: 14px;
+    margin: 14px 0 14px;
   }
   .ttl{
     font-weight:1000;
@@ -417,7 +424,7 @@ function renderBookPreviewHtml(book) {
     background: rgba(255,255,255,.10);
     border: 1px solid rgba(17,24,39,.06);
 
-    transform: none; /* sem 3D */
+    transform: none;
   }
 
   .spreadShell::before{
@@ -771,13 +778,7 @@ function renderBookPreviewHtml(book) {
 </head>
 <body>
   <div class="wrap">
-    <div class="top">
-      <a class="pill" href="/books">← Voltar</a>
-      <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <a class="pill" href="/create">🪄 Criar novo</a>
-        <a class="pill" href="/books/${encodeURIComponent(id)}/edit">✏️ Editar livro</a>
-      </div>
-    </div>
+    ${sharedHeaderHtml}
 
     <div class="head">
       <div>
@@ -796,7 +797,6 @@ function renderBookPreviewHtml(book) {
       <div class="book" id="book">
         <div class="bgGlow"></div>
 
-        <!-- FECHADO -->
         <div class="closedWrap" id="closedWrap">
           <div class="closedBook" id="closedBook" title="Clique para abrir">
             <img class="closedCoverImg" id="closedCoverImg" alt="Capa"/>
@@ -809,7 +809,6 @@ function renderBookPreviewHtml(book) {
           <div class="closedHint">Clique na capa para abrir • (→ para abrir) • ESC fecha</div>
         </div>
 
-        <!-- ABERTO -->
         <div class="openWrap hide" id="openWrap">
           <div class="spreadShell" id="spreadShell">
             <div class="paperBase"></div>
@@ -848,11 +847,14 @@ function renderBookPreviewHtml(book) {
   </div>
 
 <script>
+${SHARED_HEADER_JS()}
+</script>
+
+<script>
 (function(){
   var pages = ${pagesJson};
   var spreadCount = Math.max(1, Math.ceil((pages && pages.length ? pages.length : 0) / 2));
 
-  // ✅ começa FECHADO
   var view = "closed";
   var openSpreadIndex = 0;
   var animating = false;
@@ -926,9 +928,7 @@ function renderBookPreviewHtml(book) {
       return;
     }
 
-    // ABERTO: ← nunca desativa (← na primeira folha volta pra capa)
     if(prev) prev.classList.remove("disabled");
-
     if(next) next.classList.toggle("disabled", openSpreadIndex >= spreadCount - 1);
   }
 
@@ -1057,13 +1057,11 @@ function renderBookPreviewHtml(book) {
   function doFlip(direction){
     if(animating) return;
 
-    // FECHADO + next => abre
     if(view === "closed"){
       if(direction === "next") openBook();
       return;
     }
 
-    // ABERTO + prev na primeira folha => volta capa
     if(direction !== "next" && openSpreadIndex <= 0){
       closeBook();
       return;
@@ -1179,7 +1177,6 @@ function renderBookPreviewHtml(book) {
     }, { passive:true });
   })();
 
-  // ✅ Inicial: FECHADO
   setView("closed");
   setTimeout(syncClosedBookToSinglePage, 0);
 })();

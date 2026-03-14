@@ -71,6 +71,7 @@ function PROFILE_PAGE_CSS() {
 
   *{ box-sizing:border-box; }
   html{ scroll-behavior:smooth; }
+
   body{
     margin:0;
     min-height:100%;
@@ -184,13 +185,16 @@ function PROFILE_PAGE_CSS() {
     transition:transform .16s ease, box-shadow .16s ease, filter .16s ease, background .16s ease, border-color .16s ease, opacity .16s ease;
     user-select:none;
   }
+
   .btn:hover{
     transform:translateY(-1px);
     box-shadow:var(--shadow-1);
   }
+
   .btn:active{
     transform:translateY(1px) scale(.99);
   }
+
   .btn:disabled{
     opacity:.72;
     cursor:not-allowed;
@@ -226,6 +230,12 @@ function PROFILE_PAGE_CSS() {
     color:#fff;
     background:linear-gradient(90deg, #ef4444, #f97316);
     box-shadow:0 16px 38px rgba(239,68,68,.22);
+  }
+
+  .btnCoinsHelp{
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 38px rgba(245,158,11,.22);
   }
 
   .hero{
@@ -556,7 +566,9 @@ function PROFILE_PAGE_CSS() {
     white-space:nowrap;
     transition:all .14s ease;
   }
+
   .tab:hover{ transform:translateY(-1px); }
+
   .tab.active{
     color:#fff;
     background:linear-gradient(90deg, var(--violet-600), var(--pink-600));
@@ -746,6 +758,12 @@ function PROFILE_PAGE_CSS() {
     background:linear-gradient(90deg, #2563eb, #7c3aed);
   }
 
+  .linkBtn.coinsInfoLink{
+    color:#fff;
+    border:none;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+  }
+
   .walletShell{
     display:grid;
     grid-template-columns:1.15fr .85fr;
@@ -787,6 +805,63 @@ function PROFILE_PAGE_CSS() {
     gap:10px;
     flex-wrap:wrap;
     margin-top:18px;
+  }
+
+  .walletInfoBanner{
+    margin-bottom:18px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    flex-wrap:wrap;
+    border-radius:22px;
+    padding:16px 18px;
+    background:
+      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
+      linear-gradient(180deg, #fff, #fff8ef);
+    border:1px solid rgba(245,158,11,.16);
+    box-shadow:var(--shadow-1);
+  }
+
+  .walletInfoBannerText{
+    display:grid;
+    gap:6px;
+    min-width:0;
+  }
+
+  .walletInfoBannerText strong{
+    font-size:16px;
+    line-height:1.35;
+    color:var(--ink);
+    font-weight:1000;
+  }
+
+  .walletInfoBannerText span{
+    color:var(--muted-2);
+    line-height:1.6;
+    font-weight:700;
+    font-size:14px;
+  }
+
+  .walletInfoBannerBtn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:48px;
+    padding:12px 16px;
+    border-radius:15px;
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 36px rgba(245,158,11,.20);
+    font-weight:1000;
+    white-space:nowrap;
+    transition:transform .14s ease, box-shadow .14s ease;
+  }
+
+  .walletInfoBannerBtn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 18px 40px rgba(245,158,11,.24);
   }
 
   .weekTrack{
@@ -1193,12 +1268,75 @@ function PROFILE_PAGE_CSS() {
     line-height:1.75;
   }
 
+  .helpCoinsCard{
+    margin-top:2px;
+    border-radius:22px;
+    padding:18px;
+    background:
+      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
+      linear-gradient(180deg, #fff, #fff9f2);
+    border:1px solid rgba(245,158,11,.16);
+    box-shadow:var(--shadow-1);
+  }
+
+  .helpCoinsEyebrow{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    min-height:32px;
+    padding:0 12px;
+    border-radius:999px;
+    background:rgba(245,158,11,.12);
+    color:#92400e;
+    font-size:12px;
+    font-weight:1000;
+    border:1px solid rgba(245,158,11,.14);
+  }
+
+  .helpCoinsTitle{
+    margin:12px 0 0;
+    font-size:20px;
+    line-height:1.15;
+    letter-spacing:-.02em;
+    font-weight:1000;
+    color:var(--ink);
+  }
+
+  .helpCoinsText{
+    margin:10px 0 0;
+    color:var(--muted-2);
+    line-height:1.7;
+    font-weight:700;
+    font-size:14px;
+  }
+
+  .helpCoinsBtn{
+    margin-top:14px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    min-height:48px;
+    padding:12px 16px;
+    border-radius:15px;
+    color:#fff;
+    background:linear-gradient(90deg, #f59e0b, #f97316);
+    box-shadow:0 16px 36px rgba(245,158,11,.20);
+    font-weight:1000;
+    transition:transform .14s ease, box-shadow .14s ease;
+  }
+
+  .helpCoinsBtn:hover{
+    transform:translateY(-1px);
+    box-shadow:0 18px 40px rgba(245,158,11,.24);
+  }
+
   .sentinel{
     width:100%;
     height:24px;
   }
 
- .modalBackdrop{
+  .modalBackdrop{
     position:fixed;
     inset:0;
     z-index:90;
@@ -1302,10 +1440,6 @@ function PROFILE_PAGE_CSS() {
     line-height:1.6;
   }
 
-    /* =========================================================
-     POPUP DE COMPRA DE MOEDAS — VERSÃO OTIMIZADA / LEVE
-     ========================================================= */
-
   #buyModal{
     align-items:center;
     justify-content:center;
@@ -1336,10 +1470,12 @@ function PROFILE_PAGE_CSS() {
   #buyModal .buyPopupScroll::-webkit-scrollbar{
     width:8px;
   }
+
   #buyModal .buyPopupScroll::-webkit-scrollbar-thumb{
     background:rgba(148,163,184,.45);
     border-radius:999px;
   }
+
   #buyModal .buyPopupScroll::-webkit-scrollbar-track{
     background:transparent;
   }
@@ -1351,7 +1487,6 @@ function PROFILE_PAGE_CSS() {
     border-bottom:1px solid rgba(226,232,240,.92);
   }
 
-  /* remove glows pesados */
   #buyModal .buyPopupHeroGlow{
     display:none;
   }
@@ -1400,6 +1535,7 @@ function PROFILE_PAGE_CSS() {
     gap:8px;
     margin-top:14px;
   }
+
   #buyModal .buyPopupTrust span{
     display:inline-flex;
     align-items:center;
@@ -1739,137 +1875,6 @@ function PROFILE_PAGE_CSS() {
     justify-content:flex-end;
     padding:0 18px 18px;
   }
-      .btnCoinsHelp{
-    color:#fff;
-    background:linear-gradient(90deg, #f59e0b, #f97316);
-    box-shadow:0 16px 38px rgba(245,158,11,.22);
-  }
-
-  .helpCoinsCard{
-    margin-top:2px;
-    border-radius:22px;
-    padding:18px;
-    background:
-      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
-      linear-gradient(180deg, #fff, #fff9f2);
-    border:1px solid rgba(245,158,11,.16);
-    box-shadow:var(--shadow-1);
-  }
-
-  .helpCoinsEyebrow{
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    min-height:32px;
-    padding:0 12px;
-    border-radius:999px;
-    background:rgba(245,158,11,.12);
-    color:#92400e;
-    font-size:12px;
-    font-weight:1000;
-    border:1px solid rgba(245,158,11,.14);
-  }
-
-  .helpCoinsTitle{
-    margin:12px 0 0;
-    font-size:20px;
-    line-height:1.15;
-    letter-spacing:-.02em;
-    font-weight:1000;
-    color:var(--ink);
-  }
-
-  .helpCoinsText{
-    margin:10px 0 0;
-    color:var(--muted-2);
-    line-height:1.7;
-    font-weight:700;
-    font-size:14px;
-  }
-
-  .helpCoinsBtn{
-    margin-top:14px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    min-height:48px;
-    padding:12px 16px;
-    border-radius:15px;
-    color:#fff;
-    background:linear-gradient(90deg, #f59e0b, #f97316);
-    box-shadow:0 16px 36px rgba(245,158,11,.20);
-    font-weight:1000;
-    transition:transform .14s ease, box-shadow .14s ease;
-  }
-
-  .helpCoinsBtn:hover{
-    transform:translateY(-1px);
-    box-shadow:0 18px 40px rgba(245,158,11,.24);
-  }
-
-  .walletInfoBanner{
-    margin-bottom:18px;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:14px;
-    flex-wrap:wrap;
-    border-radius:22px;
-    padding:16px 18px;
-    background:
-      radial-gradient(circle at top left, rgba(245,158,11,.12), transparent 28%),
-      linear-gradient(180deg, #fff, #fff8ef);
-    border:1px solid rgba(245,158,11,.16);
-    box-shadow:var(--shadow-1);
-  }
-
-  .walletInfoBannerText{
-    display:grid;
-    gap:6px;
-    min-width:0;
-  }
-
-  .walletInfoBannerText strong{
-    font-size:16px;
-    line-height:1.35;
-    color:var(--ink);
-    font-weight:1000;
-  }
-
-  .walletInfoBannerText span{
-    color:var(--muted-2);
-    line-height:1.6;
-    font-weight:700;
-    font-size:14px;
-  }
-
-  .walletInfoBannerBtn{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    min-height:48px;
-    padding:12px 16px;
-    border-radius:15px;
-    color:#fff;
-    background:linear-gradient(90deg, #f59e0b, #f97316);
-    box-shadow:0 16px 36px rgba(245,158,11,.20);
-    font-weight:1000;
-    white-space:nowrap;
-    transition:transform .14s ease, box-shadow .14s ease;
-  }
-
-  .walletInfoBannerBtn:hover{
-    transform:translateY(-1px);
-    box-shadow:0 18px 40px rgba(245,158,11,.24);
-  }
-
-  .linkBtn.coinsInfoLink{
-    color:#fff;
-    border:none;
-    background:linear-gradient(90deg, #f59e0b, #f97316);
-  }
 
   .hidden{
     display:none !important;
@@ -1962,19 +1967,6 @@ function PROFILE_PAGE_CSS() {
 
     .summaryGrid{
       grid-template-columns:repeat(2, minmax(0, 1fr));
-    }
-  }
-
-    #buyModal .buyPopupHighlights{
-      grid-template-columns:1fr;
-    }
-
-    #buyModal .buyPopupGrid{
-      grid-template-columns:1fr;
-    }
-
-    #buyModal .buyPopupIntro h3{
-      font-size:30px;
     }
   }
 
@@ -2071,55 +2063,12 @@ function PROFILE_PAGE_CSS() {
     }
   }
 
-    #buyModal .buyPopup{
-      width:100%;
-      max-height:94vh;
-      border-radius:22px 22px 0 0;
-    }
-
-    #buyModal .buyPopupHero{
-      padding:16px 14px 14px;
-    }
-
-    #buyModal .buyPopupGrid{
-      padding:14px;
-      gap:12px;
-    }
-
-    #buyModal .buyPopupFooter,
-    #buyModal .buyPopupActions{
-      padding-left:14px;
-      padding-right:14px;
-    }
-
-    #buyModal .buyPopupIntro h3{
-      font-size:24px;
-    }
-
-    #buyModal .buyOption{
-      padding:15px;
-      border-radius:18px;
-    }
-
-    #buyModal .buyOptionTitle{
-      font-size:24px;
-    }
-
-    #buyModal .buyOptionPrice strong{
-      font-size:26px;
-    }
-
-    #buyModal .buyOptionRibbon{
-      right:-40px;
-      font-size:10px;
-    }
-  }
-
   @media (prefers-reduced-motion: reduce){
     #buyModal .buyOption,
     #buyModal .buyOptionBtn,
     .btn,
-    .linkBtn{
+    .linkBtn,
+    .bar > div{
       transition:none !important;
     }
   }
@@ -2149,6 +2098,23 @@ function buildProfilePageJS() {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  function on(id, eventName, handler){
+    const el = $(id);
+    if (!el) return null;
+    el.addEventListener(eventName, handler);
+    return el;
+  }
+
+  function setText(id, value){
+    const el = $(id);
+    if (el) el.textContent = value;
+  }
+
+  function setHtml(id, value){
+    const el = $(id);
+    if (el) el.innerHTML = value;
   }
 
   function setHint(id, msg){
@@ -2461,6 +2427,7 @@ function buildProfilePageJS() {
 
   function showToast(title, desc, ms){
     const wrap = $("toastWrap");
+    if (!wrap) return;
     const el = document.createElement("div");
     el.className = "toast";
     el.innerHTML = \`
@@ -2520,9 +2487,13 @@ function buildProfilePageJS() {
 
   function openVerifyPasswordModal(){
     setHint("hintVerifyPasswordModal", "");
-    $("verifyPasswordInput").value = "";
+    const input = $("verifyPasswordInput");
+    if (input) input.value = "";
     openModal("verifyPasswordModal");
-    setTimeout(() => $("verifyPasswordInput") && $("verifyPasswordInput").focus(), 40);
+    setTimeout(() => {
+      const el = $("verifyPasswordInput");
+      if (el) el.focus();
+    }, 40);
   }
 
   function closeVerifyPasswordModal(){
@@ -2582,20 +2553,23 @@ function buildProfilePageJS() {
     }
   }
 
-  $("btnTopLogout").addEventListener("click", openLogoutModal);
-  $("btnLogout").addEventListener("click", openLogoutModal);
-  $("btnCancelLogout").addEventListener("click", closeLogoutModal);
-  $("btnConfirmLogout").addEventListener("click", doLogout);
+  on("btnTopLogout", "click", openLogoutModal);
+  on("btnLogout", "click", openLogoutModal);
+  on("btnCancelLogout", "click", closeLogoutModal);
+  on("btnConfirmLogout", "click", doLogout);
 
   function setProgress(pct){
     const v = Math.max(0, Math.min(100, Number(pct || 0)));
     state.profilePct = v;
-    $("profileProgressLabel").textContent = v + "%";
-    $("profileBar").style.width = v + "%";
+    setText("profileProgressLabel", v + "%");
+    const bar = $("profileBar");
+    if (bar) bar.style.width = v + "%";
   }
 
   function setBadges(progressPct, hasProfileName){
     const row = $("badgesRow");
+    if (!row) return;
+
     const badges = [];
 
     if (progressPct >= 40) badges.push("<span class='badge blue'>✅ Conta ativa</span>");
@@ -2614,8 +2588,8 @@ function buildProfilePageJS() {
       const u = me.user || {};
       const p = me.profile || null;
 
-      $("uid").textContent = u.id || "—";
-      $("avatar").textContent = initialsFromEmail(u.email || "");
+      setText("uid", u.id || "—");
+      setText("avatar", initialsFromEmail(u.email || ""));
 
       let score = 0;
       if (u.id) score += 40;
@@ -2626,22 +2600,22 @@ function buildProfilePageJS() {
       const hasName = !!(p && p.name);
 
       if (hasName){
-        $("name").textContent = p.name;
-        $("profileName").textContent = p.name;
-        $("profileCreated").textContent = fmtDateBR(p.created_at || "");
-        $("profileUpdated").textContent = fmtDateBR(p.updated_at || "");
-        $("profileBadge").textContent = "Perfil carregado";
+        setText("name", p.name);
+        setText("profileName", p.name);
+        setText("profileCreated", fmtDateBR(p.created_at || ""));
+        setText("profileUpdated", fmtDateBR(p.updated_at || ""));
+        setText("profileBadge", "Perfil carregado");
       } else {
-        $("name").textContent = "Seu Perfil";
-        $("profileName").textContent = "—";
-        $("profileCreated").textContent = "—";
-        $("profileUpdated").textContent = "—";
-        $("profileBadge").textContent = "Complete seu perfil";
+        setText("name", "Seu Perfil");
+        setText("profileName", "—");
+        setText("profileCreated", "—");
+        setText("profileUpdated", "—");
+        setText("profileBadge", "Complete seu perfil");
       }
 
       setBadges(score, hasName);
     }catch(e){
-      $("profileBadge").textContent = "Erro";
+      setText("profileBadge", "Erro");
       setHint("hintLogout", "Falha ao carregar /api/me: " + String(e.message || e));
       setProgress(20);
       setBadges(20, false);
@@ -2682,46 +2656,51 @@ function buildProfilePageJS() {
     const nextReward = Number(data.nextCheckinReward || 0);
     const accountHasPix = !!data.hasPixKey || hasPix(state.accountData);
 
-    $("heroWalletBalance").textContent = fmtCoins(availableCoins);
-    $("heroWalletLevel").textContent = (level.icon || "🥉") + " " + (level.name || "Bronze");
-    $("heroWalletLevelSub").textContent = "Seu nível atual na carteira";
-    $("heroCheckinReward").textContent = fmtCoins(nextReward);
+    setText("heroWalletBalance", fmtCoins(availableCoins));
+    setText("heroWalletLevel", (level.icon || "🥉") + " " + (level.name || "Bronze"));
+    setText("heroWalletLevelSub", "Seu nível atual na carteira");
+    setText("heroCheckinReward", fmtCoins(nextReward));
 
-    $("quickWalletBalance").textContent = fmtCoins(availableCoins);
-    $("quickCompletedOrders").textContent = String(completedOrders);
-    $("quickCheckinReward").textContent = fmtCoins(nextReward);
-    $("quickLevelBadge").textContent = (level.icon || "🥉") + " " + (level.name || "Bronze");
+    setText("quickWalletBalance", fmtCoins(availableCoins));
+    setText("quickCompletedOrders", String(completedOrders));
+    setText("quickCheckinReward", fmtCoins(nextReward));
+    setText("quickLevelBadge", (level.icon || "🥉") + " " + (level.name || "Bronze"));
 
-    $("walletAvailableText").textContent = fmtCoins(availableCoins);
-    $("walletOrdersText").textContent = String(completedOrders);
-    $("walletCheckinText").textContent = fmtCoins(nextReward);
-    $("walletCheckinPill").textContent = "Seu próximo check-in rende " + fmtCoins(nextReward);
+    setText("walletAvailableText", fmtCoins(availableCoins));
+    setText("walletOrdersText", String(completedOrders));
+    setText("walletCheckinText", fmtCoins(nextReward));
+    setText("walletCheckinPill", "Seu próximo check-in rende " + fmtCoins(nextReward));
 
-    $("walletLevelBadge").textContent = (level.icon || "🥉") + " " + (level.name || "Bronze");
-    $("walletStreakBadge").textContent = "Sequência: " + String(Number(wallet.streak_days || 0)) + " dia(s)";
+    setText("walletLevelBadge", (level.icon || "🥉") + " " + (level.name || "Bronze"));
+    setText("walletStreakBadge", "Sequência: " + String(Number(wallet.streak_days || 0)) + " dia(s)");
 
-    $("levelProgressPct").textContent = String(Number(progress.pct || 0)) + "%";
-    $("levelProgressBar").style.width = String(Number(progress.pct || 0)) + "%";
+    setText("levelProgressPct", String(Number(progress.pct || 0)) + "%");
+    const progressBar = $("levelProgressBar");
+    if (progressBar) progressBar.style.width = String(Number(progress.pct || 0)) + "%";
 
-    $("levelProgressText").textContent =
+    setText(
+      "levelProgressText",
       level.key === "ouro"
         ? "Sua conta já está no nível máximo."
-        : completedOrders + " / " + String(progress.nextAt || 0) + " pedidos concluídos para alcançar o nível " + String(progress.nextName || "seguinte");
+        : completedOrders + " / " + String(progress.nextAt || 0) + " pedidos concluídos para alcançar o nível " + String(progress.nextName || "seguinte")
+    );
 
-    $("resumeBaseCoins").textContent = fmtCoins(baseCoins);
-    $("resumeBonusCoins").textContent = fmtCoins(bonusCoins);
-    $("resumePurchasedCoins").textContent = fmtCoins(purchasedCoins);
-    $("resumeWithdrawnCoins").textContent = fmtCoins(withdrawnCoins);
-    $("resumeAvailableCoins").textContent = fmtCoins(availableCoins);
-    $("resumeLastCheckin").textContent = wallet.last_checkin_date ? fmtDateBR(wallet.last_checkin_date) : "—";
-    $("resumeStreak").textContent = String(Number(wallet.streak_days || 0)) + " dia(s)";
-    $("resumeCycle").textContent = String(Number(wallet.cycle_count || 0)) + " / 7";
-    $("resumePixStatus").textContent = accountHasPix ? "Cadastrado" : "Não cadastrado";
+    setText("resumeBaseCoins", fmtCoins(baseCoins));
+    setText("resumeBonusCoins", fmtCoins(bonusCoins));
+    setText("resumePurchasedCoins", fmtCoins(purchasedCoins));
+    setText("resumeWithdrawnCoins", fmtCoins(withdrawnCoins));
+    setText("resumeAvailableCoins", fmtCoins(availableCoins));
+    setText("resumeLastCheckin", wallet.last_checkin_date ? fmtDateBR(wallet.last_checkin_date) : "—");
+    setText("resumeStreak", String(Number(wallet.streak_days || 0)) + " dia(s)");
+    setText("resumeCycle", String(Number(wallet.cycle_count || 0)) + " / 7");
+    setText("resumePixStatus", accountHasPix ? "Cadastrado" : "Não cadastrado");
 
     paintWeekTrack(Number(wallet.streak_days || 0), Number(wallet.cycle_count || 0));
     markCurrentTier(level.key || "bronze");
 
     const activityEl = $("walletActivityList");
+    if (!activityEl) return;
+
     if (!activities.length) {
       activityEl.innerHTML = '<div class="empty">Ainda não há movimentações extras na sua carteira.</div>';
     } else {
@@ -2748,20 +2727,20 @@ function buildProfilePageJS() {
   function renderAccountSummary(account){
     state.accountData = account || null;
 
-    $("sessionEmailText").textContent = account?.email || "—";
-    $("accountNameText").textContent = account?.name || "—";
-    $("accountEmailText").textContent = account?.email || "—";
-    $("accountPhoneText").textContent = account?.phone || "—";
+    setText("sessionEmailText", account?.email || "—");
+    setText("accountNameText", account?.name || "—");
+    setText("accountEmailText", account?.email || "—");
+    setText("accountPhoneText", account?.phone || "—");
 
-    $("accountPixTypeText").textContent = account && hasPix(account) ? pixTypeLabel(account.pix_type) : "—";
-    $("accountPixHolderText").textContent = account && hasPix(account) ? (account.pix_holder_name || "—") : "—";
-    $("accountPixBankText").textContent = account && hasPix(account) ? (account.pix_bank_name || "—") : "—";
+    setText("accountPixTypeText", account && hasPix(account) ? pixTypeLabel(account.pix_type) : "—");
+    setText("accountPixHolderText", account && hasPix(account) ? (account.pix_holder_name || "—") : "—");
+    setText("accountPixBankText", account && hasPix(account) ? (account.pix_bank_name || "—") : "—");
 
-    $("accountAddressText").textContent = buildAddressText(account);
-    $("accountZipText").textContent = account?.address_zip || "—";
-    $("accountStateText").textContent = account?.address_state || "—";
+    setText("accountAddressText", buildAddressText(account));
+    setText("accountZipText", account?.address_zip || "—");
+    setText("accountStateText", account?.address_state || "—");
 
-    $("accountPixBadge").textContent = hasPix(account) ? "PIX: cadastrado" : "PIX: pendente";
+    setText("accountPixBadge", hasPix(account) ? "PIX: cadastrado" : "PIX: pendente");
 
     syncWithdrawModalByAccount();
 
@@ -2798,36 +2777,34 @@ function buildProfilePageJS() {
   }
 
   function fillEditAccountForm(account){
-    $("editName").value = account?.name || "";
-    $("editEmail").value = account?.email || "";
-    $("editPhone").value = account?.phone || "";
-    $("editNewPassword").value = "";
+    const map = {
+      editName: account?.name || "",
+      editEmail: account?.email || "",
+      editPhone: account?.phone || "",
+      editNewPassword: "",
+      editPixType: account?.pix_type || "",
+      editPixKey: account?.pix_key || "",
+      editPixHolderName: account?.pix_holder_name || "",
+      editPixBankName: account?.pix_bank_name || "",
+      editPixHolderDocument: account?.pix_holder_document || "",
+      editAddressStreet: account?.address_street || "",
+      editAddressNumber: account?.address_number || "",
+      editAddressDistrict: account?.address_district || "",
+      editAddressCity: account?.address_city || "",
+      editAddressState: account?.address_state || "",
+      editAddressZip: account?.address_zip || "",
+      editAddressComplement: account?.address_complement || "",
+    };
 
-    $("editPixType").value = account?.pix_type || "";
-    $("editPixKey").value = account?.pix_key || "";
-    $("editPixHolderName").value = account?.pix_holder_name || "";
-    $("editPixBankName").value = account?.pix_bank_name || "";
-    $("editPixHolderDocument").value = account?.pix_holder_document || "";
-
-    $("editAddressStreet").value = account?.address_street || "";
-    $("editAddressNumber").value = account?.address_number || "";
-    $("editAddressDistrict").value = account?.address_district || "";
-    $("editAddressCity").value = account?.address_city || "";
-    $("editAddressState").value = account?.address_state || "";
-    $("editAddressZip").value = account?.address_zip || "";
-    $("editAddressComplement").value = account?.address_complement || "";
+    Object.keys(map).forEach((id) => {
+      const el = $(id);
+      if (el) el.value = map[id];
+    });
   }
 
   function pctLabel(pct){
     const n = Number(pct || 0);
     return Math.round(n) + "%";
-  }
-
-  function formatPackPrice(pack){
-    return "R$ " + Number(pack || 0).toLocaleString("pt-BR", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    });
   }
 
   function updateBuyCard(pack, bonusPct){
@@ -2855,22 +2832,19 @@ function buildProfilePageJS() {
     const bonusPctNum = Number(level.buyBonusPct || 0);
     const bonusPctText = Math.round(bonusPctNum * 100) + "%";
 
-    if ($("buyCurrentLevelText")) {
-      $("buyCurrentLevelText").textContent = (level.icon || "🥉") + " " + (level.name || "Bronze");
-    }
-
-    if ($("buyBonusPercentText")) {
-      $("buyBonusPercentText").textContent = bonusPctText;
-    }
+    setText("buyCurrentLevelText", (level.icon || "🥉") + " " + (level.name || "Bronze"));
+    setText("buyBonusPercentText", bonusPctText);
 
     if ($("buyLevelBadgeModal")) {
       if (level.key === "ouro") {
-        $("buyLevelBadgeModal").textContent = "Nível máximo desbloqueado";
+        setText("buyLevelBadgeModal", "Nível máximo desbloqueado");
       } else {
         const nextName = String(progress.nextName || "Próximo");
         const nextAt = Number(progress.nextAt || 0);
-        $("buyLevelBadgeModal").textContent =
-          "Progresso: " + pctLabel(progress.pct || 0) + " • " + completedOrders + "/" + nextAt + " para " + nextName;
+        setText(
+          "buyLevelBadgeModal",
+          "Progresso: " + pctLabel(progress.pct || 0) + " • " + completedOrders + "/" + nextAt + " para " + nextName
+        );
       }
     }
 
@@ -2906,6 +2880,7 @@ function buildProfilePageJS() {
   function renderMoreBooks(){
     if (isLoadingBooks) return;
     const list = $("booksList");
+    if (!list) return;
     const slice = allBooks.slice(shownBooks, shownBooks + PAGE);
     if (!slice.length) return;
     isLoadingBooks = true;
@@ -2945,7 +2920,7 @@ function buildProfilePageJS() {
       detachBooksObserver();
       allBooks = [];
       shownBooks = 0;
-      $("booksList").innerHTML = "<div class='empty'>Carregando livros…</div>";
+      setHtml("booksList", "<div class='empty'>Carregando livros…</div>");
     }
 
     const btn = $("btnRefreshBooks");
@@ -2963,24 +2938,28 @@ function buildProfilePageJS() {
       shownBooks = 0;
       state.books = filtered;
 
-      $("quickBooksCount").textContent = String(filtered.length);
-      $("booksCountText").textContent = filtered.length
-        ? filtered.length + " livro(s) carregado(s)"
-        : "Nenhum livro concluído ainda.";
+      setText(
+        "quickBooksCount",
+        String(filtered.length)
+      );
+      setText(
+        "booksCountText",
+        filtered.length ? filtered.length + " livro(s) carregado(s)" : "Nenhum livro concluído ainda."
+      );
 
       if (!filtered.length){
-        $("booksList").innerHTML = "<div class='empty'>Você ainda não tem livros concluídos. Quando criar o próximo, ele aparecerá aqui.</div>";
+        setHtml("booksList", "<div class='empty'>Você ainda não tem livros concluídos. Quando criar o próximo, ele aparecerá aqui.</div>");
         attachBooksObserver();
         return;
       }
 
-      $("booksList").innerHTML = "";
+      setHtml("booksList", "");
       renderMoreBooks();
       attachBooksObserver();
     }catch(e){
-      $("booksList").innerHTML = "";
-      $("quickBooksCount").textContent = "0";
-      $("booksCountText").textContent = "Erro ao carregar livros";
+      setHtml("booksList", "");
+      setText("quickBooksCount", "0");
+      setText("booksCountText", "Erro ao carregar livros");
       setHint("hintBooks", "Falha ao carregar livros: " + String(e.message || e));
     }finally{
       if (btn && icon){
@@ -3015,6 +2994,7 @@ function buildProfilePageJS() {
   function renderMoreOrders(){
     if (isLoadingOrders) return;
     const list = $("ordersList");
+    if (!list) return;
     const slice = allOrders.slice(shownOrders, shownOrders + PAGE);
     if (!slice.length) return;
     isLoadingOrders = true;
@@ -3031,7 +3011,7 @@ function buildProfilePageJS() {
       detachOrdersObserver();
       allOrders = [];
       shownOrders = 0;
-      $("ordersList").innerHTML = "<div class='empty'>Carregando pedidos…</div>";
+      setHtml("ordersList", "<div class='empty'>Carregando pedidos…</div>");
     }
 
     const btn = $("btnRefreshOrders");
@@ -3048,22 +3028,23 @@ function buildProfilePageJS() {
       shownOrders = 0;
       state.orders = items;
 
-      $("ordersCountText").textContent = items.length
-        ? items.length + " pedido(s) encontrado(s)"
-        : "Nenhum pedido encontrado.";
+      setText(
+        "ordersCountText",
+        items.length ? items.length + " pedido(s) encontrado(s)" : "Nenhum pedido encontrado."
+      );
 
       if (!items.length){
-        $("ordersList").innerHTML = "<div class='empty'>Você ainda não tem pedidos registrados nesta conta.</div>";
+        setHtml("ordersList", "<div class='empty'>Você ainda não tem pedidos registrados nesta conta.</div>");
         attachOrdersObserver();
         return;
       }
 
-      $("ordersList").innerHTML = "";
+      setHtml("ordersList", "");
       renderMoreOrders();
       attachOrdersObserver();
     }catch(e){
-      $("ordersList").innerHTML = "";
-      $("ordersCountText").textContent = "Erro ao carregar pedidos";
+      setHtml("ordersList", "");
+      setText("ordersCountText", "Erro ao carregar pedidos");
       setHint("hintOrders", "Falha ao carregar pedidos: " + String(e.message || e));
     }finally{
       if (btn && icon){
@@ -3073,77 +3054,81 @@ function buildProfilePageJS() {
     }
   }
 
-  $("btnCloseWithdraw").addEventListener("click", closeWithdrawModal);
-  $("btnCloseBuy").addEventListener("click", closeBuyModal);
-  $("btnCloseVerifyPassword").addEventListener("click", closeVerifyPasswordModal);
-  $("btnCloseEditAccount").addEventListener("click", closeEditAccountModal);
+  on("btnCloseWithdraw", "click", closeWithdrawModal);
+  on("btnCloseBuy", "click", closeBuyModal);
+  on("btnCloseVerifyPassword", "click", closeVerifyPasswordModal);
+  on("btnCloseEditAccount", "click", closeEditAccountModal);
 
-  $("btnBuyWallet").addEventListener("click", async () => {
+  on("btnBuyWallet", "click", async () => {
     if (!state.walletData) await loadWallet(false);
     openBuyModal();
   });
 
-  $("btnWithdrawWallet").addEventListener("click", async () => {
-    if (!state.accountData) await loadAccount(false);
-    openWithdrawModal();
-  });
+  const btnWithdrawWallet = $("btnWithdrawWallet");
+  if (btnWithdrawWallet) {
+    btnWithdrawWallet.addEventListener("click", async () => {
+      if (!state.accountData) await loadAccount(false);
+      openWithdrawModal();
+    });
+  }
 
-  $("btnEditAccount").addEventListener("click", async () => {
+  on("btnEditAccount", "click", async () => {
     if (!state.accountData) await loadAccount(false);
     openVerifyPasswordModal();
   });
 
-  $("btnRefreshBooks").addEventListener("click", () => loadBooks(true));
-  $("btnRefreshOrders").addEventListener("click", () => loadOrders(true));
-  $("btnRefreshWallet").addEventListener("click", () => loadWallet(true));
+  on("btnRefreshBooks", "click", () => loadBooks(true));
+  on("btnRefreshOrders", "click", () => loadOrders(true));
+  on("btnRefreshWallet", "click", () => loadWallet(true));
 
-  $("btnGoWalletHero").addEventListener("click", async () => {
+  on("btnGoWalletHero", "click", async () => {
     goTab("wallet");
     await loadWallet(true);
   });
 
-  $("btnGoWalletQuick").addEventListener("click", async () => {
+  on("btnGoWalletQuick", "click", async () => {
     goTab("wallet");
     await loadWallet(true);
   });
 
-  $("btnGoOrdersQuick").addEventListener("click", async () => {
+  on("btnGoOrdersQuick", "click", async () => {
     goTab("orders");
     await loadOrders(true);
   });
 
-  $("btnGoBooksQuick").addEventListener("click", async () => {
+  on("btnGoBooksQuick", "click", async () => {
     goTab("books");
     await loadBooks(true);
   });
 
-  $("btnGoWalletFromOverview").addEventListener("click", async () => {
+  on("btnGoWalletFromOverview", "click", async () => {
     goTab("wallet");
     await loadWallet(true);
   });
 
-  $("btnScrollWallet").addEventListener("click", async () => {
+  on("btnScrollWallet", "click", async () => {
     goTab("wallet");
     await loadWallet(true);
   });
 
-  $("btnScrollBooks").addEventListener("click", async () => {
+  on("btnScrollBooks", "click", async () => {
     goTab("books");
     await loadBooks(true);
   });
 
-  $("btnScrollOrders").addEventListener("click", async () => {
+  on("btnScrollOrders", "click", async () => {
     goTab("orders");
     await loadOrders(true);
   });
 
-  $("btnScrollAccount").addEventListener("click", async () => {
+  on("btnScrollAccount", "click", async () => {
     goTab("account");
     await loadAccount(true);
   });
 
-  $("btnDailyCheckin").addEventListener("click", async () => {
+  on("btnDailyCheckin", "click", async () => {
     const btn = $("btnDailyCheckin");
+    if (!btn) return;
     const old = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = "<span class='spin'></span> Processando";
@@ -3176,36 +3161,37 @@ function buildProfilePageJS() {
     }
   });
 
-  $("btnConfirmWithdraw").addEventListener("click", async () => {
+  on("btnConfirmWithdraw", "click", async () => {
     setHint("hintWithdraw", "");
     setHint("hintWithdrawModal", "");
 
-    const amount = Number($("withdrawAmount").value || 0);
-    const note = String($("withdrawNote").value || "").trim();
+    const amount = Number(($("withdrawAmount") && $("withdrawAmount").value) || 0);
+    const note = String(($("withdrawNote") && $("withdrawNote").value) || "").trim();
     const payload = { amount, note };
 
     if (!hasPix(state.accountData || {})) {
-      payload.pix_type = $("withdrawPixType").value;
-      payload.pix_key = $("withdrawPixKey").value;
-      payload.pix_holder_name = $("withdrawPixHolderName").value;
-      payload.pix_bank_name = $("withdrawPixBankName").value;
-      payload.pix_holder_document = $("withdrawPixHolderDocument").value;
+      payload.pix_type = $("withdrawPixType") ? $("withdrawPixType").value : "";
+      payload.pix_key = $("withdrawPixKey") ? $("withdrawPixKey").value : "";
+      payload.pix_holder_name = $("withdrawPixHolderName") ? $("withdrawPixHolderName").value : "";
+      payload.pix_bank_name = $("withdrawPixBankName") ? $("withdrawPixBankName").value : "";
+      payload.pix_holder_document = $("withdrawPixHolderDocument") ? $("withdrawPixHolderDocument").value : "";
     }
 
     const btn = $("btnConfirmWithdraw");
+    if (!btn) return;
     const old = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = "<span class='spin'></span> Enviando";
 
     try{
       await postJson("/api/my-wallet/withdraw", payload);
-      $("withdrawAmount").value = "";
-      $("withdrawNote").value = "";
-      $("withdrawPixType").value = "";
-      $("withdrawPixKey").value = "";
-      $("withdrawPixHolderName").value = "";
-      $("withdrawPixBankName").value = "";
-      $("withdrawPixHolderDocument").value = "";
+      if ($("withdrawAmount")) $("withdrawAmount").value = "";
+      if ($("withdrawNote")) $("withdrawNote").value = "";
+      if ($("withdrawPixType")) $("withdrawPixType").value = "";
+      if ($("withdrawPixKey")) $("withdrawPixKey").value = "";
+      if ($("withdrawPixHolderName")) $("withdrawPixHolderName").value = "";
+      if ($("withdrawPixBankName")) $("withdrawPixBankName").value = "";
+      if ($("withdrawPixHolderDocument")) $("withdrawPixHolderDocument").value = "";
       closeWithdrawModal();
       await loadAccount(false);
       await loadWallet(false);
@@ -3261,10 +3247,11 @@ function buildProfilePageJS() {
     });
   });
 
-  $("btnConfirmVerifyPassword").addEventListener("click", async () => {
+  on("btnConfirmVerifyPassword", "click", async () => {
     setHint("hintVerifyPasswordModal", "");
-    const password = String($("verifyPasswordInput").value || "");
+    const password = String(($("verifyPasswordInput") && $("verifyPasswordInput").value) || "");
     const btn = $("btnConfirmVerifyPassword");
+    if (!btn) return;
     const old = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = "<span class='spin'></span> Confirmando";
@@ -3288,31 +3275,32 @@ function buildProfilePageJS() {
     }
   });
 
-  $("btnSaveEditAccount").addEventListener("click", async () => {
+  on("btnSaveEditAccount", "click", async () => {
     setHint("hintEditAccountModal", "");
     const payload = {
       current_password: state.verifiedPassword || "",
-      name: $("editName").value,
-      email: $("editEmail").value,
-      phone: $("editPhone").value,
-      new_password: $("editNewPassword").value,
+      name: $("editName") ? $("editName").value : "",
+      email: $("editEmail") ? $("editEmail").value : "",
+      phone: $("editPhone") ? $("editPhone").value : "",
+      new_password: $("editNewPassword") ? $("editNewPassword").value : "",
 
-      pix_type: $("editPixType").value,
-      pix_key: $("editPixKey").value,
-      pix_holder_name: $("editPixHolderName").value,
-      pix_bank_name: $("editPixBankName").value,
-      pix_holder_document: $("editPixHolderDocument").value,
+      pix_type: $("editPixType") ? $("editPixType").value : "",
+      pix_key: $("editPixKey") ? $("editPixKey").value : "",
+      pix_holder_name: $("editPixHolderName") ? $("editPixHolderName").value : "",
+      pix_bank_name: $("editPixBankName") ? $("editPixBankName").value : "",
+      pix_holder_document: $("editPixHolderDocument") ? $("editPixHolderDocument").value : "",
 
-      address_street: $("editAddressStreet").value,
-      address_number: $("editAddressNumber").value,
-      address_district: $("editAddressDistrict").value,
-      address_city: $("editAddressCity").value,
-      address_state: $("editAddressState").value,
-      address_zip: $("editAddressZip").value,
-      address_complement: $("editAddressComplement").value,
+      address_street: $("editAddressStreet") ? $("editAddressStreet").value : "",
+      address_number: $("editAddressNumber") ? $("editAddressNumber").value : "",
+      address_district: $("editAddressDistrict") ? $("editAddressDistrict").value : "",
+      address_city: $("editAddressCity") ? $("editAddressCity").value : "",
+      address_state: $("editAddressState") ? $("editAddressState").value : "",
+      address_zip: $("editAddressZip") ? $("editAddressZip").value : "",
+      address_complement: $("editAddressComplement") ? $("editAddressComplement").value : "",
     };
 
     const btn = $("btnSaveEditAccount");
+    if (!btn) return;
     const old = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = "<span class='spin'></span> Salvando";
@@ -3383,12 +3371,16 @@ function buildProfilePageJS() {
   }
 
   (async function init(){
-    setupScrollSpy();
-    await loadMe();
-    await loadAccount(false);
-    await loadWallet(false);
-    await loadBooks(true);
-    await loadOrders(true);
+    try{
+      setupScrollSpy();
+      await loadMe();
+      await loadAccount(false);
+      await loadWallet(false);
+      await loadBooks(true);
+      await loadOrders(true);
+    }catch(err){
+      console.error("[profile.page.assets] init error:", err);
+    }
   })();
 `;
 }

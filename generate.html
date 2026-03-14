@@ -5,29 +5,512 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Gerando… — Meu Livro Mágico</title>
 <style>
-  :root{--bg1:#ede9fe;--bg2:#fff;--bg3:#fdf2f8;--text:#111827;--muted:#6b7280;--violet:#7c3aed;--pink:#db2777;--border:#e5e7eb}
+  :root{
+    --bg1:#ede9fe;
+    --bg2:#fff;
+    --bg3:#fdf2f8;
+    --text:#111827;
+    --muted:#6b7280;
+    --violet:#7c3aed;
+    --pink:#db2777;
+    --border:#e5e7eb;
+    --shadow:0 20px 50px rgba(0,0,0,.10);
+    --shadow2:0 12px 30px rgba(17,24,39,.08);
+  }
+
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));min-height:100vh;color:var(--text)}
-  .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
-  .card{background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 20px 50px rgba(0,0,0,.10);padding:18px}
-  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between}
-  h1{margin:0;font-size:22px;font-weight:1000}
-  .muted{color:var(--muted);font-weight:900}
-  .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:12px}
-  .bar > div{height:100%;width:0%;background:linear-gradient(90deg,var(--violet),var(--pink));transition:width .2s ease}
-  .log{margin-top:12px;padding:12px;border-radius:14px;background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.14);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}
-  .imgs{margin-top:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-  @media(max-width:860px){.imgs{grid-template-columns:repeat(2,minmax(0,1fr))}}
-  @media(max-width:520px){.imgs{grid-template-columns:1fr}}
-  .imgCard{border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}
-  .imgCard img{width:100%;display:block}
-  .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-  a.btn{display:inline-flex;align-items:center;gap:10px;padding:12px 14px;border-radius:999px;text-decoration:none;font-weight:1000}
-  a.primary{background:linear-gradient(90deg,var(--violet),var(--pink));color:#fff}
-  a.ghost{background:transparent;color:#374151;border:1px solid rgba(0,0,0,.08)}
+
+  html,body{min-height:100%}
+
+  body{
+    margin:0;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));
+    min-height:100vh;
+    color:var(--text);
+  }
+
+  a{color:inherit;text-decoration:none}
+
+  .wrap{
+    max-width:980px;
+    margin:0 auto;
+    padding:24px 16px;
+  }
+
+  /* =========================================================
+     SHARED HEADER / GLOBAL DROPDOWN MENU
+     ========================================================= */
+  .sharedHeader{
+    width:min(calc(100% - 24px), 1240px);
+    margin:18px auto 0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    flex-wrap:wrap;
+    position:relative;
+    z-index:50;
+  }
+
+  .sharedHeaderLeft,
+  .sharedHeaderRight{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+
+  .sharedBrand{
+    display:inline-flex;
+    align-items:center;
+    gap:12px;
+    min-height:48px;
+    text-decoration:none;
+    color:#111827;
+  }
+
+  .sharedBrandMark{
+    width:44px;
+    height:44px;
+    border-radius:15px;
+    display:grid;
+    place-items:center;
+    background:linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
+    border:1px solid rgba(124,58,237,.16);
+    box-shadow:0 10px 24px rgba(0,0,0,.08);
+    font-size:20px;
+    flex:0 0 auto;
+  }
+
+  .sharedBrandText{
+    font-size:17px;
+    line-height:1.15;
+    font-weight:1000;
+    letter-spacing:-.02em;
+    color:#111827;
+  }
+
+  .sharedMenuWrap{
+    position:relative;
+  }
+
+  .sharedMenuToggle{
+    appearance:none;
+    border:none;
+    min-height:46px;
+    padding:10px 14px;
+    border-radius:14px;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    font-weight:1000;
+    color:#4c1d95;
+    background:rgba(255,255,255,.92);
+    border:1px solid rgba(124,58,237,.14);
+    box-shadow:0 8px 20px rgba(0,0,0,.06);
+    transition:transform .14s ease, box-shadow .14s ease, background .14s ease, filter .14s ease;
+    user-select:none;
+    white-space:nowrap;
+  }
+
+  .sharedMenuToggle:hover{
+    transform:translateY(-1px);
+    box-shadow:0 12px 24px rgba(0,0,0,.08);
+    filter:brightness(1.01);
+  }
+
+  .sharedMenuToggle:active{
+    transform:translateY(1px);
+  }
+
+  .sharedMenuToggleCaret{
+    font-size:12px;
+    opacity:.8;
+  }
+
+  .sharedMenuPanel{
+    position:absolute;
+    top:calc(100% + 8px);
+    right:0;
+    min-width:270px;
+    max-width:min(92vw, 340px);
+    padding:8px;
+    border-radius:18px;
+    background:rgba(255,255,255,.98);
+    border:1px solid rgba(226,232,240,.9);
+    box-shadow:0 18px 40px rgba(15,23,42,.12);
+    backdrop-filter:blur(14px);
+    display:none;
+    z-index:120;
+  }
+
+  .sharedMenuPanel.open{
+    display:block;
+  }
+
+  .sharedMenuSection{
+    display:grid;
+    gap:6px;
+  }
+
+  .sharedMenuDivider{
+    height:1px;
+    margin:6px 2px;
+    background:rgba(148,163,184,.18);
+  }
+
+  .sharedMenuItem{
+    appearance:none;
+    width:100%;
+    border:none;
+    text-align:left;
+    text-decoration:none;
+    min-height:42px;
+    padding:10px 12px;
+    border-radius:12px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    background:#fff;
+    color:#1f2937;
+    border:1px solid rgba(15,23,42,.05);
+    box-shadow:0 4px 12px rgba(17,24,39,.03);
+    font-weight:900;
+    cursor:pointer;
+    transition:transform .12s ease, background .12s ease, box-shadow .12s ease;
+  }
+
+  .sharedMenuItem:hover{
+    transform:translateY(-1px);
+    background:#faf8ff;
+    box-shadow:0 8px 16px rgba(17,24,39,.05);
+  }
+
+  .sharedMenuItemIcon{
+    width:26px;
+    height:26px;
+    border-radius:9px;
+    display:grid;
+    place-items:center;
+    font-size:14px;
+    background:linear-gradient(135deg, rgba(124,58,237,.12), rgba(236,72,153,.12));
+    color:#6d28d9;
+    flex:0 0 auto;
+  }
+
+  .sharedMenuItemDanger{
+    color:#991b1b;
+    background:#fff7f7;
+    border-color:rgba(220,38,38,.08);
+  }
+
+  .sharedMenuItemDanger .sharedMenuItemIcon{
+    background:linear-gradient(135deg, rgba(239,68,68,.14), rgba(249,115,22,.14));
+    color:#b91c1c;
+  }
+
+  .sharedHeaderActions{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .sharedHeaderAction{
+    appearance:none;
+    border:none;
+    min-height:46px;
+    padding:10px 14px;
+    border-radius:14px;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    font-weight:1000;
+    white-space:nowrap;
+    text-decoration:none;
+    transition:transform .14s ease, box-shadow .14s ease, filter .14s ease, background .14s ease;
+    user-select:none;
+  }
+
+  .sharedHeaderAction:hover{
+    transform:translateY(-1px);
+    filter:brightness(1.01);
+  }
+
+  .sharedHeaderAction:active{
+    transform:translateY(1px);
+  }
+
+  .sharedHeaderAction.primary{
+    color:#fff;
+    background:linear-gradient(90deg,#7c3aed,#db2777);
+    box-shadow:0 14px 28px rgba(124,58,237,.18);
+  }
+
+  .sharedHeaderAction.soft{
+    color:#4c1d95;
+    background:rgba(255,255,255,.92);
+    border:1px solid rgba(124,58,237,.14);
+    box-shadow:0 8px 20px rgba(0,0,0,.06);
+  }
+
+  /* PAGE */
+  .card{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:22px;
+    box-shadow:var(--shadow);
+    padding:18px;
+  }
+
+  .row{
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:space-between;
+  }
+
+  h1{
+    margin:0;
+    font-size:22px;
+    font-weight:1000;
+  }
+
+  .muted{
+    color:var(--muted);
+    font-weight:900;
+  }
+
+  .bar{
+    height:12px;
+    background:#e5e7eb;
+    border-radius:999px;
+    overflow:hidden;
+    margin-top:12px;
+  }
+
+  .bar > div{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    transition:width .2s ease;
+  }
+
+  .log{
+    margin-top:12px;
+    padding:12px;
+    border-radius:14px;
+    background:rgba(124,58,237,.06);
+    border:1px solid rgba(124,58,237,.14);
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:12px;
+    white-space:pre-wrap;
+  }
+
+  .imgs{
+    margin-top:14px;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:10px;
+  }
+
+  .imgCard{
+    border:1px solid var(--border);
+    border-radius:16px;
+    overflow:hidden;
+    background:#fff;
+    box-shadow:0 8px 24px rgba(17,24,39,.05);
+  }
+
+  .imgCard img{
+    width:100%;
+    display:block;
+  }
+
+  .btns{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top:14px;
+  }
+
+  .btn{
+    appearance:none;
+    border:none;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding:12px 14px;
+    border-radius:999px;
+    text-decoration:none;
+    font-weight:1000;
+    font-size:14px;
+    line-height:1;
+    transition:transform .14s ease, box-shadow .14s ease, filter .14s ease, background .14s ease;
+  }
+
+  .btn:hover{
+    transform:translateY(-1px);
+    filter:brightness(1.01);
+  }
+
+  .btn:active{
+    transform:translateY(1px);
+  }
+
+  .primary{
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    color:#fff;
+    box-shadow:0 14px 28px rgba(124,58,237,.18);
+  }
+
+  .ghost{
+    background:transparent;
+    color:#374151;
+    border:1px solid rgba(0,0,0,.08);
+  }
+
+  @media(max-width:860px){
+    .imgs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+
+  @media(max-width:720px){
+    .sharedHeader{
+      align-items:stretch;
+    }
+
+    .sharedHeaderLeft,
+    .sharedHeaderRight{
+      width:100%;
+      justify-content:space-between;
+    }
+
+    .sharedMenuWrap{
+      flex:1 1 auto;
+    }
+
+    .sharedMenuToggle{
+      width:100%;
+    }
+
+    .sharedMenuPanel{
+      right:auto;
+      left:0;
+      min-width:100%;
+      max-width:100%;
+    }
+
+    .sharedHeaderActions{
+      width:100%;
+    }
+
+    .sharedHeaderActions .sharedHeaderAction{
+      flex:1 1 100%;
+    }
+  }
+
+  @media(max-width:520px){
+    .imgs{grid-template-columns:1fr}
+    .btns > *{flex:1 1 100%}
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .sharedMenuToggle,
+    .sharedMenuItem,
+    .sharedHeaderAction,
+    .btn,
+    .bar > div{
+      transition:none !important;
+    }
+  }
 </style>
 </head>
 <body>
+
+<!-- HEADER PADRÃO -->
+<div class="sharedHeader">
+  <div class="sharedHeaderLeft">
+    <a class="sharedBrand" href="/sales">
+      <div class="sharedBrandMark">📚</div>
+      <div class="sharedBrandText">Meu Livro Mágico</div>
+    </a>
+  </div>
+
+  <div class="sharedHeaderRight">
+    <div class="sharedMenuWrap">
+      <button
+        type="button"
+        class="sharedMenuToggle"
+        id="sharedMenuToggle"
+        data-shared-menu-toggle="1"
+        aria-expanded="false"
+        aria-controls="sharedMenuPanel"
+      >
+        ☰ Menu
+        <span class="sharedMenuToggleCaret">▾</span>
+      </button>
+
+      <div
+        class="sharedMenuPanel"
+        id="sharedMenuPanel"
+        data-shared-menu-panel="1"
+      >
+        <div class="sharedMenuSection">
+          <a class="sharedMenuItem" href="/sales">
+            <span class="sharedMenuItemIcon">🏠</span>
+            <span>Início</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/como-funciona">
+            <span class="sharedMenuItemIcon">✨</span>
+            <span>Como funciona</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/exemplos">
+            <span class="sharedMenuItemIcon">📖</span>
+            <span>Exemplos</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/create">
+            <span class="sharedMenuItemIcon">🪄</span>
+            <span>Criar livro</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/books">
+            <span class="sharedMenuItemIcon">📚</span>
+            <span>Meus Livros</span>
+          </a>
+
+          <div class="sharedMenuDivider"></div>
+
+          <a class="sharedMenuItem" href="/profile">
+            <span class="sharedMenuItemIcon">👤</span>
+            <span>Perfil</span>
+          </a>
+
+          <button type="button" class="sharedMenuItem sharedMenuItemDanger" id="menuLogoutBtn">
+            <span class="sharedMenuItemIcon">🚪</span>
+            <span>Sair</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sharedHeaderActions">
+      <a class="sharedHeaderAction soft" href="/books">📚 Meus Livros</a>
+      <a class="sharedHeaderAction primary" href="/create">✨ Criar Livro</a>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
   <div class="card">
     <div class="row">
@@ -37,13 +520,14 @@
       </div>
       <div class="muted" id="meta">—</div>
     </div>
+
     <div class="bar"><div id="barFill"></div></div>
     <div class="log" id="log">Iniciando…</div>
 
     <div class="imgs" id="imgs"></div>
 
     <div class="btns">
-      <button class="btn ghost" id="btnLogout">🚪 Sair</button>
+      <button class="btn ghost" id="btnLogout" type="button">🚪 Sair</button>
       <a class="btn ghost" href="/create">← Voltar</a>
       <a class="btn ghost" href="/books">📚 Meus Livros</a>
       <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
@@ -55,26 +539,89 @@
   const bookId = new URLSearchParams(window.location.search).get("id") || "";
 
   const $ = (id) => document.getElementById(id);
-  function setLog(s){ $("log").textContent = String(s||""); }
-  function setSub(s){ $("sub").textContent = String(s||""); }
-  function setMeta(s){ $("meta").textContent = String(s||""); }
+
+  function setLog(s){ $("log").textContent = String(s || ""); }
+  function setSub(s){ $("sub").textContent = String(s || ""); }
+  function setMeta(s){ $("meta").textContent = String(s || ""); }
   function setBar(p){ $("barFill").style.width = Math.max(0, Math.min(100, p)) + "%"; }
 
-  document.getElementById('btnLogout')?.addEventListener('click', async () => {
+  async function doLogout(){
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
       window.location.href = '/sales';
     } catch (e) {
       alert('Erro ao sair');
     }
-  });
+  }
+
+  // Shared menu
+  (function(){
+    function closeAllSharedMenus(exceptId){
+      document.querySelectorAll("[data-shared-menu-panel]").forEach(function(panel){
+        if (exceptId && panel.id === exceptId) return;
+        panel.classList.remove("open");
+      });
+
+      document.querySelectorAll("[data-shared-menu-toggle]").forEach(function(btn){
+        var controls = btn.getAttribute("aria-controls") || "";
+        var expanded = exceptId && controls === exceptId ? "true" : "false";
+        btn.setAttribute("aria-expanded", expanded);
+      });
+    }
+
+    document.querySelectorAll("[data-shared-menu-toggle]").forEach(function(toggle){
+      if (toggle.__sharedMenuBound) return;
+      toggle.__sharedMenuBound = true;
+
+      toggle.addEventListener("click", function(e){
+        e.stopPropagation();
+        var panelId = toggle.getAttribute("aria-controls");
+        var panel = panelId ? document.getElementById(panelId) : null;
+        if (!panel) return;
+
+        var willOpen = !panel.classList.contains("open");
+        closeAllSharedMenus();
+        if (willOpen) {
+          panel.classList.add("open");
+          toggle.setAttribute("aria-expanded", "true");
+        } else {
+          panel.classList.remove("open");
+          toggle.setAttribute("aria-expanded", "false");
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-shared-menu-panel]").forEach(function(panel){
+      if (panel.__sharedMenuPanelBound) return;
+      panel.__sharedMenuPanelBound = true;
+      panel.addEventListener("click", function(e){
+        e.stopPropagation();
+      });
+    });
+
+    document.addEventListener("click", function(){
+      closeAllSharedMenus();
+    });
+
+    document.addEventListener("keydown", function(e){
+      if (e.key === "Escape") closeAllSharedMenus();
+    });
+  })();
+
+  document.getElementById("btnLogout")?.addEventListener("click", doLogout);
+  document.getElementById("menuLogoutBtn")?.addEventListener("click", doLogout);
 
   function renderImages(coverUrl, images){
     const root = $("imgs");
     root.innerHTML = "";
     const items = [];
+
     if (coverUrl) items.push({ label: "Capa", url: coverUrl });
-    (images||[]).forEach(it => { if (it && it.url) items.push({ label: "Pág. " + it.page, url: it.url }); });
+
+    (images || []).forEach(it => {
+      if (it && it.url) items.push({ label: "Pág. " + it.page, url: it.url });
+    });
+
     for (const it of items){
       const div = document.createElement("div");
       div.className = "imgCard";
@@ -83,63 +630,66 @@
     }
   }
 
- async function tick(){
-  if (!bookId){
-    setLog("Sem id. Volte ao /create e gere novamente.");
-    return;
-  }
-
-  try{
-    await fetch("/api/generateNext", {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ id: bookId })
-    });
-
-    const r = await fetch("/api/status/" + encodeURIComponent(bookId));
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
-
-    setMeta("status=" + j.status + " • step=" + j.step);
-    setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
-    renderImages(j.coverUrl, j.images);
-
-    let p = 5;
-    if (String(j.step||"").startsWith("story")) p = 20;
-    if (String(j.step||"") === "cover") p = 35;
-    if (String(j.step||"").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1]||"0") * 6);
-    if (String(j.step||"") === "pdf") p = 92;
-    if (String(j.step||"") === "done" || j.status === "done") p = 100;
-    setBar(p);
-
-    if (j.status === "done" && j.pdf){
-      setSub("✅ Pronto! Abrindo o preview…");
-      const pdfBtn = $("pdfBtn");
-      pdfBtn.style.display = "inline-flex";
-      pdfBtn.href = j.pdf;
-      setLog("Finalizado. Abrindo preview do livro…");
-      setTimeout(() => {
-        window.location.href = "/preview?id=" + encodeURIComponent(bookId);
-      }, 650);
+  async function tick(){
+    if (!bookId){
+      setSub("Livro não encontrado");
+      setLog("Sem id. Volte ao /create e gere novamente.");
       return;
     }
 
-    if (j.status === "failed"){
-      setSub("❌ Falhou");
-      setLog(j.error || "Falhou");
-      return;
+    try{
+      await fetch("/api/generateNext", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ id: bookId })
+      });
+
+      const r = await fetch("/api/status/" + encodeURIComponent(bookId));
+      const j = await r.json().catch(() => ({}));
+
+      if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
+
+      setMeta("status=" + j.status + " • step=" + j.step);
+      setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
+      renderImages(j.coverUrl, j.images);
+
+      let p = 5;
+      if (String(j.step || "").startsWith("story")) p = 20;
+      if (String(j.step || "") === "cover") p = 35;
+      if (String(j.step || "").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1] || "0") * 6);
+      if (String(j.step || "") === "pdf") p = 92;
+      if (String(j.step || "") === "done" || j.status === "done") p = 100;
+      setBar(p);
+
+      if (j.status === "done" && j.pdf){
+        setSub("✅ Pronto! Abrindo o preview…");
+        const pdfBtn = $("pdfBtn");
+        pdfBtn.style.display = "inline-flex";
+        pdfBtn.href = j.pdf;
+        setLog("Finalizado. Abrindo preview do livro…");
+
+        setTimeout(() => {
+          window.location.href = "/preview?id=" + encodeURIComponent(bookId);
+        }, 650);
+        return;
+      }
+
+      if (j.status === "failed"){
+        setSub("❌ Falhou");
+        setLog(j.error || "Falhou");
+        return;
+      }
+
+      setLog("Gerando próximo passo…");
+      setTimeout(tick, 1400);
+    }catch(e){
+      setSub("Erro");
+      setLog(String(e.message || e));
+      setTimeout(tick, 2500);
     }
-
-    setLog("Gerando próximo passo…");
-    setTimeout(tick, 1400);
-  }catch(e){
-    setSub("Erro");
-    setLog(String(e.message || e));
-    setTimeout(tick, 2500);
   }
-}
 
-tick();
+  tick();
 </script>
 </body>
 </html>
