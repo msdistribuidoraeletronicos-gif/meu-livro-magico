@@ -1,20 +1,16 @@
 /**
- * generate.page.js — Página /generate (Step 4)
- * ✅ Vercel-safe: chama /api/generateNext em LOOP (1 passo por request).
- * ✅ AUTO-START: inicia automaticamente ao abrir /generate (sem clique).
- * ✅ BACKOFF 409: se "step já em execução", espera e tenta de novo (sem travar).
- * ✅ RETRY E003 / HIGH DEMAND: trata como erro temporário e tenta novamente com backoff.
- * ✅ RESPEITA COOLDOWN DO BACKEND: se /api/generateNext retornar nextTryAt, espera até lá.
- * ✅ HARD-LIMIT: para após 10min tentando (pra não ficar eternamente).
+ * generate.page.js — Página /generate
  *
- * ✅ CORREÇÃO PRINCIPAL DE UX:
- * - Se /generate abrir sem bookId no localStorage, tenta:
- *   (1) capturar bookId via querystring (?bookId=... ou ?id=...)
- *   (2) se ainda não tiver, cria automaticamente chamando POST /api/create
- * - Se faltar dados mínimos, redireciona para /create (sem travar em "Sem bookId").
- *
- * mount: require("./generate.page.js")(app, { requireAuth })
+ * ✅ Compatível com o core.js atual
+ * ✅ Usa /api/create, /api/generate, /api/generateNext, /api/status/:id
+ * ✅ Auto-start
+ * ✅ Evita loop infinito
+ * ✅ Respeita nextTryAt
+ * ✅ Trata 409 step já em execução
+ * ✅ Redireciona ao preview apenas 1 vez
+ * ✅ Cria book automaticamente se necessário
  */
+
 "use strict";
 
 module.exports = function mountGeneratePage(app, { requireAuth }) {
@@ -22,720 +18,1376 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     res.type("html").send(`<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Gerando… — Meu Livro Mágico</title>
-  <style>
-    :root{
-      --bg1:#ede9fe; --bg2:#ffffff; --bg3:#fdf2f8;
-      --card:#ffffff; --text:#111827; --muted:#6b7280; --border:#e5e7eb;
-      --violet:#7c3aed; --pink:#db2777; --shadow:0 20px 50px rgba(0,0,0,.10);
-      --shadow2:0 10px 24px rgba(0,0,0,.08);
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0; font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      color:var(--text);
-      background:linear-gradient(to bottom,var(--bg1),var(--bg2),var(--bg3));
-      min-height:100vh;
-    }
-    .container{max-width:980px;margin:0 auto;padding:24px 16px}
-    .topRow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-    .pill{background:rgba(124,58,237,.10);color:#4c1d95;border:1px solid rgba(124,58,237,.16);padding:8px 12px;border-radius:999px;font-weight:900;text-decoration:none;display:inline-flex;gap:8px;align-items:center}
-    .pillBtn{cursor:pointer}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:26px;box-shadow:var(--shadow);padding:18px}
-    .head{text-align:center;padding:10px}
-    .head h1{margin:0;font-size:26px;font-weight:1000}
-    .head p{margin:8px 0 0;color:var(--muted);font-weight:800}
-    .box{
-      margin-top:14px;border:1px solid var(--border);border-radius:18px;background:#fff;
-      padding:14px; box-shadow:var(--shadow2);
-    }
-    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
-    .muted{color:var(--muted);font-weight:900}
-    .statusLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-weight:900}
-    .dot{width:10px;height:10px;border-radius:999px;background:#9ca3af}
-    .dot.run{background:linear-gradient(90deg,var(--violet),var(--pink))}
-    .dot.ok{background:linear-gradient(90deg,#34d399,#10b981)}
-    .dot.bad{background:#ef4444}
-    .barWrap{margin-top:10px}
-    .bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden}
-    .bar > div{height:100%;width:0%;background:linear-gradient(90deg,var(--violet),var(--pink))}
-    .btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
-    .btn{
-      border:0;cursor:pointer;border-radius:999px;padding:12px 16px;font-weight:1000;
-      display:inline-flex;align-items:center;gap:10px;
-    }
-    .btnGhost{background:transparent;color:var(--muted);border:1px solid rgba(0,0,0,.08)}
-    .btnPrimary{color:#fff;background:linear-gradient(90deg,var(--violet),var(--pink));box-shadow:0 16px 34px rgba(124,58,237,.22)}
-    .btnDanger{color:#fff;background:#111827}
-    .btnMini{padding:10px 12px;font-size:13px}
-    .hint{
-      margin-top:12px;padding:12px;border-radius:14px;background:rgba(219,39,119,.06);
-      border:1px solid rgba(219,39,119,.14);color:#7f1d1d;font-weight:900;white-space:pre-wrap;display:none
-    }
-    .gridPreview{margin-top:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-    @media(max-width:900px){.gridPreview{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:520px){.gridPreview{grid-template-columns:1fr}}
-    .thumb{border:1px solid rgba(0,0,0,.08);border-radius:16px;overflow:hidden;background:#fff}
-    .thumb img{width:100%;display:block}
-    .thumb .cap{padding:10px;font-weight:900;color:#374151}
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Gerando… — Meu Livro Mágico</title>
+<style>
+  :root{
+    --bg1:#ede9fe;
+    --bg2:#fff;
+    --bg3:#fdf2f8;
+    --text:#111827;
+    --muted:#6b7280;
+    --violet:#7c3aed;
+    --pink:#db2777;
+    --border:#e5e7eb;
+    --shadow:0 20px 50px rgba(0,0,0,.10);
+    --shadow2:0 12px 30px rgba(17,24,39,.08);
+    --ok:#10b981;
+    --bad:#ef4444;
+    --warn:#f59e0b;
+  }
 
-    .diag{
-      margin-top:14px;
-      border:1px solid rgba(0,0,0,.10);
-      background:#0b1220;
-      color:#e5e7eb;
-      border-radius:16px;
-      padding:12px;
-      box-shadow: var(--shadow2);
+  *{box-sizing:border-box}
+  html,body{min-height:100%}
+
+  body{
+    margin:0;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));
+    min-height:100vh;
+    color:var(--text);
+  }
+
+  a{color:inherit;text-decoration:none}
+
+  .wrap{
+    max-width:980px;
+    margin:0 auto;
+    padding:24px 16px;
+  }
+
+  .sharedHeader{
+    width:min(calc(100% - 24px), 1240px);
+    margin:18px auto 0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    flex-wrap:wrap;
+    position:relative;
+    z-index:50;
+  }
+
+  .sharedHeaderLeft,
+  .sharedHeaderRight{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+
+  .sharedBrand{
+    display:inline-flex;
+    align-items:center;
+    gap:12px;
+    min-height:48px;
+    text-decoration:none;
+    color:#111827;
+  }
+
+  .sharedBrandMark{
+    width:44px;
+    height:44px;
+    border-radius:15px;
+    display:grid;
+    place-items:center;
+    background:linear-gradient(135deg, rgba(124,58,237,.14), rgba(219,39,119,.14));
+    border:1px solid rgba(124,58,237,.16);
+    box-shadow:0 10px 24px rgba(0,0,0,.08);
+    font-size:20px;
+    flex:0 0 auto;
+  }
+
+  .sharedBrandText{
+    font-size:17px;
+    line-height:1.15;
+    font-weight:1000;
+    letter-spacing:-.02em;
+    color:#111827;
+  }
+
+  .sharedMenuWrap{
+    position:relative;
+  }
+
+  .sharedMenuToggle{
+    appearance:none;
+    border:none;
+    min-height:46px;
+    padding:10px 14px;
+    border-radius:14px;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    font-weight:1000;
+    color:#4c1d95;
+    background:rgba(255,255,255,.92);
+    border:1px solid rgba(124,58,237,.14);
+    box-shadow:0 8px 20px rgba(0,0,0,.06);
+    transition:transform .14s ease, box-shadow .14s ease, background .14s ease, filter .14s ease;
+    user-select:none;
+    white-space:nowrap;
+  }
+
+  .sharedMenuToggle:hover{
+    transform:translateY(-1px);
+    box-shadow:0 12px 24px rgba(0,0,0,.08);
+    filter:brightness(1.01);
+  }
+
+  .sharedMenuToggle:active{
+    transform:translateY(1px);
+  }
+
+  .sharedMenuToggleCaret{
+    font-size:12px;
+    opacity:.8;
+  }
+
+  .sharedMenuPanel{
+    position:absolute;
+    top:calc(100% + 8px);
+    right:0;
+    min-width:270px;
+    max-width:min(92vw, 340px);
+    padding:8px;
+    border-radius:18px;
+    background:rgba(255,255,255,.98);
+    border:1px solid rgba(226,232,240,.9);
+    box-shadow:0 18px 40px rgba(15,23,42,.12);
+    backdrop-filter:blur(14px);
+    display:none;
+    z-index:120;
+  }
+
+  .sharedMenuPanel.open{
+    display:block;
+  }
+
+  .sharedMenuSection{
+    display:grid;
+    gap:6px;
+  }
+
+  .sharedMenuDivider{
+    height:1px;
+    margin:6px 2px;
+    background:rgba(148,163,184,.18);
+  }
+
+  .sharedMenuItem{
+    appearance:none;
+    width:100%;
+    border:none;
+    text-align:left;
+    text-decoration:none;
+    min-height:42px;
+    padding:10px 12px;
+    border-radius:12px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    background:#fff;
+    color:#1f2937;
+    border:1px solid rgba(15,23,42,.05);
+    box-shadow:0 4px 12px rgba(17,24,39,.03);
+    font-weight:900;
+    cursor:pointer;
+    transition:transform .12s ease, background .12s ease, box-shadow .12s ease;
+  }
+
+  .sharedMenuItem:hover{
+    transform:translateY(-1px);
+    background:#faf8ff;
+    box-shadow:0 8px 16px rgba(17,24,39,.05);
+  }
+
+  .sharedMenuItemIcon{
+    width:26px;
+    height:26px;
+    border-radius:9px;
+    display:grid;
+    place-items:center;
+    font-size:14px;
+    background:linear-gradient(135deg, rgba(124,58,237,.12), rgba(236,72,153,.12));
+    color:#6d28d9;
+    flex:0 0 auto;
+  }
+
+  .sharedMenuItemDanger{
+    color:#991b1b;
+    background:#fff7f7;
+    border-color:rgba(220,38,38,.08);
+  }
+
+  .sharedMenuItemDanger .sharedMenuItemIcon{
+    background:linear-gradient(135deg, rgba(239,68,68,.14), rgba(249,115,22,.14));
+    color:#b91c1c;
+  }
+
+  .sharedHeaderActions{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .sharedHeaderAction{
+    appearance:none;
+    border:none;
+    min-height:46px;
+    padding:10px 14px;
+    border-radius:14px;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    font-weight:1000;
+    white-space:nowrap;
+    text-decoration:none;
+    transition:transform .14s ease, box-shadow .14s ease, filter .14s ease, background .14s ease;
+    user-select:none;
+  }
+
+  .sharedHeaderAction:hover{
+    transform:translateY(-1px);
+    filter:brightness(1.01);
+  }
+
+  .sharedHeaderAction:active{
+    transform:translateY(1px);
+  }
+
+  .sharedHeaderAction.primary{
+    color:#fff;
+    background:linear-gradient(90deg,#7c3aed,#db2777);
+    box-shadow:0 14px 28px rgba(124,58,237,.18);
+  }
+
+  .sharedHeaderAction.soft{
+    color:#4c1d95;
+    background:rgba(255,255,255,.92);
+    border:1px solid rgba(124,58,237,.14);
+    box-shadow:0 8px 20px rgba(0,0,0,.06);
+  }
+
+  .card{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:22px;
+    box-shadow:var(--shadow);
+    padding:18px;
+  }
+
+  .row{
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:space-between;
+  }
+
+  h1{
+    margin:0;
+    font-size:22px;
+    font-weight:1000;
+  }
+
+  .muted{
+    color:var(--muted);
+    font-weight:900;
+  }
+
+  .statusPill{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 12px;
+    border-radius:999px;
+    font-weight:1000;
+    font-size:13px;
+    border:1px solid rgba(0,0,0,.08);
+    background:#fff;
+  }
+
+  .statusDot{
+    width:10px;
+    height:10px;
+    border-radius:999px;
+    background:#9ca3af;
+  }
+
+  .statusDot.run{ background:linear-gradient(90deg,var(--violet),var(--pink)); }
+  .statusDot.ok{ background:var(--ok); }
+  .statusDot.bad{ background:var(--bad); }
+  .statusDot.warn{ background:var(--warn); }
+
+  .hint{
+    margin-top:12px;
+    padding:12px 14px;
+    border-radius:14px;
+    background:rgba(124,58,237,.06);
+    border:1px solid rgba(124,58,237,.14);
+    color:#4c1d95;
+    font-weight:900;
+    white-space:pre-wrap;
+    display:none;
+  }
+
+  .bar{
+    height:12px;
+    background:#e5e7eb;
+    border-radius:999px;
+    overflow:hidden;
+    margin-top:12px;
+  }
+
+  .bar > div{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    transition:width .2s ease;
+  }
+
+  .progressMeta{
+    margin-top:10px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    flex-wrap:wrap;
+    font-size:13px;
+    color:#4b5563;
+    font-weight:900;
+  }
+
+  .diag{
+    margin-top:14px;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:18px;
+    overflow:hidden;
+    background:#0f172a;
+    box-shadow:var(--shadow2);
+  }
+
+  .diagHead{
+    padding:12px 14px;
+    font-weight:1000;
+    color:#fff;
+    border-bottom:1px solid rgba(255,255,255,.08);
+  }
+
+  .log{
+    padding:12px;
+    color:#e5e7eb;
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:12px;
+    white-space:pre-wrap;
+    max-height:260px;
+    overflow:auto;
+    line-height:1.45;
+  }
+
+  .imgs{
+    margin-top:14px;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:10px;
+  }
+
+  .imgCard{
+    border:1px solid var(--border);
+    border-radius:16px;
+    overflow:hidden;
+    background:#fff;
+    box-shadow:0 8px 24px rgba(17,24,39,.05);
+  }
+
+  .imgCard img{
+    width:100%;
+    display:block;
+    aspect-ratio:1/1;
+    object-fit:cover;
+    background:#f8fafc;
+  }
+
+  .imgCap{
+    padding:10px;
+    font-weight:900;
+    color:#374151;
+    font-size:13px;
+  }
+
+  .btns{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top:14px;
+  }
+
+  .btn{
+    appearance:none;
+    border:none;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding:12px 14px;
+    border-radius:999px;
+    text-decoration:none;
+    font-weight:1000;
+    font-size:14px;
+    line-height:1;
+    transition:transform .14s ease, box-shadow .14s ease, filter .14s ease, background .14s ease;
+  }
+
+  .btn:hover{
+    transform:translateY(-1px);
+    filter:brightness(1.01);
+  }
+
+  .btn:active{
+    transform:translateY(1px);
+  }
+
+  .primary{
+    background:linear-gradient(90deg,var(--violet),var(--pink));
+    color:#fff;
+    box-shadow:0 14px 28px rgba(124,58,237,.18);
+  }
+
+  .ghost{
+    background:transparent;
+    color:#374151;
+    border:1px solid rgba(0,0,0,.08);
+  }
+
+  .dark{
+    background:#111827;
+    color:#fff;
+  }
+
+  @media(max-width:860px){
+    .imgs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+
+  @media(max-width:720px){
+    .sharedHeader{
+      align-items:stretch;
     }
-    .diag h3{margin:0 0 10px 0;font-size:14px}
-    .log{
-      white-space:pre-wrap;
-      font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-      font-size:12px;
-      line-height:1.4;
-      max-height:240px;
-      overflow:auto;
-      background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.12);
-      border-radius:12px;
-      padding:10px;
+
+    .sharedHeaderLeft,
+    .sharedHeaderRight{
+      width:100%;
+      justify-content:space-between;
     }
-  </style>
+
+    .sharedMenuWrap{
+      flex:1 1 auto;
+    }
+
+    .sharedMenuToggle{
+      width:100%;
+    }
+
+    .sharedMenuPanel{
+      right:auto;
+      left:0;
+      min-width:100%;
+      max-width:100%;
+    }
+
+    .sharedHeaderActions{
+      width:100%;
+    }
+
+    .sharedHeaderActions .sharedHeaderAction{
+      flex:1 1 100%;
+    }
+  }
+
+  @media(max-width:520px){
+    .imgs{grid-template-columns:1fr}
+    .btns > *{flex:1 1 100%}
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .sharedMenuToggle,
+    .sharedMenuItem,
+    .sharedHeaderAction,
+    .btn,
+    .bar > div{
+      transition:none !important;
+    }
+  }
+</style>
 </head>
 <body>
-  <div class="container">
-    <div class="topRow">
-      <a class="pill" href="/create">← Voltar</a>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
-        <a class="pill" href="/sales">🛒 Página Inicial</a>
-        <a class="pill" href="/books">📚 Meus Livros</a>
-        <button class="pill pillBtn" id="btnReset">♻️ Reiniciar</button>
-      </div>
-    </div>
 
-    <div class="card">
-      <div class="head">
-        <h1>✨ Criando Magia</h1>
-        <p>Aguarde enquanto criamos o livro</p>
-      </div>
-
-      <div class="box">
-        <div class="row">
-          <div class="statusLine">
-            <span class="dot" id="dot"></span>
-            <span id="line" class="mono">Status: …</span>
-          </div>
-          <div class="muted mono" id="updated">Atualizado: —</div>
-        </div>
-
-        <div class="barWrap">
-          <div class="row">
-            <div class="muted" id="progressTxt">Progresso: 0/11 · Preparando…</div>
-            <div class="btns">
-              <button class="btn btnGhost btnMini" id="btnWhoami">👤 whoami</button>
-              <button class="btn btnGhost btnMini" id="btnTest">🧪 Testar 1 passo</button>
-              <button class="btn btnGhost" id="btnRefresh">🔄 Atualizar status</button>
-              <button class="btn btnDanger" id="btnStop">⏸️ Parar</button>
-              <button class="btn btnPrimary" id="btnStart">🚀 Iniciar geração</button>
-            </div>
-          </div>
-          <div class="bar"><div id="barFill"></div></div>
-        </div>
-
-        <div class="hint" id="hint"></div>
-        <div class="gridPreview" id="preview" style="display:none"></div>
-
-        <div class="diag">
-          <h3>🧩 Diagnóstico (últimas chamadas)</h3>
-          <div class="log" id="log"></div>
-        </div>
-      </div>
-    </div>
+<div class="sharedHeader">
+  <div class="sharedHeaderLeft">
+    <a class="sharedBrand" href="/sales">
+      <div class="sharedBrandMark">📚</div>
+      <div class="sharedBrandText">Meu Livro Mágico</div>
+    </a>
   </div>
 
+  <div class="sharedHeaderRight">
+    <div class="sharedMenuWrap">
+      <button
+        type="button"
+        class="sharedMenuToggle"
+        id="sharedMenuToggle"
+        data-shared-menu-toggle="1"
+        aria-expanded="false"
+        aria-controls="sharedMenuPanel"
+      >
+        ☰ Menu
+        <span class="sharedMenuToggleCaret">▾</span>
+      </button>
+
+      <div
+        class="sharedMenuPanel"
+        id="sharedMenuPanel"
+        data-shared-menu-panel="1"
+      >
+        <div class="sharedMenuSection">
+          <a class="sharedMenuItem" href="/sales">
+            <span class="sharedMenuItemIcon">🏠</span>
+            <span>Início</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/como-funciona">
+            <span class="sharedMenuItemIcon">✨</span>
+            <span>Como funciona</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/exemplos">
+            <span class="sharedMenuItemIcon">📖</span>
+            <span>Exemplos</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/create">
+            <span class="sharedMenuItemIcon">🪄</span>
+            <span>Criar livro</span>
+          </a>
+
+          <a class="sharedMenuItem" href="/books">
+            <span class="sharedMenuItemIcon">📚</span>
+            <span>Meus Livros</span>
+          </a>
+
+          <div class="sharedMenuDivider"></div>
+
+          <a class="sharedMenuItem" href="/profile">
+            <span class="sharedMenuItemIcon">👤</span>
+            <span>Perfil</span>
+          </a>
+
+          <button type="button" class="sharedMenuItem sharedMenuItemDanger" id="menuLogoutBtn">
+            <span class="sharedMenuItemIcon">🚪</span>
+            <span>Sair</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sharedHeaderActions">
+      <a class="sharedHeaderAction soft" href="/books">📚 Meus Livros</a>
+      <a class="sharedHeaderAction primary" href="/create">✨ Criar Livro</a>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <div>
+        <h1>⏳ Gerando seu livro…</h1>
+        <div class="muted" id="sub">Preparando…</div>
+      </div>
+
+      <div class="row" style="justify-content:flex-end">
+        <div class="statusPill">
+          <span class="statusDot" id="statusDot"></span>
+          <span id="statusText">Aguardando</span>
+        </div>
+        <div class="muted" id="meta">—</div>
+      </div>
+    </div>
+
+    <div class="hint" id="hint"></div>
+
+    <div class="bar"><div id="barFill"></div></div>
+
+    <div class="progressMeta">
+      <div id="progressText">Progresso: iniciando…</div>
+      <div id="updatedText">Atualizado: —</div>
+    </div>
+
+    <div class="diag">
+      <div class="diagHead">🧩 Diagnóstico</div>
+      <div class="log" id="log">Iniciando…</div>
+    </div>
+
+    <div class="imgs" id="imgs"></div>
+
+    <div class="btns">
+      <button class="btn ghost" id="btnRefresh" type="button">🔄 Atualizar</button>
+      <button class="btn dark" id="btnStop" type="button">⏸️ Parar</button>
+      <button class="btn ghost" id="btnLogout" type="button">🚪 Sair</button>
+      <a class="btn ghost" href="/create">← Voltar</a>
+      <a class="btn ghost" href="/books">📚 Meus Livros</a>
+      <a class="btn primary" id="previewBtn" href="#" style="display:none">📖 Abrir preview</a>
+      <a class="btn primary" id="pdfBtn" href="#" style="display:none">⬇️ Baixar PDF</a>
+    </div>
+  </div>
+</div>
+
 <script>
-  const $ = (id)=>document.getElementById(id);
+  const $ = (id) => document.getElementById(id);
 
   let running = false;
   let stopFlag = false;
   let inflight = false;
-  let autoStarted = false;
+  let previewRedirected = false;
+  let preparedGenerate = false;
+  let loopStarted = false;
 
   const logs = [];
+
   function addLog(line){
     const ts = new Date().toISOString();
-    logs.push("[" + ts + "] " + line);
-    while (logs.length > 120) logs.shift();
+    logs.push("[" + ts + "] " + String(line || ""));
+    while (logs.length > 150) logs.shift();
     $("log").textContent = logs.join("\\n");
+    $("log").scrollTop = $("log").scrollHeight;
   }
 
   function setHint(msg){
     const el = $("hint");
-    el.textContent = msg || "";
-    el.style.display = msg ? "block" : "none";
+    const text = String(msg || "").trim();
+    el.textContent = text;
+    el.style.display = text ? "block" : "none";
+  }
+
+  function setSub(text){
+    $("sub").textContent = String(text || "");
+  }
+
+  function setMeta(text){
+    $("meta").textContent = String(text || "");
+  }
+
+  function setProgressText(text){
+    $("progressText").textContent = String(text || "");
+  }
+
+  function setUpdatedText(text){
+    $("updatedText").textContent = String(text || "");
+  }
+
+  function setBar(pct){
+    const n = Math.max(0, Math.min(100, Number(pct || 0)));
+    $("barFill").style.width = n + "%";
+  }
+
+  function setStatus(kind, text){
+    const dot = $("statusDot");
+    dot.className = "statusDot" + (kind ? " " + kind : "");
+    $("statusText").textContent = String(text || "");
   }
 
   function goLogin(){
     const next = encodeURIComponent(location.pathname + location.search);
-    addLog("↪ goLogin -> /login?next=" + next);
-    window.location.href = "/login?next=" + next;
+    location.href = "/login?next=" + next;
   }
 
-  function goCreate(withMsg){
-    try {
-      if (withMsg) localStorage.setItem("generateHint", String(withMsg));
-    } catch {}
-    addLog("↪ goCreate -> /create");
-    window.location.href = "/create";
+  function sleep(ms){
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function getState(){
-    return {
-      bookId: localStorage.getItem("bookId") || "",
-      childName: (localStorage.getItem("childName") || "").trim(),
-      childAge: Number(localStorage.getItem("childAge") || "6"),
-      childGender: localStorage.getItem("childGender") || "neutral",
-      theme: localStorage.getItem("theme") || "space",
-      style: localStorage.getItem("style") || "read",
-    };
-  }
-
-  function uiSetDot(kind){
-    const d = $("dot");
-    d.className = "dot" + (kind ? " " + kind : "");
-  }
-
-  function setBar(done, total){
-    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((done/total)*100))) : 0;
-    $("barFill").style.width = pct + "%";
-  }
-
-  function renderPreview(data){
-    const wrap = $("preview");
-    const imgs = Array.isArray(data?.images) ? data.images.filter(x=>x && x.url) : [];
-    const cover = data?.coverUrl || "";
-    const pdf = data?.pdf || "";
-
-    const cards = [];
-    if (cover) cards.push({ title: "Capa", url: cover });
-    for (const it of imgs) cards.push({ title: "Página " + (it.page || "?"), url: it.url });
-
-    if (!cards.length){
-      wrap.style.display = "none";
-      wrap.innerHTML = "";
-      return;
-    }
-
-    wrap.style.display = "grid";
-    wrap.innerHTML = cards.slice(0, 6).map(c => (
-      '<div class="thumb">' +
-        '<img src="' + c.url + '" alt="thumb"/>' +
-        '<div class="cap">' + c.title + '</div>' +
-      '</div>'
-    )).join("");
-
-    if (pdf && data?.status === "done") {
-      setHint("✅ Livro pronto! Baixe o PDF em: " + location.origin + pdf);
-    }
-  }
-
-  async function fetchJsonLogged(url, opts){
-    const o = opts || {};
-    o.credentials = "include";
-    o.headers = Object.assign({ "Accept":"application/json" }, o.headers || {});
-    addLog("→ " + (o.method || "GET") + " " + url);
-
-    const r = await fetch(url, o);
-
-    if (r.redirected) {
-      addLog("↪ redirected to: " + r.url);
-      window.location.href = r.url;
-      return { status: r.status, ok: false, json: { ok:false, error:"redirected" }, raw: "" };
-    }
-
-    if (r.status === 401) {
-      addLog("↪ 401 not_logged_in");
-      goLogin();
-      return { status: 401, ok: false, json: { ok:false, error:"not_logged_in" }, raw: "" };
-    }
-
-    const ct = String(r.headers.get("content-type") || "");
-    const text = await r.text();
-
-    let j = {};
-    if (ct.includes("application/json")) {
-      try { j = JSON.parse(text || "{}"); } catch { j = {}; }
-    } else {
-      j = { ok:false, error: "non_json_response" };
-    }
-
-    addLog("← HTTP " + r.status + " " + url + " | ct: " + ct + " | body: " + (text ? text.slice(0, 700) : "(vazio)"));
-    return { status: r.status, ok: r.ok, json: j, raw: text };
-  }
-
-  function isHighDemandError(msg){
-    const s = String(msg || "");
-    return /high demand/i.test(s) || /unavailable/i.test(s) || /(E003)/i.test(s) || /service is currently unavailable/i.test(s);
-  }
-
-  function getNextTryAtFromResponse(g){
-    const n = Number(g?.nextTryAt || 0);
-    return Number.isFinite(n) ? n : 0;
-  }
-
-  async function apiProgress(bookId){
-    const r = await fetchJsonLogged("/api/progress/" + encodeURIComponent(bookId), { method:"GET" });
-    if (!r.ok) throw new Error((r.json && r.json.error) ? r.json.error : ("HTTP " + r.status));
-    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/progress");
-    return r.json;
-  }
-
-  async function apiWhoami(){
-    const r = await fetchJsonLogged("/api/whoami", { method:"GET" });
-    if (!r.ok) throw new Error((r.json && r.json.error) ? r.json.error : ("HTTP " + r.status));
-    if (!r.json.ok) throw new Error(r.json.error || "Falha /api/whoami");
-    return r.json;
-  }
-
-  async function apiCreateBook(payload){
-    const r = await fetchJsonLogged("/api/create", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(payload || {})
-    });
-
-    if (r.status === 401 || (r.json && (r.json.error === "not_logged_in" || r.json.error === "redirected"))) {
-      throw new Error("not_logged_in");
-    }
-    if (!r.ok) {
-      const err = (r.json && (r.json.error || r.json.message)) ? (r.json.error || r.json.message) : ("HTTP " + r.status);
-      throw new Error(err);
-    }
-    if (!r.json || !r.json.ok) {
-      throw new Error((r.json && r.json.error) ? r.json.error : "Falha /api/create");
-    }
-
-    // compatível com vários formatos:
-    const id = r.json.id || r.json.bookId || (r.json.book && (r.json.book.id || r.json.book.bookId)) || "";
-    if (!id) throw new Error("Falha /api/create: resposta sem id");
-    return { id, raw: r.json };
-  }
-
-  async function apiGenerateNext(payload){
-    const r = await fetchJsonLogged("/api/generateNext", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(payload || {})
-    });
-
-    if (r.status === 401 || (r.json && r.json.error === "not_logged_in") || (r.json && r.json.error === "redirected")) {
-      throw new Error("not_logged_in");
-    }
-
-    if (r.status === 409) {
-      return { ok:false, _busy:true, error:(r.json && r.json.error) ? r.json.error : "busy" };
-    }
-
-    if (!r.ok) {
-      const err = (r.json && (r.json.error || r.json.message)) ? (r.json.error || r.json.message) : ("HTTP " + r.status);
-      throw new Error(err);
-    }
-
-    if (!r.json || !r.json.ok) {
-      throw new Error((r.json && r.json.error) ? r.json.error : "Falha /api/generateNext");
-    }
-
-    return r.json;
-  }
-
-  function applyProgressUI(p){
-    const status = p?.status || "created";
-    const step = p?.step || "created";
-    const style = p?.style || p?.book?.style || "read";
-
-    $("line").textContent = "Status: " + status + " | step: " + step + " | style: " + style;
-    $("updated").textContent = "Atualizado: " + (p?.updatedAt || "—");
-
-    const done = Number(p?.doneSteps || 0);
-    const total = Number(p?.totalSteps || 11);
-    $("progressTxt").textContent = "Progresso: " + done + "/" + total + " · " + (p?.message || "");
-    setBar(done, total);
-
-    if (status === "done") uiSetDot("ok");
-    else if (status === "failed" && !isHighDemandError(p?.error || p?.message || "")) uiSetDot("bad");
-    else if (running) uiSetDot("run");
-    else uiSetDot("");
-
-    renderPreview(p);
-
-    if (status === "failed") {
-      const err = p?.error || p?.message || "erro desconhecido";
-      if (isHighDemandError(err)) {
-        setHint("⏳ Serviço ocupado (E003). Vou tentar novamente automaticamente…\\n" + err);
-      } else {
-        setHint("❌ Falhou: " + err);
-      }
-    }
-  }
-
-  async function sleep(ms){
-    await new Promise(r=>setTimeout(r, ms));
-  }
-
-  function readBookIdFromUrl(){
+  function getQueryBookId(){
     try {
       const qs = new URLSearchParams(location.search || "");
-      const id =
-        (qs.get("bookId") || qs.get("id") || qs.get("book") || qs.get("b") || "").trim();
-      return id || "";
+      return String(qs.get("id") || qs.get("bookId") || "").trim();
     } catch {
       return "";
     }
   }
 
-  function buildCreatePayload(){
-    const st = getState();
+  function getState(){
     return {
-      childName: st.childName,
-      childAge: st.childAge,
-      childGender: st.childGender,
-      theme: st.theme,
-      style: st.style
+      bookId: String(localStorage.getItem("bookId") || "").trim(),
+      childName: String(localStorage.getItem("childName") || "").trim(),
+      childAge: Number(localStorage.getItem("childAge") || "6"),
+      childGender: String(localStorage.getItem("childGender") || "neutral").trim() || "neutral",
+      theme: String(localStorage.getItem("theme") || "space").trim() || "space",
+      style: String(localStorage.getItem("style") || "read").trim() || "read",
+      city: String(localStorage.getItem("city") || "").trim()
     };
   }
 
-  function buildPayload(){
+  function persistBookId(id){
+    const v = String(id || "").trim();
+    if (!v) return;
+    try { localStorage.setItem("bookId", v); } catch {}
+  }
+
+  function clearPreviewFlags(bookId){
+    try {
+      sessionStorage.removeItem("preview_redirected_" + String(bookId || ""));
+    } catch {}
+  }
+
+  function markPreviewRedirected(bookId){
+    try {
+      sessionStorage.setItem("preview_redirected_" + String(bookId || ""), "1");
+    } catch {}
+  }
+
+  function wasPreviewRedirected(bookId){
+    try {
+      return sessionStorage.getItem("preview_redirected_" + String(bookId || "")) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function computeProgressFromStep(step, status){
+    const s = String(step || "");
+    const st = String(status || "");
+
+    if (st === "done" || s === "done") return 100;
+    if (st === "failed" || s === "failed") return 100;
+    if (s === "created") return 5;
+    if (s === "story") return 15;
+    if (s === "cover") return 28;
+    if (/^image_\\d+$/.test(s)) {
+      const n = Number(s.split("_")[1] || "1");
+      return Math.min(90, 30 + (n * 7));
+    }
+    if (s === "pdf") return 95;
+    return 8;
+  }
+
+  function renderImages(coverUrl, images){
+    const root = $("imgs");
+    root.innerHTML = "";
+
+    const items = [];
+    if (coverUrl) items.push({ label: "Capa", url: coverUrl });
+
+    (Array.isArray(images) ? images : []).forEach((it) => {
+      if (it && it.url) {
+        items.push({
+          label: "Pág. " + String(it.page || "?"),
+          url: String(it.url)
+        });
+      }
+    });
+
+    items.slice(0, 9).forEach((it) => {
+      const div = document.createElement("div");
+      div.className = "imgCard";
+      div.innerHTML =
+        '<img alt="' + escapeHtml(it.label) + '" src="' + escapeHtml(it.url) + '" />' +
+        '<div class="imgCap">' + escapeHtml(it.label) + '</div>';
+      root.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  async function fetchTextJson(url, opts){
+    const options = Object.assign({}, opts || {});
+    options.credentials = "include";
+    options.headers = Object.assign(
+      { "Accept": "application/json" },
+      options.headers || {}
+    );
+
+    addLog("→ " + (options.method || "GET") + " " + url);
+
+    const r = await fetch(url, options);
+    const text = await r.text();
+    let json = null;
+
+    try {
+      json = JSON.parse(text || "{}");
+    } catch {
+      json = null;
+    }
+
+    addLog("← HTTP " + r.status + " " + url + " | " + (text ? text.slice(0, 500) : "(vazio)"));
+
+    if (r.status === 401) {
+      throw new Error("not_logged_in");
+    }
+
+    return { response: r, text, json };
+  }
+
+  async function apiCreate(){
+    const result = await fetchTextJson("/api/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    const r = result.response;
+    const j = result.json || {};
+
+    if (!r.ok || !j.ok || !j.id) {
+      throw new Error(j.error || "Falha ao criar livro");
+    }
+
+    return j;
+  }
+
+  async function apiGenerate(payload){
+    const result = await fetchTextJson("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+
+    const r = result.response;
+    const j = result.json || {};
+
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "Falha ao iniciar geração");
+    }
+
+    return j;
+  }
+
+  async function apiGenerateNext(payload){
+    const result = await fetchTextJson("/api/generateNext", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+
+    const r = result.response;
+    const j = result.json || {};
+
+    if (r.status === 409) {
+      return { ok: false, busy: true, error: j.error || "step já em execução" };
+    }
+
+    if (!r.ok) {
+      throw new Error(j.error || "Falha em /api/generateNext");
+    }
+
+    if (!j.ok) {
+      throw new Error(j.error || "Falha em /api/generateNext");
+    }
+
+    return j;
+  }
+
+  async function apiStatus(bookId){
+    const result = await fetchTextJson("/api/status/" + encodeURIComponent(bookId), {
+      method: "GET"
+    });
+
+    const r = result.response;
+    const j = result.json || {};
+
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "Falha ao consultar status");
+    }
+
+    return j;
+  }
+
+  async function doLogout(){
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include"
+      });
+    } catch {}
+    location.href = "/sales";
+  }
+
+  function isTransientBusyMessage(msg){
+    const s = String(msg || "").toLowerCase();
+    return (
+      s.includes("step já em execução") ||
+      s.includes("busy") ||
+      s.includes("high demand") ||
+      s.includes("unavailable") ||
+      s.includes("temporar") ||
+      s.includes("rate limit") ||
+      s.includes("429")
+    );
+  }
+
+  function statusMessageFor(data){
+    const status = String(data && data.status || "");
+    const step = String(data && data.step || "");
+    const error = String(data && data.error || "");
+
+    if (status === "done") return "✅ Livro pronto";
+    if (status === "failed") return "❌ Falha na geração";
+    if (step === "story") return "Escrevendo a história…";
+    if (step === "cover") return "Criando a capa…";
+    if (/^image_\\d+$/.test(step)) {
+      const n = Number(step.split("_")[1] || "1");
+      return "Criando a imagem da página " + n + "…";
+    }
+    if (step === "pdf") return "Montando o PDF…";
+    if (error) return error;
+    return "Preparando geração…";
+  }
+
+  function applyStatusToUI(data){
+    const status = String(data && data.status || "created");
+    const step = String(data && data.step || "created");
+    const error = String(data && data.error || "");
+    const updatedAt = String(data && data.updatedAt || "");
+
+    setMeta("status=" + status + " • step=" + step);
+    setSub(statusMessageFor(data));
+    setProgressText("Progresso: " + computeProgressFromStep(step, status) + "% • etapa: " + step);
+    setUpdatedText("Atualizado: " + (updatedAt || "—"));
+    setBar(computeProgressFromStep(step, status));
+
+    if (status === "done") {
+      setStatus("ok", "Concluído");
+    } else if (status === "failed") {
+      setStatus("bad", "Falhou");
+    } else if (running) {
+      setStatus("run", "Gerando");
+    } else {
+      setStatus("", "Aguardando");
+    }
+
+    renderImages(data.coverUrl || "", data.images || []);
+
+    const pdfBtn = $("pdfBtn");
+    const previewBtn = $("previewBtn");
+
+    if (status === "done") {
+      if (data.pdf) {
+        pdfBtn.style.display = "inline-flex";
+        pdfBtn.href = data.pdf;
+      }
+      previewBtn.style.display = "inline-flex";
+      previewBtn.href = "/preview?id=" + encodeURIComponent(String(data.id || getState().bookId || ""));
+    } else {
+      pdfBtn.style.display = "none";
+      previewBtn.style.display = "none";
+    }
+
+    if (status === "failed") {
+      setHint(error ? ("❌ " + error) : "❌ A geração falhou.");
+    }
+  }
+
+  function buildGeneratePayload(bookId){
     const st = getState();
     return {
-      id: st.bookId,
+      id: String(bookId || st.bookId || "").trim(),
       childName: st.childName,
-      childAge: st.childAge,
-      childGender: st.childGender,
-      theme: st.theme,
-      style: st.style
+      childAge: Number.isFinite(st.childAge) ? st.childAge : 6,
+      childGender: st.childGender || "neutral",
+      theme: st.theme || "space",
+      style: st.style || "read",
+      city: st.city || ""
     };
   }
 
   async function ensureBookId(){
-    // 1) tenta pegar do URL (?bookId=...)
-    const urlId = readBookIdFromUrl();
-    if (urlId) {
-      try { localStorage.setItem("bookId", urlId); } catch {}
-      addLog("✅ bookId capturado da URL: " + urlId);
-      return urlId;
+    const qsId = getQueryBookId();
+    if (qsId) {
+      persistBookId(qsId);
+      return qsId;
     }
 
-    // 2) já tem no localStorage?
     const st = getState();
     if (st.bookId) return st.bookId;
 
-    // 3) se faltar dados mínimos, manda pra /create
-    const minimalOk =
-      st.childName && st.childName.length >= 2 &&
-      st.theme && st.style;
-
-    if (!minimalOk) {
-      setHint(
-        "⚠️ Você abriu /generate sem criar o livro antes.\\n" +
-        "Vou te levar para /create para preencher os dados."
-      );
-      addLog("⚠️ sem bookId e sem dados mínimos -> redirecionando /create");
-      await sleep(700);
-      goCreate("Abra /create e finalize os dados (nome/tema/estilo) para gerar.");
-      return "";
-    }
-
-    // 4) cria automaticamente via /api/create
+    addLog("bookId ausente — criando livro automaticamente");
     setHint("✨ Criando seu livro automaticamente…");
-    addLog("🆕 sem bookId -> chamando POST /api/create");
-    try {
-      const created = await apiCreateBook(buildCreatePayload());
-      try { localStorage.setItem("bookId", created.id); } catch {}
-      setHint("✅ Livro criado! Iniciando geração…");
-      addLog("✅ /api/create OK -> bookId=" + created.id);
-      return created.id;
-    } catch (e) {
-      const msg = String(e?.message || e);
-      addLog("❌ /api/create falhou: " + msg);
 
-      if (msg === "not_logged_in") {
-        setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
-        goLogin();
-        return "";
-      }
+    const created = await apiCreate();
+    persistBookId(created.id);
+    clearPreviewFlags(created.id);
 
-      setHint(
-        "❌ Não consegui criar o livro automaticamente.\\n" +
-        "Volte em /create e crie normalmente.\\n\\nDetalhe: " + msg
-      );
-      return "";
-    }
+    addLog("Livro criado: " + created.id);
+    setHint("✅ Livro criado. Iniciando geração…");
+    return created.id;
   }
 
-  async function refreshOnce(){
-    const ensuredId = await ensureBookId();
-    if (!ensuredId) return null;
+  async function ensureGeneratePrepared(bookId){
+    if (preparedGenerate) return;
 
-    try {
-      const p = await apiProgress(ensuredId);
-      applyProgressUI(p);
-      return p;
-    } catch (e) {
-      const msg = String(e?.message || e);
+    const payload = buildGeneratePayload(bookId);
 
-      if (msg === "not_logged_in") {
-        setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
-        goLogin();
-        return null;
-      }
-
-      if (/book não existe/i.test(msg)) {
-        stopFlag = true;
-        running = false;
-        uiSetDot("bad");
-        setHint(
-          "❌ Este bookId não existe no banco (ou não está acessível por RLS).\\n" +
-          "Clique em Reiniciar e crie o livro novamente."
-        );
-        addLog("🛑 PARANDO: " + msg);
-        return null;
-      }
-
-      throw e;
+    if (!payload.childName || payload.childName.length < 2) {
+      setHint("⚠️ Nome da criança ausente. Volte em /create e preencha os dados.");
+      throw new Error("childName inválido");
     }
+
+    if (!payload.theme) {
+      setHint("⚠️ Tema ausente. Volte em /create e escolha um tema.");
+      throw new Error("theme inválido");
+    }
+
+    if (!payload.style) {
+      setHint("⚠️ Estilo ausente. Volte em /create e escolha um estilo.");
+      throw new Error("style inválido");
+    }
+
+    addLog("Chamando /api/generate para preparar o livro");
+    await apiGenerate(payload);
+    preparedGenerate = true;
+    addLog("/api/generate OK");
   }
 
-  async function testOneStep(){
-    setHint("");
-    const ensuredId = await ensureBookId();
-    if (!ensuredId) return;
+  async function refreshStatus(){
+    const bookId = await ensureBookId();
+    const status = await apiStatus(bookId);
+    applyStatusToUI(status);
+    return status;
+  }
 
-    const st = getState();
-    addLog("STATE: " + JSON.stringify(st));
+  async function maybeRedirectToPreview(bookId, statusData){
+    if (!statusData || String(statusData.status || "") !== "done") return;
+    if (previewRedirected) return;
+    if (wasPreviewRedirected(bookId)) return;
 
-    if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
-    if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
-    if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
+    previewRedirected = true;
+    markPreviewRedirected(bookId);
 
-    const g = await apiGenerateNext(buildPayload());
-    applyProgressUI(g);
+    setHint("✅ Livro pronto! Abrindo o preview…");
+    addLog("Livro concluído — redirecionando para /preview");
+
+    await sleep(900);
+
+    if (!stopFlag) {
+      location.href = "/preview?id=" + encodeURIComponent(bookId);
+    }
   }
 
   async function startLoop(){
-    setHint("");
+    if (loopStarted || running) return;
 
-    const ensuredId = await ensureBookId();
-    if (!ensuredId) return;
-
-    const st = getState();
-    addLog("START LOOP | STATE: " + JSON.stringify(st));
-
-    if (!st.childName || st.childName.length < 2) return setHint("Nome da criança ausente. Volte e preencha o nome.");
-    if (!st.theme) return setHint("Tema ausente. Volte e selecione um tema.");
-    if (!st.style) return setHint("Estilo ausente. Volte e selecione um estilo.");
-
+    loopStarted = true;
     running = true;
     stopFlag = false;
-    uiSetDot("run");
+    previewRedirected = false;
+    setStatus("run", "Gerando");
+    setHint("");
 
     const startedAt = Date.now();
-    const HARD_LIMIT_MS = 10 * 60 * 1000; // 10 min
+    const HARD_LIMIT_MS = 12 * 60 * 1000;
 
     try {
-      $("btnStart").textContent = "⏳ Gerando…";
-      $("btnStart").disabled = true;
-    } catch {}
+      const bookId = await ensureBookId();
+      clearPreviewFlags(bookId);
 
-    let busyBackoffMs = 900;
-    let demandBackoffMs = 2500;
+      await ensureGeneratePrepared(bookId);
 
-    while (!stopFlag) {
-      if (Date.now() - startedAt > HARD_LIMIT_MS) {
-        stopFlag = true;
-        running = false;
-        uiSetDot("bad");
-        setHint("⏳ O serviço ficou indisponível por muito tempo (10min).\\nTente novamente mais tarde ou mude o provedor de imagem.");
-        addLog("🛑 HARD LIMIT atingido (10min)");
-        break;
-      }
-
-      if (inflight) { await sleep(250); continue; }
-      inflight = true;
+      let statusData = null;
 
       try {
-        const g = await apiGenerateNext(buildPayload());
+        statusData = await apiStatus(bookId);
+        applyStatusToUI(statusData);
 
-        if (g && g._busy) {
-          addLog("⏳ busy (409) — aguardando " + busyBackoffMs + "ms");
-          await sleep(busyBackoffMs);
-          busyBackoffMs = Math.min(2500, Math.round(busyBackoffMs * 1.25));
-          continue;
+        if (String(statusData.status || "") === "done") {
+          running = false;
+          setStatus("ok", "Concluído");
+          await maybeRedirectToPreview(bookId, statusData);
+          return;
         }
 
-        busyBackoffMs = 900;
-        applyProgressUI(g);
-
-        const nextTryAt = getNextTryAtFromResponse(g);
-        if (nextTryAt && nextTryAt > Date.now()) {
-          const waitMs = Math.max(300, nextTryAt - Date.now());
-          addLog("⏳ cooldown backend — aguardando " + Math.ceil(waitMs/1000) + "s (nextTryAt)");
-          await sleep(waitMs);
-          continue;
+        if (String(statusData.status || "") === "failed") {
+          running = false;
+          setStatus("bad", "Falhou");
+          return;
         }
-
-        if (g.status === "failed" && isHighDemandError(g.error || g.message || "")) {
-          addLog("⏳ HIGH DEMAND (E003) — aguardando " + demandBackoffMs + "ms e tentando novamente");
-          await sleep(demandBackoffMs);
-          demandBackoffMs = Math.min(15000, Math.round(demandBackoffMs * 1.35));
-          continue;
-        }
-
-        demandBackoffMs = 2500;
-
-        if (g.status === "done") break;
-        if (g.status === "failed") break;
-
-        await sleep(900);
       } catch (e) {
-        const msg = String(e?.message || e);
-        addLog("❌ ERRO: " + msg);
+        addLog("Falha ao ler status inicial: " + String(e && e.message || e));
+      }
 
-        if (/isReplicateThrottledError is not defined/i.test(msg)) {
-          stopFlag = true;
-          running = false;
-          uiSetDot("bad");
-          setHint(
-            "❌ Erro interno no servidor: função isReplicateThrottledError não definida.\\n" +
-            "Corrija o app.js e faça redeploy."
-          );
-          try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
-          return;
+      let busyBackoffMs = 1200;
+      let softBackoffMs = 1800;
+
+      while (!stopFlag) {
+        if (Date.now() - startedAt > HARD_LIMIT_MS) {
+          setHint("⏳ A geração demorou demais e foi interrompida na tela. Você pode atualizar ou abrir novamente mais tarde em Meus Livros.");
+          addLog("HARD LIMIT atingido");
+          setStatus("warn", "Tempo excedido");
+          break;
         }
 
-        if (msg === "not_logged_in") {
-          stopFlag = true;
-          running = false;
-          uiSetDot("");
-          setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
-          goLogin();
-          return;
-        }
-
-        if (/book não existe/i.test(msg)) {
-          stopFlag = true;
-          running = false;
-          uiSetDot("bad");
-          setHint(
-            "❌ Este bookId não existe no banco (ou não está acessível por RLS).\\n" +
-            "Clique em Reiniciar e crie o livro novamente."
-          );
-          try { $("btnStart").textContent = "🚀 Iniciar geração"; $("btnStart").disabled = false; } catch {}
-          return;
-        }
-
-        if (isHighDemandError(msg)) {
-          setHint("⏳ Serviço ocupado (E003). Tentando novamente em instantes…\\n" + msg);
-          addLog("⏳ HIGH DEMAND — aguardando " + demandBackoffMs + "ms");
-          await sleep(demandBackoffMs);
-          demandBackoffMs = Math.min(15000, Math.round(demandBackoffMs * 1.35));
+        if (inflight) {
+          await sleep(250);
           continue;
         }
 
-        try { await refreshOnce(); } catch {}
-        await sleep(1400);
-      } finally {
-        inflight = false;
+        inflight = true;
+
+        try {
+          const g = await apiGenerateNext({ id: bookId });
+
+          if (g && g.busy) {
+            addLog("Passo já em execução — aguardando " + busyBackoffMs + "ms");
+            await sleep(busyBackoffMs);
+            busyBackoffMs = Math.min(4000, Math.round(busyBackoffMs * 1.25));
+            continue;
+          }
+
+          busyBackoffMs = 1200;
+
+          const nextTryAt = Number(g && g.nextTryAt || 0);
+          if (nextTryAt && nextTryAt > Date.now()) {
+            const waitMs = Math.max(400, nextTryAt - Date.now());
+            addLog("Cooldown do backend detectado — aguardando " + waitMs + "ms");
+            await sleep(waitMs);
+          } else {
+            await sleep(700);
+          }
+
+          statusData = await apiStatus(bookId);
+          applyStatusToUI(statusData);
+
+          if (String(statusData.status || "") === "done") {
+            addLog("Status final: done");
+            setStatus("ok", "Concluído");
+            await maybeRedirectToPreview(bookId, statusData);
+            break;
+          }
+
+          if (String(statusData.status || "") === "failed") {
+            addLog("Status final: failed");
+            setStatus("bad", "Falhou");
+            break;
+          }
+
+          await sleep(800);
+        } catch (e) {
+          const msg = String(e && e.message || e || "Erro");
+          addLog("Erro no loop: " + msg);
+
+          if (msg === "not_logged_in") {
+            setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
+            goLogin();
+            return;
+          }
+
+          if (/book não existe/i.test(msg)) {
+            setHint("❌ Este livro não foi encontrado. Volte para /create e gere novamente.");
+            setStatus("bad", "Livro não encontrado");
+            break;
+          }
+
+          if (isTransientBusyMessage(msg)) {
+            addLog("Erro temporário — aguardando " + softBackoffMs + "ms");
+            await sleep(softBackoffMs);
+            softBackoffMs = Math.min(12000, Math.round(softBackoffMs * 1.35));
+            continue;
+          }
+
+          try {
+            statusData = await apiStatus(bookId);
+            applyStatusToUI(statusData);
+
+            if (String(statusData.status || "") === "done") {
+              setStatus("ok", "Concluído");
+              await maybeRedirectToPreview(bookId, statusData);
+              break;
+            }
+
+            if (String(statusData.status || "") === "failed") {
+              setStatus("bad", "Falhou");
+              break;
+            }
+          } catch {}
+
+          await sleep(2200);
+        } finally {
+          inflight = false;
+        }
+      }
+    } catch (e) {
+      const msg = String(e && e.message || e || "Erro");
+      addLog("Falha ao iniciar: " + msg);
+
+      if (msg === "not_logged_in") {
+        setHint("⚠️ Sua sessão expirou. Fazendo login novamente…");
+        goLogin();
+        return;
+      }
+
+      setHint("❌ " + msg);
+      setStatus("bad", "Erro");
+    } finally {
+      running = false;
+      loopStarted = false;
+
+      if (!previewRedirected) {
+        const st = getState();
+        try {
+          const finalStatus = st.bookId ? await apiStatus(st.bookId) : null;
+          if (finalStatus) {
+            applyStatusToUI(finalStatus);
+            if (String(finalStatus.status || "") === "done") {
+              setStatus("ok", "Concluído");
+            } else if (String(finalStatus.status || "") === "failed") {
+              setStatus("bad", "Falhou");
+            } else if (stopFlag) {
+              setStatus("", "Pausado");
+            }
+          }
+        } catch {}
       }
     }
-
-    running = false;
-    uiSetDot("");
-
-    try {
-      $("btnStart").textContent = "🚀 Iniciar geração";
-      $("btnStart").disabled = false;
-    } catch {}
   }
 
-  $("btnStart").onclick = async ()=>{ if (!running) await startLoop(); };
-
-  $("btnStop").onclick = ()=>{
+  function stopLoop(){
     stopFlag = true;
     running = false;
-    uiSetDot("");
-    addLog("STOP clicado");
-    try {
-      $("btnStart").textContent = "🚀 Iniciar geração";
-      $("btnStart").disabled = false;
-    } catch {}
-  };
+    setStatus("", "Pausado");
+    addLog("Geração pausada pelo usuário");
+    setHint("⏸️ A tela foi pausada. O backend pode terminar o passo atual se ele já tiver começado.");
+  }
 
-  $("btnRefresh").onclick = async ()=>{
-    try { await refreshOnce(); }
-    catch (e) { setHint(String(e?.message || e)); addLog("❌ " + String(e?.message||e)); }
-  };
+  (function bindSharedMenu(){
+    function closeAllSharedMenus(exceptId){
+      document.querySelectorAll("[data-shared-menu-panel]").forEach(function(panel){
+        if (exceptId && panel.id === exceptId) return;
+        panel.classList.remove("open");
+      });
 
-  $("btnWhoami").onclick = async ()=>{
+      document.querySelectorAll("[data-shared-menu-toggle]").forEach(function(btn){
+        var controls = btn.getAttribute("aria-controls") || "";
+        var expanded = exceptId && controls === exceptId ? "true" : "false";
+        btn.setAttribute("aria-expanded", expanded);
+      });
+    }
+
+    document.querySelectorAll("[data-shared-menu-toggle]").forEach(function(toggle){
+      if (toggle.__sharedMenuBound) return;
+      toggle.__sharedMenuBound = true;
+
+      toggle.addEventListener("click", function(e){
+        e.stopPropagation();
+        var panelId = toggle.getAttribute("aria-controls");
+        var panel = panelId ? document.getElementById(panelId) : null;
+        if (!panel) return;
+
+        var willOpen = !panel.classList.contains("open");
+        closeAllSharedMenus();
+        if (willOpen) {
+          panel.classList.add("open");
+          toggle.setAttribute("aria-expanded", "true");
+        } else {
+          panel.classList.remove("open");
+          toggle.setAttribute("aria-expanded", "false");
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-shared-menu-panel]").forEach(function(panel){
+      if (panel.__sharedMenuPanelBound) return;
+      panel.__sharedMenuPanelBound = true;
+      panel.addEventListener("click", function(e){
+        e.stopPropagation();
+      });
+    });
+
+    document.addEventListener("click", function(){
+      closeAllSharedMenus();
+    });
+
+    document.addEventListener("keydown", function(e){
+      if (e.key === "Escape") closeAllSharedMenus();
+    });
+  })();
+
+  $("btnLogout").addEventListener("click", doLogout);
+  $("menuLogoutBtn").addEventListener("click", doLogout);
+
+  $("btnRefresh").addEventListener("click", async function(){
     try {
       setHint("");
-      const w = await apiWhoami();
-      setHint("✅ Logado: " + (w.email || w.id));
+      const status = await refreshStatus();
+      addLog("Status atualizado manualmente");
+      if (status && String(status.status || "") === "done") {
+        await maybeRedirectToPreview(String(status.id || getState().bookId || ""), status);
+      }
     } catch (e) {
-      const msg = String(e?.message || e);
-      if (msg === "not_logged_in") { setHint("⚠️ Sessão expirou. Redirecionando…"); goLogin(); return; }
-      setHint("❌ whoami: " + msg);
+      const msg = String(e && e.message || e || "Erro");
+      addLog("Falha no refresh: " + msg);
+      if (msg === "not_logged_in") {
+        goLogin();
+        return;
+      }
+      setHint("❌ " + msg);
     }
-  };
+  });
 
-  $("btnTest").onclick = async ()=>{
-    try { await testOneStep(); }
-    catch (e) {
-      const msg = String(e?.message || e);
-      if (msg === "not_logged_in") { setHint("⚠️ Sessão expirou. Redirecionando…"); goLogin(); return; }
-      setHint(msg); addLog("❌ " + msg);
-    }
-  };
-
-  $("btnReset").onclick = ()=>{
-    localStorage.clear();
-    location.href = "/create";
-  };
-
-  async function autoStartIfPossible(){
-    if (autoStarted) return;
-    autoStarted = true;
-
-    await sleep(300);
-
-    let p = null;
-    try { p = await refreshOnce(); } catch {}
-    if (p && p.status === "done") return;
-    if (p && p.status === "failed" && !isHighDemandError(p.error || "")) return;
-
-    if (!running) {
-      addLog("AUTO-START: iniciando geração automaticamente");
-      startLoop();
-    }
-  }
+  $("btnStop").addEventListener("click", stopLoop);
 
   (async function init(){
     addLog("INIT /generate");
 
-    // dica opcional vinda do /create
     try {
-      const h = (localStorage.getItem("generateHint") || "").trim();
-      if (h) {
-        setHint(h);
-        localStorage.removeItem("generateHint");
+      const queryId = getQueryBookId();
+      if (queryId) {
+        persistBookId(queryId);
+        addLog("bookId capturado da URL: " + queryId);
       }
-    } catch {}
 
-    try { await refreshOnce(); } catch (e) { addLog("⚠️ " + String(e?.message||e)); }
-    autoStartIfPossible();
+      const st = getState();
+      if (st.bookId) {
+        clearPreviewFlags(st.bookId);
+      }
+
+      try {
+        const status = await refreshStatus();
+        if (status && String(status.status || "") === "done") {
+          addLog("Livro já estava pronto");
+          await maybeRedirectToPreview(String(status.id || st.bookId || ""), status);
+          return;
+        }
+
+        if (status && String(status.status || "") === "failed") {
+          addLog("Livro está com status failed");
+          return;
+        }
+      } catch (e) {
+        addLog("Status inicial indisponível: " + String(e && e.message || e));
+      }
+
+      startLoop();
+    } catch (e) {
+      const msg = String(e && e.message || e || "Erro");
+      addLog("Erro no init: " + msg);
+      if (msg === "not_logged_in") {
+        goLogin();
+        return;
+      }
+      setHint("❌ " + msg);
+      setStatus("bad", "Erro");
+    }
   })();
 </script>
 </body>

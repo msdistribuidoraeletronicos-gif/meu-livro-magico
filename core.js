@@ -2193,7 +2193,14 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
-    if (m.status === "done" || m.step === "done") return res.json({ ok: true, step: "done" });
+  if (m.status === "done" || m.step === "done") {
+  return res.json({
+    ok: true,
+    step: "done",
+    status: "done",
+    finished: true
+  });
+}
     if (m.status === "failed" || m.step === "failed") return res.json({ ok: true, step: "failed" });
 
     m = ensureRetryFields(m);
