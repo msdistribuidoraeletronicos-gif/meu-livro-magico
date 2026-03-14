@@ -2,21 +2,24 @@
  * render.preview.html.js
  * Preview (/books/:id) com livro FECHADO (capa) + ABERTO (spread).
  *
- * ✅ Layout igual ao da 2ª imagem (palco central, sem sidebar).
- * ✅ Começa FECHADO (capa).
- * ✅ Próximo (→) no FECHADO abre e mostra páginas 1/2.
- * ✅ ← na 1ª folha volta para CAPA.
- * ✅ ESC fecha (volta para capa).
- * ✅ Sem blur/backdrop-filter/3D que embaçam.
+ * ✅ Layout igual ao da 2ª imagem (palco central, sem sidebar)
+ * ✅ Começa FECHADO (capa)
+ * ✅ Próximo (→) no FECHADO abre e mostra páginas 1/2
+ * ✅ ← na 1ª folha volta para CAPA
+ * ✅ ESC fecha (volta para capa)
+ * ✅ Sem blur/backdrop-filter/3D que embaçam
  *
  * ✅ Robustez:
  * - Aceita várias formas de book (coverUrl/cover_url/cover.url/overrides.coverUrl etc.)
  * - Aceita páginas em:
- *    - book.images = [{page,url}]  (seu padrão)
- *    - book.pages = [{page,url}]  (alternativo)
+ *    - book.images = [{page,url}]
+ *    - book.pages = [{page,url}]
  *    - book.page_images / book.pageImages
  *    - book.manifest.images
  *    - book.data.images
+ * - Não quebra se o livro vier incompleto
+ * - Não quebra se não houver capa
+ * - Não quebra se não houver páginas
  *
  * Export:
  *   module.exports = { renderBookPreviewHtml }
@@ -27,7 +30,7 @@ const {
   SHARED_HEADER_CSS,
   SHARED_HEADER_JS,
   renderSharedHeader,
-} = require("./shared.header");
+} = require("../shared.header");
 
 function escapeHtml(s) {
   return String(s ?? "")
@@ -63,7 +66,14 @@ function asArray(v) {
 function normalizePageItem(it) {
   const page =
     Number(it?.page ?? it?.pageNum ?? it?.n ?? it?.index ?? 0) || 0;
-  const url = pickFirstString(it?.url, it?.src, it?.image, it?.imageUrl);
+
+  const url = pickFirstString(
+    it?.url,
+    it?.src,
+    it?.image,
+    it?.imageUrl
+  );
+
   if (!url) return null;
   return { page, url };
 }
@@ -98,24 +108,28 @@ function extractStoryPages(book) {
     .sort((a, b) => (a.page || 0) - (b.page || 0));
 
   const map = new Map();
-  for (const p of pages) map.set(Number(p.page), p.url);
-  const out = Array.from(map.entries())
+  for (const p of pages) {
+    map.set(Number(p.page), p.url);
+  }
+
+  return Array.from(map.entries())
     .map(([page, url]) => ({ page, url }))
     .sort((a, b) => a.page - b.page);
-
-  return out;
 }
 
 function guessRatio(book) {
-  const w = Number(book?.coverWidth || book?.imgWidth || book?.width || 1020) || 1020;
-  const h = Number(book?.coverHeight || book?.imgHeight || book?.height || 797) || 797;
+  const w =
+    Number(book?.coverWidth || book?.imgWidth || book?.width || 1020) || 1020;
+  const h =
+    Number(book?.coverHeight || book?.imgHeight || book?.height || 797) || 797;
   return { w, h };
 }
 
 function renderBookPreviewHtml(book) {
+  book = book || {};
+
   const id = String(book?.dirId || book?.id || "");
   const safeCoverUrl = extractCoverUrl(book);
-
   const storyPages = extractStoryPages(book);
 
   const pages = [];
@@ -127,9 +141,19 @@ function renderBookPreviewHtml(book) {
       pageNum: Number(p.page) || null,
     });
   }
-  if (pages.length % 2 !== 0) pages.push({ kind: "blank", label: "", pageNum: null });
 
-  const errBox = book?.error ? `<div class="err">❌ Erro: ${escapeHtml(book.error)}</div>` : "";
+  if (!pages.length) {
+    pages.push({ kind: "blank", label: "", pageNum: null });
+  }
+
+  if (pages.length % 2 !== 0) {
+    pages.push({ kind: "blank", label: "", pageNum: null });
+  }
+
+  const errBox = book?.error
+    ? `<div class="err">❌ Erro: ${escapeHtml(book.error)}</div>`
+    : "";
+
   const metaUpdated = book?.updatedAt
     ? fmtDateBR(book.updatedAt)
     : book?.updated_at
@@ -167,8 +191,18 @@ function renderBookPreviewHtml(book) {
       { label: "Parceiros", href: "/parceiros", icon: "🤝" },
     ],
     actions: [
-      { id: "previewBackBooksHeaderBtn", label: "📚 Meus Livros", kind: "soft", href: "/books" },
-      { id: "previewEditHeaderBtn", label: "✏️ Editar Livro", kind: "primary", href: "/books/" + encodeURIComponent(id) + "/edit" },
+      {
+        id: "previewBackBooksHeaderBtn",
+        label: "📚 Meus Livros",
+        kind: "soft",
+        href: "/books",
+      },
+      {
+        id: "previewEditHeaderBtn",
+        label: "✏️ Editar Livro",
+        kind: "primary",
+        href: "/books/" + encodeURIComponent(id) + "/edit",
+      },
     ],
   });
 
@@ -192,6 +226,7 @@ function renderBookPreviewHtml(book) {
     --violet-700:#6d28d9;
     --pink-600:#db2777;
     --pink-700:#be185d;
+    --amber-500:#f59e0b;
 
     --shadow: 0 34px 120px rgba(17,24,39,.22);
     --shadow2: 0 16px 38px rgba(17,24,39,.10);
@@ -206,17 +241,20 @@ function renderBookPreviewHtml(book) {
 
   *{ box-sizing:border-box; }
   html,body{ height:100%; }
+
   body{
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
     color: var(--gray-800);
-    background: radial-gradient(1200px 520px at 18% 0%, rgba(124,58,237,.18), transparent 60%),
-                radial-gradient(980px 460px at 90% 12%, rgba(219,39,119,.14), transparent 58%),
-                linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
+    background:
+      radial-gradient(1200px 520px at 18% 0%, rgba(124,58,237,.18), transparent 60%),
+      radial-gradient(980px 460px at 90% 12%, rgba(219,39,119,.14), transparent 58%),
+      linear-gradient(180deg, var(--violet-50), var(--white) 46%, var(--pink-50));
     min-height:100vh;
     padding-bottom: 30px;
     overflow-x:hidden;
   }
+
   a{ color:inherit; text-decoration:none; }
   .wrap{ max-width: 1180px; margin: 0 auto; padding: 18px 16px; }
 
@@ -235,6 +273,7 @@ function renderBookPreviewHtml(book) {
     flex-wrap:wrap;
     margin: 14px 0 14px;
   }
+
   .ttl{
     font-weight:1000;
     font-size: 18px;
@@ -245,6 +284,7 @@ function renderBookPreviewHtml(book) {
     align-items:center;
     flex-wrap:wrap;
   }
+
   .meta{
     margin-top:6px;
     color: var(--gray-600);
@@ -252,6 +292,17 @@ function renderBookPreviewHtml(book) {
     line-height:1.6;
     font-size: 13px;
   }
+
+  .warn{
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: 18px;
+    border: 1px solid rgba(245,158,11,.28);
+    background: rgba(245,158,11,.10);
+    font-weight: 900;
+    color: rgba(180,83,9,1);
+  }
+
   .err{
     margin-top: 10px;
     padding: 12px;
@@ -311,8 +362,11 @@ function renderBookPreviewHtml(book) {
     transform: translateY(-4px);
     cursor:pointer;
     isolation:isolate;
-    background: #fff;
+    background:
+      linear-gradient(135deg, rgba(124,58,237,.10), rgba(219,39,119,.10)),
+      #fff;
   }
+
   .closedBook:hover{
     transform: translateY(-6px) scale(1.005);
     box-shadow: 0 40px 140px rgba(17,24,39,.26);
@@ -326,6 +380,19 @@ function renderBookPreviewHtml(book) {
     object-fit: cover;
     display:block;
     transform: translateZ(0);
+  }
+
+  .closedEmpty{
+    position:absolute;
+    inset:0;
+    display:grid;
+    place-items:center;
+    font-size: 62px;
+    color: rgba(109,40,217,1);
+    background:
+      radial-gradient(800px 260px at 18% 0%, rgba(124,58,237,.18), transparent 60%),
+      radial-gradient(700px 260px at 85% 20%, rgba(219,39,119,.14), transparent 55%),
+      rgba(255,255,255,.55);
   }
 
   .closedVarnish{
@@ -415,15 +482,12 @@ function renderBookPreviewHtml(book) {
     inset: 0;
     border-radius: calc(var(--r) + 10px);
     overflow:hidden;
-
     box-shadow:
       0 70px 180px rgba(17,24,39,.30),
       0 26px 54px rgba(17,24,39,.18),
       0 10px 20px rgba(124,58,237,.10);
-
     background: rgba(255,255,255,.10);
     border: 1px solid rgba(17,24,39,.06);
-
     transform: none;
   }
 
@@ -482,6 +546,7 @@ function renderBookPreviewHtml(book) {
       linear-gradient(90deg, rgba(0,0,0,.18), rgba(0,0,0,.02), rgba(0,0,0,.18));
     opacity:.76;
   }
+
   .fold::after{
     content:"";
     position:absolute;
@@ -502,6 +567,7 @@ function renderBookPreviewHtml(book) {
     z-index: 30;
     border-radius: var(--r);
   }
+
   .curveL{
     left: calc(50% - 19%);
     background:
@@ -509,6 +575,7 @@ function renderBookPreviewHtml(book) {
       radial-gradient(300px 640px at 100% 50%, rgba(255,255,255,.24), transparent 72%);
     opacity:.86;
   }
+
   .curveR{
     right: calc(50% - 19%);
     background:
@@ -526,6 +593,7 @@ function renderBookPreviewHtml(book) {
     z-index: 35;
     opacity:.95;
   }
+
   .edgeLeft{
     left: 10px;
     border-radius: 18px 0 0 18px;
@@ -541,6 +609,7 @@ function renderBookPreviewHtml(book) {
       inset 9px 0 16px rgba(0,0,0,.16),
       inset 0 0 0 1px rgba(17,24,39,.06);
   }
+
   .edgeRight{
     right: 10px;
     border-radius: 0 18px 18px 0;
@@ -584,10 +653,12 @@ function renderBookPreviewHtml(book) {
       inset 0 -22px 28px rgba(17,24,39,.10);
     transform:none;
   }
+
   .page.left{
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
+
   .page.right{
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
@@ -669,12 +740,15 @@ function renderBookPreviewHtml(book) {
     color: rgba(109,40,217,1);
     z-index: 200;
   }
+
   .navBtn:hover{
     background: rgba(245,243,255,.92);
     border-color: rgba(196,181,253,.95);
     transform: translateY(-50%) scale(1.02);
   }
+
   .navBtn:active{ transform: translateY(-50%) scale(.98); }
+
   .navPrev{ left: -18px; }
   .navNext{ right: -18px; }
   .navBtn.disabled{ opacity:.45; pointer-events:none; }
@@ -691,17 +765,21 @@ function renderBookPreviewHtml(book) {
     font-size: 13px;
     user-select:none;
   }
+
   .dots{
     display:flex;
     gap:6px;
     align-items:center;
   }
+
   .dot{
-    width: 9px; height: 9px;
+    width: 9px;
+    height: 9px;
     border-radius: 999px;
     border: 1px solid rgba(221,214,254,.95);
     background: rgba(124,58,237,.14);
   }
+
   .dot.on{ background: rgba(124,58,237,.75); }
 
   .turnLayer{
@@ -712,6 +790,7 @@ function renderBookPreviewHtml(book) {
     perspective: 1500px;
     border-radius: var(--r);
   }
+
   .turnSheet{
     position:absolute;
     top: var(--pad);
@@ -721,10 +800,12 @@ function renderBookPreviewHtml(book) {
     transform-style: preserve-3d;
     overflow: visible;
   }
+
   .turnSheet.right{
     left: 50%;
     transform-origin: left center;
   }
+
   .turnSheet.left{
     left: var(--pad);
     transform-origin: right center;
@@ -738,6 +819,7 @@ function renderBookPreviewHtml(book) {
     background: transparent;
     backface-visibility: hidden;
   }
+
   .turnFace.back{
     transform: rotateY(180deg);
   }
@@ -753,12 +835,14 @@ function renderBookPreviewHtml(book) {
     opacity:0;
     transition: opacity .18s ease;
   }
+
   .turnSheet.flipping .turnShade{ opacity:.95; }
 
   @keyframes flipNext{
     0%   { transform: rotateY(0deg); }
     100% { transform: rotateY(-180deg); }
   }
+
   @keyframes flipPrev{
     0%   { transform: rotateY(0deg); }
     100% { transform: rotateY(180deg); }
@@ -770,6 +854,7 @@ function renderBookPreviewHtml(book) {
     .navNext{ right: -10px; }
     :root{ --pad: 14px; }
   }
+
   @media (max-width: 520px){
     .book{ min-height: 420px; }
     :root{ --pad: 12px; }
@@ -782,14 +867,19 @@ function renderBookPreviewHtml(book) {
 
     <div class="head">
       <div>
-        <div class="ttl">📘 ${escapeHtml(book?.id || id)}</div>
+        <div class="ttl">📘 ${escapeHtml(book?.id || id || "Livro")}</div>
         <div class="meta">
           Status: <b>${escapeHtml(book?.status || "-")}</b> •
           Tema: <b>${escapeHtml(book?.themeLabel || book?.theme || "-")}</b> •
           Criança: <b>${escapeHtml(book?.childName || book?.child_name || "-")}</b> •
           Atualizado: <b>${escapeHtml(metaUpdated)}</b>
         </div>
-        ${errBox || ""}
+        ${
+          String(book?.status || "") !== "done"
+            ? `<div class="warn">⏳ Este livro ainda pode estar em geração. Algumas páginas podem não estar prontas ainda.</div>`
+            : ""
+        }
+        ${errBox}
       </div>
     </div>
 
@@ -800,6 +890,7 @@ function renderBookPreviewHtml(book) {
         <div class="closedWrap" id="closedWrap">
           <div class="closedBook" id="closedBook" title="Clique para abrir">
             <img class="closedCoverImg" id="closedCoverImg" alt="Capa"/>
+            <div class="closedEmpty" id="closedEmpty">📘</div>
             <div class="closedVarnish"></div>
             <div class="closedVignette"></div>
             <div class="closedPagesEdge"></div>
@@ -853,12 +944,17 @@ ${SHARED_HEADER_JS()}
 <script>
 (function(){
   var pages = ${pagesJson};
-  var spreadCount = Math.max(1, Math.ceil((pages && pages.length ? pages.length : 0) / 2));
+  if (!Array.isArray(pages) || !pages.length) {
+    pages = [{ kind:"blank", label:"", pageNum:null }, { kind:"blank", label:"", pageNum:null }];
+  } else if (pages.length % 2 !== 0) {
+    pages.push({ kind:"blank", label:"", pageNum:null });
+  }
+
+  var spreadCount = Math.max(1, Math.ceil(pages.length / 2));
 
   var view = "closed";
   var openSpreadIndex = 0;
   var animating = false;
-
   var coverUrl = ${safeCoverJson};
 
   function $(id){ return document.getElementById(id); }
@@ -928,24 +1024,34 @@ ${SHARED_HEADER_JS()}
       return;
     }
 
-    if(prev) prev.classList.remove("disabled");
+    if(prev) prev.classList.toggle("disabled", openSpreadIndex <= 0);
     if(next) next.classList.toggle("disabled", openSpreadIndex >= spreadCount - 1);
   }
 
   function renderCoverClosed(){
     var img = $("closedCoverImg");
+    var empty = $("closedEmpty");
     if(!img) return;
 
     if(!coverUrl){
       img.removeAttribute("src");
       img.style.display = "none";
+      if (empty) empty.style.display = "grid";
       return;
     }
 
+    if (empty) empty.style.display = "none";
     img.style.display = "block";
+
     if(img.getAttribute("src") !== coverUrl){
       img.src = coverUrl;
     }
+
+    img.onerror = function(){
+      img.removeAttribute("src");
+      img.style.display = "none";
+      if (empty) empty.style.display = "grid";
+    };
   }
 
   function renderSlot(root, item){
@@ -964,6 +1070,15 @@ ${SHARED_HEADER_JS()}
     fg.className = "imgFg";
     fg.src = item.url;
     fg.alt = item.label || "Página";
+    fg.loading = "eager";
+    fg.decoding = "async";
+    fg.onerror = function(){
+      root.innerHTML = "";
+      var d = document.createElement("div");
+      d.className = "blank";
+      d.textContent = "";
+      root.appendChild(d);
+    };
     root.appendChild(fg);
   }
 
@@ -990,9 +1105,10 @@ ${SHARED_HEADER_JS()}
   function getSpreadItems(idx){
     var leftIdx = idx * 2;
     var rightIdx = leftIdx + 1;
+
     return {
-      left: (pages && pages[leftIdx]) ? pages[leftIdx] : { kind:"blank", label:"", pageNum:null },
-      right: (pages && pages[rightIdx]) ? pages[rightIdx] : { kind:"blank", label:"", pageNum:null }
+      left: pages[leftIdx] || { kind:"blank", label:"", pageNum:null },
+      right: pages[rightIdx] || { kind:"blank", label:"", pageNum:null }
     };
   }
 
@@ -1002,6 +1118,7 @@ ${SHARED_HEADER_JS()}
     renderDots();
 
     var txt = $("progressText");
+
     if(view === "closed"){
       if(txt) txt.textContent = "Livro fechado • (→ para abrir)";
       return;
@@ -1014,7 +1131,12 @@ ${SHARED_HEADER_JS()}
     setLabel($("labelRight"), it.right);
 
     if(txt){
-      txt.textContent = "Folha " + (openSpreadIndex + 1) + " de " + spreadCount + " • (← → teclado / swipe / botões)";
+      txt.textContent =
+        "Folha " +
+        (openSpreadIndex + 1) +
+        " de " +
+        spreadCount +
+        " • (← → teclado / swipe / botões)";
     }
   }
 
@@ -1049,6 +1171,13 @@ ${SHARED_HEADER_JS()}
     fg.className = "imgFg";
     fg.src = item.url;
     fg.alt = item.label || "Página";
+    fg.onerror = function(){
+      frame.innerHTML = "";
+      var d = document.createElement("div");
+      d.className = "blank";
+      d.textContent = "";
+      frame.appendChild(d);
+    };
     frame.appendChild(fg);
 
     return frame;
@@ -1117,7 +1246,10 @@ ${SHARED_HEADER_JS()}
 
     var dur = 520;
     sheet.style.animation =
-      (direction === "next" ? "flipNext" : "flipPrev") + " " + dur + "ms ease-in-out forwards";
+      (direction === "next" ? "flipNext" : "flipPrev") +
+      " " +
+      dur +
+      "ms ease-in-out forwards";
 
     setTimeout(function(){
       openSpreadIndex = nextIndex;
@@ -1135,6 +1267,7 @@ ${SHARED_HEADER_JS()}
 
   var prevBtn = $("prevBtn");
   var nextBtn = $("nextBtn");
+
   if(prevBtn) prevBtn.addEventListener("click", prev);
   if(nextBtn) nextBtn.addEventListener("click", next);
 
@@ -1154,17 +1287,21 @@ ${SHARED_HEADER_JS()}
   (function swipe(){
     var el = $("book");
     if(!el) return;
+
     var x0 = 0, y0 = 0, t0 = 0;
 
     el.addEventListener("touchstart", function(e){
       var t = e.touches && e.touches[0];
       if(!t) return;
-      x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
+      x0 = t.clientX;
+      y0 = t.clientY;
+      t0 = Date.now();
     }, { passive:true });
 
     el.addEventListener("touchend", function(e){
       var t = e.changedTouches && e.changedTouches[0];
       if(!t) return;
+
       var dx = t.clientX - x0;
       var dy = t.clientY - y0;
       var dt = Date.now() - t0;
@@ -1173,7 +1310,8 @@ ${SHARED_HEADER_JS()}
       if(Math.abs(dx) < 55) return;
       if(Math.abs(dy) > 90) return;
 
-      if(dx > 0) prev(); else next();
+      if(dx > 0) prev();
+      else next();
     }, { passive:true });
   })();
 

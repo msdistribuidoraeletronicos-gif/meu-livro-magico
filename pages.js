@@ -12,7 +12,6 @@ const {
 const LANDING_HTML = path.join(__dirname, "landing.html");
 const HOW_IT_WORKS_HTML = path.join(__dirname, "how-it-works.html");
 const EXEMPLOS_HTML = path.join(__dirname, "exemplos.html");
-const PREVIEW_HTML = path.join(__dirname, "preview.html");
 const COINS_INFO_HTML = path.join(__dirname, "coins-info.html");
 
 module.exports = function mountPages(app) {
@@ -72,10 +71,6 @@ module.exports = function mountPages(app) {
 
     const html = fs.readFileSync(absPath, "utf8");
     return res.status(200).send(html);
-  }
-
-  function esc(s) {
-    return core.escapeHtml(String(s ?? ""));
   }
 
   function sharedBaseCss() {
@@ -1708,7 +1703,7 @@ module.exports = function mountPages(app) {
   h1{margin:0;font-size:22px;font-weight:1000}
   .muted{color:var(--muted);font-weight:900}
   .bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:12px}
-  .bar > div{height:100%;width:0%;background:linear-gradient(90deg,var(--violet),var(--pink));transition:width .2s ease}
+  .bar > div{height:100%;width:0%;background:linear-gradient(90deg,var(--violet),var(--pink));transition:width .25s ease}
   .log{margin-top:12px;padding:12px;border-radius:14px;background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.14);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}
   .imgs{margin-top:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
   @media(max-width:860px){.imgs{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1757,6 +1752,12 @@ module.exports = function mountPages(app) {
   function setMeta(s){ $("meta").textContent = String(s||""); }
   function setBar(p){ $("barFill").style.width = Math.max(0, Math.min(100, p)) + "%"; }
 
+  let startedAt = Date.now();
+  let maxSeenImages = 0;
+  let parallelImagesDetected = false;
+  let lastStep = "";
+  let lastImageCount = 0;
+
   function renderImages(coverUrl, images){
     const root = $("imgs");
     root.innerHTML = "";
@@ -1769,6 +1770,131 @@ module.exports = function mountPages(app) {
       div.innerHTML = '<img alt="' + it.label + '" src="' + it.url + '"/>';
       root.appendChild(div);
     }
+  }
+
+  function calcProgress(step, status, imagesCount, coverUrl){
+    const hasCover = !!coverUrl;
+    const pageCount = Math.max(0, Number(imagesCount || 0));
+    const totalPages = Math.max(8, pageCount || 8);
+
+    let progress = 5;
+
+    if (String(step || "").startsWith("story")) {
+      progress = 20;
+    } else if (String(step || "") === "cover") {
+      progress = 35;
+    } else if (String(step || "").startsWith("image_")) {
+      const currentIndex = Number(String(step).split("_")[1] || "1");
+      const estimatedPagesDone = Math.max(pageCount, currentIndex - 1);
+      progress = 40 + Math.round((estimatedPagesDone / totalPages) * 45);
+    } else if (String(step || "") === "pdf") {
+      progress = 92;
+    } else if (String(step || "") === "done" || status === "done") {
+      progress = 100;
+    }
+
+    if (hasCover && progress < 40) {
+      progress = 40;
+    }
+
+    if (pageCount > 0) {
+      const pagesProgress = 40 + Math.round((pageCount / totalPages) * 45);
+      progress = Math.max(progress, pagesProgress);
+    }
+
+    if (pageCount >= totalPages) {
+      progress = Math.max(progress, 85);
+    }
+
+    return Math.max(0, Math.min(100, progress));
+  }
+
+  function buildFriendlyStatus(j, genData){
+    const step = String(j.step || "");
+    const status = String(j.status || "");
+    const imagesCount = Array.isArray(j.images) ? j.images.length : 0;
+    const hasCover = !!j.coverUrl;
+
+    if (status === "done") {
+      return "✅ Livro concluído.";
+    }
+
+    if (status === "failed") {
+      return "❌ A geração falhou.";
+    }
+
+    if (genData && genData.nextTryAt && genData.nextTryAt > Date.now()) {
+      const waitMs = genData.nextTryAt - Date.now();
+      return \`⏳ Aguardando \${Math.max(1, Math.round(waitMs / 1000))}s para tentar novamente...\`;
+    }
+
+    if (step.startsWith("story")) {
+      return "✍️ Criando a história do livro...";
+    }
+
+    if (step === "cover") {
+      return "🖼️ Gerando a capa...";
+    }
+
+    if (step.startsWith("image_")) {
+      if (parallelImagesDetected || imagesCount >= 2) {
+        return \`🎨 Gerando páginas em paralelo... (\${imagesCount} pronta(s))\`;
+      }
+      const n = Number(step.split("_")[1] || "1");
+      return \`🎨 Gerando ilustrações... (página \${n})\`;
+    }
+
+    if (step === "pdf") {
+      return "📄 Montando o PDF final...";
+    }
+
+    if (hasCover || imagesCount > 0) {
+      return \`✨ Processando o livro... (\${imagesCount} página(s) pronta(s))\`;
+    }
+
+    return "Preparando...";
+  }
+
+  function buildFriendlyLog(j, genData){
+    const step = String(j.step || "");
+    const imagesCount = Array.isArray(j.images) ? j.images.length : 0;
+
+    const lines = [];
+    lines.push("Livro: " + (j.id || bookId || "—"));
+    lines.push("Status: " + (j.status || "—"));
+    lines.push("Etapa: " + (step || "—"));
+    lines.push("Capa pronta: " + (j.coverUrl ? "sim" : "não"));
+    lines.push("Páginas prontas: " + imagesCount);
+
+    if (parallelImagesDetected) {
+      lines.push("Modo: geração paralela detectada");
+    }
+
+    if (genData && genData.generated) {
+      lines.push("Última rodada: +" + genData.generated + " página(s)");
+    }
+
+    if (genData && genData.concurrency) {
+      lines.push("Concorrência: " + genData.concurrency);
+    }
+
+    if (j.error) {
+      lines.push("Erro: " + j.error);
+    }
+
+    if (!j.error && step.startsWith("story")) {
+      lines.push("A IA está escrevendo a história personalizada.");
+    } else if (!j.error && step === "cover") {
+      lines.push("A capa está sendo ilustrada.");
+    } else if (!j.error && step.startsWith("image_")) {
+      lines.push("As páginas estão sendo ilustradas com base na foto da criança.");
+    } else if (!j.error && step === "pdf") {
+      lines.push("As imagens já foram geradas e o PDF está sendo montado.");
+    } else if (!j.error && j.status === "done") {
+      lines.push("Tudo pronto. Redirecionando para o preview.");
+    }
+
+    return lines.join("\\n");
   }
 
   async function tick() {
@@ -1797,24 +1923,36 @@ module.exports = function mountPages(app) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || "Falha ao ler status");
 
-      setMeta("status=" + j.status + " • step=" + j.step);
-      setSub(j.error ? ("Erro: " + j.error) : "Gerando…");
-      renderImages(j.coverUrl, j.images);
+      const imagesCount = Array.isArray(j.images) ? j.images.length : 0;
+      maxSeenImages = Math.max(maxSeenImages, imagesCount);
 
-      let p = 5;
-      if (String(j.step || "").startsWith("story")) p = 20;
-      if (String(j.step || "") === "cover") p = 35;
-      if (String(j.step || "").startsWith("image_")) p = 35 + (Number(String(j.step).split("_")[1] || "0") * 6);
-      if (String(j.step || "") === "pdf") p = 92;
-      if (String(j.step || "") === "done" || j.status === "done") p = 100;
-      setBar(p);
+      if (
+        String(lastStep || "").startsWith("image_") &&
+        String(j.step || "").startsWith("image_") &&
+        imagesCount - lastImageCount > 1
+      ) {
+        parallelImagesDetected = true;
+      }
+
+      if (String(genData.step || "") === "images_parallel_done") {
+        parallelImagesDetected = true;
+      }
+
+      lastStep = String(j.step || "");
+      lastImageCount = imagesCount;
+
+      setMeta("status=" + j.status + " • step=" + j.step);
+      setSub(buildFriendlyStatus(j, genData));
+      setLog(buildFriendlyLog(j, genData));
+      renderImages(j.coverUrl, j.images);
+      setBar(calcProgress(j.step, j.status, imagesCount, j.coverUrl));
 
       if (j.status === "done" && j.pdf) {
         setSub("✅ Pronto! Abrindo o preview…");
         const pdfBtn = $("pdfBtn");
         pdfBtn.style.display = "inline-flex";
         pdfBtn.href = j.pdf;
-        setLog("Finalizado. Abrindo preview do livro…");
+        setLog(buildFriendlyLog(j, genData));
 
         setTimeout(() => {
           window.location.href = "/preview?id=" + encodeURIComponent(bookId);
@@ -1824,12 +1962,13 @@ module.exports = function mountPages(app) {
 
       if (j.status === "failed") {
         setSub("❌ Falhou");
-        setLog(j.error || "Falhou");
+        setLog(buildFriendlyLog(j, genData));
         return;
       }
 
-      setLog("Gerando próximo passo…");
-      setTimeout(tick, 1400);
+      const elapsed = Date.now() - startedAt;
+      const nextDelay = elapsed < 8000 ? 1100 : 1500;
+      setTimeout(tick, nextDelay);
     } catch (e) {
       setSub("Erro");
       setLog(String(e.message || e));
@@ -1843,52 +1982,12 @@ module.exports = function mountPages(app) {
 </html>`);
   });
 
-  // ========== Preview do livro (redireciona para o preview novo) ==========
-  app.get("/preview", core.requireAuth, async (req, res) => {
-    try {
-      const userId = String(req.user?.id || "");
-      if (!userId) {
-        return res.redirect(
-          "/login?next=" + encodeURIComponent(req.originalUrl || "/books")
-        );
-      }
+  // ========== IMPORTANTE ==========
+  // NÃO registrar /preview aqui.
+  // O preview oficial agora é controlado por ./books/routes.js
+  // para evitar conflito com redirecionamento indevido para /generate.
 
-      const id = String(req.query?.id || "").trim();
-      if (!id) {
-        return res
-          .status(400)
-          .type("html")
-          .send("<h1>ID ausente</h1><p>Use /preview?id=...</p>");
-      }
-
-      const m = await core.loadManifestAsViewer(userId, id, req.user);
-      if (!m) {
-        return res.status(404).type("html").send("<h1>Livro não encontrado</h1>");
-      }
-
-      if (!core.canAccessBook(userId, m, req.user)) {
-        return res.status(403).type("html").send("<h1>Forbidden</h1>");
-      }
-
-      if (m.status !== "done") {
-        return res.redirect("/generate?id=" + encodeURIComponent(id));
-      }
-
-      if (fs.existsSync(PREVIEW_HTML)) {
-        return sendHtmlFileNoCache(res, PREVIEW_HTML);
-      }
-
-      return res.redirect("/books/" + encodeURIComponent(id));
-    } catch (e) {
-      res.status(500).type("html").send(
-        "<h1>Erro no preview</h1><pre>" +
-          core.escapeHtml(String(e?.message || e || "Erro")) +
-          "</pre>"
-      );
-    }
-  });
-
-  // ========== Galeria de livros (rota em módulo separado) ==========
+  // ========== Galeria de livros / preview / editor / checkout ==========
   const mountBooksRoutes = require("./books/routes.js");
   mountBooksRoutes(app, {
     OUT_DIR: core.OUT_DIR,

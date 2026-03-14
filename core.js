@@ -28,6 +28,10 @@ const REPLICATE_RESOLUTION = String(process.env.REPLICATE_RESOLUTION || "2K").tr
 const REPLICATE_ASPECT_RATIO = String(process.env.REPLICATE_ASPECT_RATIO || "1:1").trim();
 const REPLICATE_OUTPUT_FORMAT = String(process.env.REPLICATE_OUTPUT_FORMAT || "png").trim();
 const REPLICATE_SAFETY = String(process.env.REPLICATE_SAFETY || "block_only_high").trim();
+const PAGE_IMAGE_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number(process.env.PAGE_IMAGE_CONCURRENCY || 2))
+);
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
@@ -130,6 +134,11 @@ function clamp(n, a, b) {
   n = Number(n);
   if (!Number.isFinite(n)) return a;
   return Math.max(a, Math.min(b, n));
+}
+
+function stableSeedFromParts(...parts) {
+  const hex = crypto.createHash("md5").update(parts.map((v) => String(v ?? "")).join("|")).digest("hex");
+  return parseInt(hex.slice(0, 8), 16);
 }
 
 // ------------------------------
@@ -295,7 +304,6 @@ async function syncBookRowToSupabase(manifest) {
   }
 
   try {
-
     const row = {
       id: manifest.id,
       user_id: manifest.ownerId || null,
@@ -346,14 +354,12 @@ async function syncBookRowToSupabase(manifest) {
     console.log("Livro sincronizado com Supabase:", data.id);
 
     return { ok: true, data };
-
   } catch (err) {
-
     console.error("Falha ao sincronizar livro:", err);
-
     return { ok: false, error: err };
   }
 }
+
 // ------------------------------
 // ADMIN helpers
 // ------------------------------
@@ -504,6 +510,7 @@ function requireApiAuth(req, res, next) {
       return res.status(401).json({ ok: false, error: "not_logged_in" });
     });
 }
+
 // ------------------------------
 // HTTP helpers
 // ------------------------------
@@ -1346,9 +1353,9 @@ async function saveManifest(userId, bookId, manifest) {
   }
 
   const syncResult = await syncBookRowToSupabase(manifest);
-if (!syncResult.ok) {
-  console.error("[saveManifest] Falha ao sincronizar livro na tabela books:", syncResult.error);
-}
+  if (!syncResult.ok) {
+    console.error("[saveManifest] Falha ao sincronizar livro na tabela books:", syncResult.error);
+  }
   console.log("SALVANDO LIVRO NO SUPABASE:", manifest.id);
 }
 
@@ -1636,12 +1643,171 @@ function isTransientError(msg) {
   );
 }
 
+// ------------------------------
+// Geração paralela de páginas
+// ------------------------------
+async function generateSinglePageImage({
+  userId,
+  id,
+  m,
+  pageData,
+  bookDir,
+  imagePngPath,
+  maskPngPath,
+  theme,
+  childName,
+  childAge,
+  childGender,
+  styleKey,
+}) {
+  const pageNum = Number(pageData?.page || 0);
+  if (!pageNum) throw new Error("Página inválida para geração.");
+
+  const pageNumberPadded = String(pageNum).padStart(2, "0");
+  const baseName = `page_${pageNumberPadded}.png`;
+  const basePath = path.join(bookDir, baseName);
+
+  const finalName = `page_${pageNumberPadded}_final.png`;
+  const finalPath = path.join(bookDir, finalName);
+
+  if (existsSyncSafe(finalPath)) {
+    return {
+      page: pageNum,
+      path: finalPath,
+      file: finalName,
+      prompt: "",
+      url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+      storageKey: "",
+    };
+  }
+
+  const prompt = buildScenePromptFromParagraph({
+    paragraphText: pageData.text,
+    themeKey: theme,
+    childName,
+    childAge,
+    childGender,
+    styleKey,
+  });
+
+  const seed = stableSeedFromParts(id, "page", pageNum);
+
+  const imgBuf = await imageFromReference({
+    imagePngPath,
+    maskPngPath,
+    prompt,
+    size: "1024x1024",
+    seed,
+  });
+
+  await fsp.writeFile(basePath, imgBuf);
+
+  await stampStoryTextOnImage({
+    inputPath: basePath,
+    outputPath: finalPath,
+    title: pageData.title,
+    text: pageData.text,
+  });
+
+  try {
+    await fsp.unlink(basePath);
+  } catch {}
+
+  let pageKey = "";
+  if (sbEnabled()) {
+    pageKey = sbKeyFor(userId, id, finalName);
+    const uploadResult = await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
+    if (!uploadResult.ok) {
+      throw new Error(`Upload da página ${pageNum} falhou: ${uploadResult.reason}`);
+    }
+  }
+
+  return {
+    page: pageNum,
+    path: finalPath,
+    file: finalName,
+    prompt,
+    url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
+    storageKey: pageKey,
+  };
+}
+
+async function generatePagesInParallel({
+  userId,
+  id,
+  m,
+  pagesToGenerate,
+  bookDir,
+  imagePngPath,
+  maskPngPath,
+  theme,
+  childName,
+  childAge,
+  childGender,
+  styleKey,
+  concurrency = PAGE_IMAGE_CONCURRENCY,
+}) {
+  const pages = Array.isArray(pagesToGenerate) ? pagesToGenerate.slice().sort((a, b) => Number(a.page) - Number(b.page)) : [];
+  if (!pages.length) return [];
+
+  const results = [];
+  let cursor = 0;
+  const maxWorkers = Math.max(1, Math.min(concurrency, pages.length));
+
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= pages.length) return;
+
+      const pageData = pages[idx];
+      const result = await generateSinglePageImage({
+        userId,
+        id,
+        m,
+        pageData,
+        bookDir,
+        imagePngPath,
+        maskPngPath,
+        theme,
+        childName,
+        childAge,
+        childGender,
+        styleKey,
+      });
+
+      results.push(result);
+    }
+  }
+
+  await Promise.all(Array.from({ length: maxWorkers }, () => worker()));
+
+  results.sort((a, b) => Number(a.page) - Number(b.page));
+  return results;
+}
+
+function mergePageImagesPreservingExisting(existingImages, newImages) {
+  const map = new Map();
+
+  for (const it of Array.isArray(existingImages) ? existingImages : []) {
+    if (!Number.isFinite(Number(it?.page))) continue;
+    map.set(Number(it.page), { ...it });
+  }
+
+  for (const it of Array.isArray(newImages) ? newImages : []) {
+    if (!Number.isFinite(Number(it?.page))) continue;
+    map.set(Number(it.page), { ...it });
+  }
+
+  return Array.from(map.values()).sort((a, b) => Number(a.page) - Number(b.page));
+}
+
 const mercadopagoPixApi = require("./api/mercadopago/pix");
 const mercadopagoStatusApi = require("./api/mercadopago/status");
 const mercadopagoWebhookApi = require("./api/webhooks/mercadopago");
 const checkoutApi = require("./api/checkout");
 const coinOrderPixApi = require("./api/coin-order-pix");
 const coinOrderStatusApi = require("./api/coin-order-status");
+
 // ------------------------------
 // API Router
 // ------------------------------
@@ -1686,6 +1852,7 @@ apiRouter.get("/partners", async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
+
 apiRouter.post("/coin-orders/:id/pix", requireApiAuth, (req, res) => {
   req.query.orderId = String(req.params?.id || "").trim();
   return coinOrderPixApi(req, res);
@@ -1813,7 +1980,6 @@ apiRouter.get("/admin/partner-orders", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e || "Erro") });
   }
 });
-
 
 apiRouter.get("/partner/sales", async (req, res) => {
   if (!requirePartnerToken(req, res)) return;
@@ -2193,14 +2359,16 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
     if (!canAccessBook(userId, m, req.user)) {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
-  if (m.status === "done" || m.step === "done") {
-  return res.json({
-    ok: true,
-    step: "done",
-    status: "done",
-    finished: true
-  });
-}
+
+    if (m.status === "done" || m.step === "done") {
+      return res.json({
+        ok: true,
+        step: "done",
+        status: "done",
+        finished: true
+      });
+    }
+
     if (m.status === "failed" || m.step === "failed") return res.json({ ok: true, step: "failed" });
 
     m = ensureRetryFields(m);
@@ -2233,8 +2401,7 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
     const childGender = String(m.child?.gender || "neutral");
     const theme = String(m.theme || "space");
 
-    // Gerar um seed fixo para este livro
-    const seed = parseInt(crypto.createHash("md5").update(id).digest("hex").slice(0, 8), 16);
+    const coverSeed = stableSeedFromParts(id, "cover");
 
     // STORY
     if (m.step === "story") {
@@ -2299,7 +2466,7 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
         maskPngPath,
         prompt: coverPrompt,
         size: "1024x1024",
-        seed,
+        seed: coverSeed,
       });
 
       await fsp.writeFile(coverBasePath, coverBuf);
@@ -2343,7 +2510,7 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
       return res.json({ ok: true, step: "cover_done" });
     }
 
-    // IMAGES
+    // IMAGES (agora em paralelo)
     if (String(m.step || "").startsWith("image_")) {
       const n = Number(String(m.step).split("_")[1] || "1");
       const pages = Array.isArray(m.pages) ? m.pages : [];
@@ -2355,104 +2522,44 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
         return res.json({ ok: true, step: "reset_to_story" });
       }
 
-      const p = pages.find((x) => Number(x.page) === n);
-      if (!p) {
+      const pagesToGenerate = pages.filter((x) => Number(x.page) >= n).sort((a, b) => Number(a.page) - Number(b.page));
+
+      if (!pagesToGenerate.length) {
         m.step = "pdf";
         m.updatedAt = nowISO();
         await saveManifest(userId, id, m);
         return res.json({ ok: true, step: "images_done" });
       }
 
-      const baseName = `page_${String(p.page).padStart(2, "0")}.png`;
-      const basePath = path.join(bookDir, baseName);
-
-      const finalName = `page_${String(p.page).padStart(2, "0")}_final.png`;
-      const finalPath = path.join(bookDir, finalName);
-
-      if (existsSyncSafe(finalPath)) {
-        const images = Array.isArray(m.images) ? m.images : [];
-        if (!images.some((it) => Number(it.page) === Number(p.page))) {
-          images.push({
-            page: p.page,
-            path: finalPath,
-            file: finalName,
-            prompt: "",
-            url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
-            storageKey: "",
-          });
-          m.images = images;
-        }
-
-        const nextN = n + 1;
-        m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
-        m.updatedAt = nowISO();
-
-        await saveManifest(userId, id, m);
-        return res.json({ ok: true, step: `image_${n}_skipped` });
-      }
-
-      const prompt = buildScenePromptFromParagraph({
-        paragraphText: p.text,
-        themeKey: theme,
+      const generatedImages = await generatePagesInParallel({
+        userId,
+        id,
+        m,
+        pagesToGenerate,
+        bookDir,
+        imagePngPath,
+        maskPngPath,
+        theme,
         childName,
         childAge,
         childGender,
         styleKey,
+        concurrency: PAGE_IMAGE_CONCURRENCY,
       });
 
-      const imgBuf = await imageFromReference({
-        imagePngPath,
-        maskPngPath,
-        prompt,
-        size: "1024x1024",
-        seed,
-      });
-
-      await fsp.writeFile(basePath, imgBuf);
-
-      await stampStoryTextOnImage({
-        inputPath: basePath,
-        outputPath: finalPath,
-        title: p.title,
-        text: p.text,
-      });
-
-      try {
-        await fsp.unlink(basePath);
-      } catch {}
-
-      let pageKey = "";
-      if (sbEnabled()) {
-        pageKey = sbKeyFor(userId, id, finalName);
-        const uploadResult = await sbUploadBuffer(pageKey, await fsp.readFile(finalPath), "image/png");
-        if (!uploadResult.ok) {
-          console.error(`[generateNext] Falha no upload da página ${p.page}: ${uploadResult.reason}`);
-          m.error = `Upload da página ${p.page} falhou: ${uploadResult.reason}`;
-        } else {
-          console.log(`[generateNext] Página ${p.page} enviada com sucesso: ${pageKey}`);
-        }
-      }
-
-      const images = Array.isArray(m.images) ? m.images : [];
-      images.push({
-        page: p.page,
-        path: finalPath,
-        file: finalName,
-        prompt,
-        url: `/api/image/${encodeURIComponent(id)}/${encodeURIComponent(finalName)}`,
-        storageKey: pageKey,
-      });
-
-      m.images = images;
-
-      const nextN = n + 1;
-      m.step = nextN <= pages.length ? `image_${nextN}` : "pdf";
+      m.images = mergePageImagesPreservingExisting(m.images, generatedImages);
+      m.step = "pdf";
       m.error = "";
       m.retry = { count: 0, lastAt: "", nextTryAt: 0 };
       m.updatedAt = nowISO();
 
       await saveManifest(userId, id, m);
-      return res.json({ ok: true, step: `image_${n}_done` });
+      return res.json({
+        ok: true,
+        step: "images_parallel_done",
+        generated: generatedImages.length,
+        concurrency: PAGE_IMAGE_CONCURRENCY,
+      });
     }
 
     // PDF
@@ -2495,7 +2602,10 @@ apiRouter.post("/generateNext", requireApiAuth, async (req, res) => {
       }
 
       const coverPath = path.join(bookDir, "cover_final.png");
-      const pageImagePaths = (m.images || []).map((it) => it.path).filter(Boolean);
+      const pageImagePaths = (m.images || [])
+        .sort((a, b) => Number(a.page) - Number(b.page))
+        .map((it) => it.path)
+        .filter(Boolean);
 
       const outPdfPath = await makePdfImagesOnly({
         bookId: id,

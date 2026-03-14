@@ -9,6 +9,11 @@
  * ✅ Trata 409 step já em execução
  * ✅ Redireciona ao preview apenas 1 vez
  * ✅ Cria book automaticamente se necessário
+ * ✅ Não duplica HTML fora do module.exports
+ * ✅ Mais robusto para coverUrl / images / pdf
+ * ✅ Corrigido para não “segurar” o usuário na tela /generate
+ * ✅ Corrigido para não limpar flag de preview indevidamente
+ * ✅ Corrigido para parar o loop ao abrir preview manualmente
  */
 
 "use strict";
@@ -658,6 +663,8 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   let previewRedirected = false;
   let preparedGenerate = false;
   let loopStarted = false;
+  let pageUnloading = false;
+  let manualPreviewOpen = false;
 
   const logs = [];
 
@@ -665,42 +672,53 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     const ts = new Date().toISOString();
     logs.push("[" + ts + "] " + String(line || ""));
     while (logs.length > 150) logs.shift();
-    $("log").textContent = logs.join("\\n");
-    $("log").scrollTop = $("log").scrollHeight;
+
+    const el = $("log");
+    if (!el) return;
+    el.textContent = logs.join("\\n");
+    el.scrollTop = el.scrollHeight;
   }
 
   function setHint(msg){
     const el = $("hint");
+    if (!el) return;
     const text = String(msg || "").trim();
     el.textContent = text;
     el.style.display = text ? "block" : "none";
   }
 
   function setSub(text){
-    $("sub").textContent = String(text || "");
+    const el = $("sub");
+    if (el) el.textContent = String(text || "");
   }
 
   function setMeta(text){
-    $("meta").textContent = String(text || "");
+    const el = $("meta");
+    if (el) el.textContent = String(text || "");
   }
 
   function setProgressText(text){
-    $("progressText").textContent = String(text || "");
+    const el = $("progressText");
+    if (el) el.textContent = String(text || "");
   }
 
   function setUpdatedText(text){
-    $("updatedText").textContent = String(text || "");
+    const el = $("updatedText");
+    if (el) el.textContent = String(text || "");
   }
 
   function setBar(pct){
+    const el = $("barFill");
+    if (!el) return;
     const n = Math.max(0, Math.min(100, Number(pct || 0)));
-    $("barFill").style.width = n + "%";
+    el.style.width = n + "%";
   }
 
   function setStatus(kind, text){
     const dot = $("statusDot");
-    dot.className = "statusDot" + (kind ? " " + kind : "");
-    $("statusText").textContent = String(text || "");
+    const label = $("statusText");
+    if (dot) dot.className = "statusDot" + (kind ? " " + kind : "");
+    if (label) label.textContent = String(text || "");
   }
 
   function goLogin(){
@@ -722,26 +740,37 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   }
 
   function getState(){
+    let childAgeRaw = "6";
+    try {
+      childAgeRaw = localStorage.getItem("childAge") || "6";
+    } catch {}
+
+    const ageNum = Number(childAgeRaw);
+
     return {
-      bookId: String(localStorage.getItem("bookId") || "").trim(),
-      childName: String(localStorage.getItem("childName") || "").trim(),
-      childAge: Number(localStorage.getItem("childAge") || "6"),
-      childGender: String(localStorage.getItem("childGender") || "neutral").trim() || "neutral",
-      theme: String(localStorage.getItem("theme") || "space").trim() || "space",
-      style: String(localStorage.getItem("style") || "read").trim() || "read",
-      city: String(localStorage.getItem("city") || "").trim()
+      bookId: safeGetLocal("bookId"),
+      childName: safeGetLocal("childName"),
+      childAge: Number.isFinite(ageNum) ? ageNum : 6,
+      childGender: safeGetLocal("childGender") || "neutral",
+      theme: safeGetLocal("theme") || "space",
+      style: safeGetLocal("style") || "read",
+      city: safeGetLocal("city")
     };
+  }
+
+  function safeGetLocal(key){
+    try {
+      return String(localStorage.getItem(key) || "").trim();
+    } catch {
+      return "";
+    }
   }
 
   function persistBookId(id){
     const v = String(id || "").trim();
     if (!v) return;
-    try { localStorage.setItem("bookId", v); } catch {}
-  }
-
-  function clearPreviewFlags(bookId){
     try {
-      sessionStorage.removeItem("preview_redirected_" + String(bookId || ""));
+      localStorage.setItem("bookId", v);
     } catch {}
   }
 
@@ -767,39 +796,15 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     if (st === "failed" || s === "failed") return 100;
     if (s === "created") return 5;
     if (s === "story") return 15;
-    if (s === "cover") return 28;
+    if (s === "cover" || s === "cover_wait") return 28;
+
     if (/^image_\\d+$/.test(s)) {
       const n = Number(s.split("_")[1] || "1");
       return Math.min(90, 30 + (n * 7));
     }
+
     if (s === "pdf") return 95;
     return 8;
-  }
-
-  function renderImages(coverUrl, images){
-    const root = $("imgs");
-    root.innerHTML = "";
-
-    const items = [];
-    if (coverUrl) items.push({ label: "Capa", url: coverUrl });
-
-    (Array.isArray(images) ? images : []).forEach((it) => {
-      if (it && it.url) {
-        items.push({
-          label: "Pág. " + String(it.page || "?"),
-          url: String(it.url)
-        });
-      }
-    });
-
-    items.slice(0, 9).forEach((it) => {
-      const div = document.createElement("div");
-      div.className = "imgCard";
-      div.innerHTML =
-        '<img alt="' + escapeHtml(it.label) + '" src="' + escapeHtml(it.url) + '" />' +
-        '<div class="imgCap">' + escapeHtml(it.label) + '</div>';
-      root.appendChild(div);
-    });
   }
 
   function escapeHtml(s){
@@ -809,6 +814,56 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  function pickFirstString(){
+    for (let i = 0; i < arguments.length; i++) {
+      const v = arguments[i];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  }
+
+  function normalizeImages(images){
+    if (!Array.isArray(images)) return [];
+    return images
+      .map((it) => {
+        const url = pickFirstString(it && it.url, it && it.src, it && it.image, it && it.imageUrl);
+        const page = Number(it && (it.page ?? it.pageNum ?? it.n ?? it.index ?? 0)) || 0;
+        if (!url) return null;
+        return { page, url };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.page - b.page);
+  }
+
+  function renderImages(coverUrl, images){
+    const root = $("imgs");
+    if (!root) return;
+    root.innerHTML = "";
+
+    const items = [];
+    const safeCover = String(coverUrl || "").trim();
+
+    if (safeCover) {
+      items.push({ label: "Capa", url: safeCover });
+    }
+
+    normalizeImages(images).forEach((it) => {
+      items.push({
+        label: "Pág. " + String(it.page || "?"),
+        url: String(it.url)
+      });
+    });
+
+    items.slice(0, 9).forEach((it) => {
+      const div = document.createElement("div");
+      div.className = "imgCard";
+      div.innerHTML =
+        '<img alt="' + escapeHtml(it.label) + '" src="' + escapeHtml(it.url) + '" />' +
+        '<div class="imgCap">' + escapeHtml(it.label) + "</div>";
+      root.appendChild(div);
+    });
   }
 
   async function fetchTextJson(url, opts){
@@ -938,28 +993,65 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
   }
 
   function statusMessageFor(data){
-    const status = String(data && data.status || "");
-    const step = String(data && data.step || "");
-    const error = String(data && data.error || "");
+    const status = String((data && data.status) || "");
+    const step = String((data && data.step) || "");
+    const error = String((data && data.error) || "");
 
     if (status === "done") return "✅ Livro pronto";
     if (status === "failed") return "❌ Falha na geração";
     if (step === "story") return "Escrevendo a história…";
-    if (step === "cover") return "Criando a capa…";
+    if (step === "cover" || step === "cover_wait") return "Criando a capa…";
+
     if (/^image_\\d+$/.test(step)) {
       const n = Number(step.split("_")[1] || "1");
       return "Criando a imagem da página " + n + "…";
     }
+
     if (step === "pdf") return "Montando o PDF…";
     if (error) return error;
     return "Preparando geração…";
   }
 
+  function extractCoverUrlFromStatus(data){
+    return pickFirstString(
+      data && data.coverUrl,
+      data && data.cover_url,
+      data && data.cover && data.cover.url,
+      data && data.cover && data.cover.src,
+      data && data.overrides && data.overrides.coverUrl,
+      data && data.data && data.data.coverUrl,
+      data && data.data && data.data.cover_url,
+      data && data.manifest && data.manifest.coverUrl,
+      data && data.manifest && data.manifest.cover_url
+    );
+  }
+
+  function extractPdfUrlFromStatus(data){
+    return pickFirstString(
+      data && data.pdf,
+      data && data.pdfUrl,
+      data && data.pdf_url,
+      data && data.urls && data.urls.pdf
+    );
+  }
+
+  function extractBookIdFromStatus(data){
+    return String(
+      (data && (data.id || data.bookId || data.dirId)) ||
+      getState().bookId ||
+      ""
+    ).trim();
+  }
+
   function applyStatusToUI(data){
-    const status = String(data && data.status || "created");
-    const step = String(data && data.step || "created");
-    const error = String(data && data.error || "");
-    const updatedAt = String(data && data.updatedAt || "");
+    const status = String((data && data.status) || "created");
+    const step = String((data && data.step) || "created");
+    const error = String((data && data.error) || "");
+    const updatedAt = String((data && (data.updatedAt || data.updated_at)) || "");
+    const coverUrl = extractCoverUrlFromStatus(data);
+    const images = (data && (data.images || data.pages || data.page_images || data.pageImages)) || [];
+    const pdfUrl = extractPdfUrlFromStatus(data);
+    const resolvedId = extractBookIdFromStatus(data);
 
     setMeta("status=" + status + " • step=" + step);
     setSub(statusMessageFor(data));
@@ -973,25 +1065,41 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       setStatus("bad", "Falhou");
     } else if (running) {
       setStatus("run", "Gerando");
+    } else if (stopFlag) {
+      setStatus("", "Pausado");
     } else {
       setStatus("", "Aguardando");
     }
 
-    renderImages(data.coverUrl || "", data.images || []);
+    renderImages(coverUrl, images);
 
     const pdfBtn = $("pdfBtn");
     const previewBtn = $("previewBtn");
 
     if (status === "done") {
-      if (data.pdf) {
-        pdfBtn.style.display = "inline-flex";
-        pdfBtn.href = data.pdf;
+      if (pdfBtn) {
+        if (pdfUrl) {
+          pdfBtn.style.display = "inline-flex";
+          pdfBtn.href = pdfUrl;
+        } else {
+          pdfBtn.style.display = "none";
+          pdfBtn.removeAttribute("href");
+        }
       }
-      previewBtn.style.display = "inline-flex";
-      previewBtn.href = "/preview?id=" + encodeURIComponent(String(data.id || getState().bookId || ""));
+
+      if (previewBtn) {
+        previewBtn.style.display = "inline-flex";
+        previewBtn.href = "/preview?id=" + encodeURIComponent(resolvedId);
+      }
     } else {
-      pdfBtn.style.display = "none";
-      previewBtn.style.display = "none";
+      if (pdfBtn) {
+        pdfBtn.style.display = "none";
+        pdfBtn.removeAttribute("href");
+      }
+      if (previewBtn) {
+        previewBtn.style.display = "none";
+        previewBtn.removeAttribute("href");
+      }
     }
 
     if (status === "failed") {
@@ -1027,7 +1135,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     const created = await apiCreate();
     persistBookId(created.id);
-    clearPreviewFlags(created.id);
 
     addLog("Livro criado: " + created.id);
     setHint("✅ Livro criado. Iniciando geração…");
@@ -1069,7 +1176,11 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
   async function maybeRedirectToPreview(bookId, statusData){
     if (!statusData || String(statusData.status || "") !== "done") return;
+    if (!bookId) return;
     if (previewRedirected) return;
+    if (manualPreviewOpen) return;
+    if (pageUnloading) return;
+    if (stopFlag) return;
     if (wasPreviewRedirected(bookId)) return;
 
     previewRedirected = true;
@@ -1080,9 +1191,9 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     await sleep(900);
 
-    if (!stopFlag) {
-      location.href = "/preview?id=" + encodeURIComponent(bookId);
-    }
+    if (stopFlag || manualPreviewOpen || pageUnloading) return;
+
+    location.href = "/preview?id=" + encodeURIComponent(bookId);
   }
 
   async function startLoop(){
@@ -1092,6 +1203,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     running = true;
     stopFlag = false;
     previewRedirected = false;
+    manualPreviewOpen = false;
     setStatus("run", "Gerando");
     setHint("");
 
@@ -1100,8 +1212,6 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
     try {
       const bookId = await ensureBookId();
-      clearPreviewFlags(bookId);
-
       await ensureGeneratePrepared(bookId);
 
       let statusData = null;
@@ -1123,13 +1233,13 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
           return;
         }
       } catch (e) {
-        addLog("Falha ao ler status inicial: " + String(e && e.message || e));
+        addLog("Falha ao ler status inicial: " + String((e && e.message) || e));
       }
 
       let busyBackoffMs = 1200;
       let softBackoffMs = 1800;
 
-      while (!stopFlag) {
+      while (!stopFlag && !pageUnloading && !manualPreviewOpen) {
         if (Date.now() - startedAt > HARD_LIMIT_MS) {
           setHint("⏳ A geração demorou demais e foi interrompida na tela. Você pode atualizar ou abrir novamente mais tarde em Meus Livros.");
           addLog("HARD LIMIT atingido");
@@ -1156,13 +1266,17 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
           busyBackoffMs = 1200;
 
-          const nextTryAt = Number(g && g.nextTryAt || 0);
+          const nextTryAt = Number((g && g.nextTryAt) || 0);
           if (nextTryAt && nextTryAt > Date.now()) {
             const waitMs = Math.max(400, nextTryAt - Date.now());
             addLog("Cooldown do backend detectado — aguardando " + waitMs + "ms");
             await sleep(waitMs);
           } else {
             await sleep(700);
+          }
+
+          if (stopFlag || pageUnloading || manualPreviewOpen) {
+            break;
           }
 
           statusData = await apiStatus(bookId);
@@ -1183,7 +1297,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
 
           await sleep(800);
         } catch (e) {
-          const msg = String(e && e.message || e || "Erro");
+          const msg = String((e && e.message) || e || "Erro");
           addLog("Erro no loop: " + msg);
 
           if (msg === "not_logged_in") {
@@ -1227,7 +1341,7 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         }
       }
     } catch (e) {
-      const msg = String(e && e.message || e || "Erro");
+      const msg = String((e && e.message) || e || "Erro");
       addLog("Falha ao iniciar: " + msg);
 
       if (msg === "not_logged_in") {
@@ -1242,22 +1356,26 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       running = false;
       loopStarted = false;
 
-      if (!previewRedirected) {
-        const st = getState();
-        try {
-          const finalStatus = st.bookId ? await apiStatus(st.bookId) : null;
-          if (finalStatus) {
-            applyStatusToUI(finalStatus);
-            if (String(finalStatus.status || "") === "done") {
-              setStatus("ok", "Concluído");
-            } else if (String(finalStatus.status || "") === "failed") {
-              setStatus("bad", "Falhou");
-            } else if (stopFlag) {
-              setStatus("", "Pausado");
-            }
-          }
-        } catch {}
+      if (manualPreviewOpen || pageUnloading) {
+        return;
       }
+
+      try {
+        const st = getState();
+        const bookId = st.bookId;
+        if (!bookId) return;
+
+        const finalStatus = await apiStatus(bookId);
+        applyStatusToUI(finalStatus);
+
+        if (String(finalStatus.status || "") === "done") {
+          setStatus("ok", "Concluído");
+        } else if (String(finalStatus.status || "") === "failed") {
+          setStatus("bad", "Falhou");
+        } else if (stopFlag) {
+          setStatus("", "Pausado");
+        }
+      } catch {}
     }
   }
 
@@ -1267,6 +1385,27 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     setStatus("", "Pausado");
     addLog("Geração pausada pelo usuário");
     setHint("⏸️ A tela foi pausada. O backend pode terminar o passo atual se ele já tiver começado.");
+  }
+
+  function openPreviewManually(event){
+    if (event) event.preventDefault();
+
+    const st = getState();
+    const bookId = String(st.bookId || "").trim();
+    if (!bookId) {
+      setHint("⚠️ Não foi possível identificar o livro para abrir o preview.");
+      return;
+    }
+
+    manualPreviewOpen = true;
+    pageUnloading = true;
+    stopFlag = true;
+    running = false;
+    previewRedirected = true;
+    markPreviewRedirected(bookId);
+
+    addLog("Abrindo preview manualmente: " + bookId);
+    location.href = "/preview?id=" + encodeURIComponent(bookId);
   }
 
   (function bindSharedMenu(){
@@ -1322,6 +1461,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
     });
   })();
 
+  window.addEventListener("beforeunload", function(){
+    pageUnloading = true;
+    stopFlag = true;
+    running = false;
+  });
+
   $("btnLogout").addEventListener("click", doLogout);
   $("menuLogoutBtn").addEventListener("click", doLogout);
 
@@ -1330,21 +1475,26 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
       setHint("");
       const status = await refreshStatus();
       addLog("Status atualizado manualmente");
-      if (status && String(status.status || "") === "done") {
-        await maybeRedirectToPreview(String(status.id || getState().bookId || ""), status);
+
+      if (status && String(status.status || "") === "done" && !manualPreviewOpen && !pageUnloading) {
+        await maybeRedirectToPreview(extractBookIdFromStatus(status), status);
       }
     } catch (e) {
-      const msg = String(e && e.message || e || "Erro");
+      const msg = String((e && e.message) || e || "Erro");
       addLog("Falha no refresh: " + msg);
+
       if (msg === "not_logged_in") {
         goLogin();
         return;
       }
+
       setHint("❌ " + msg);
     }
   });
 
   $("btnStop").addEventListener("click", stopLoop);
+
+  $("previewBtn").addEventListener("click", openPreviewManually);
 
   (async function init(){
     addLog("INIT /generate");
@@ -1356,16 +1506,12 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
         addLog("bookId capturado da URL: " + queryId);
       }
 
-      const st = getState();
-      if (st.bookId) {
-        clearPreviewFlags(st.bookId);
-      }
-
       try {
         const status = await refreshStatus();
+
         if (status && String(status.status || "") === "done") {
           addLog("Livro já estava pronto");
-          await maybeRedirectToPreview(String(status.id || st.bookId || ""), status);
+          await maybeRedirectToPreview(extractBookIdFromStatus(status), status);
           return;
         }
 
@@ -1374,17 +1520,19 @@ module.exports = function mountGeneratePage(app, { requireAuth }) {
           return;
         }
       } catch (e) {
-        addLog("Status inicial indisponível: " + String(e && e.message || e));
+        addLog("Status inicial indisponível: " + String((e && e.message) || e));
       }
 
       startLoop();
     } catch (e) {
-      const msg = String(e && e.message || e || "Erro");
+      const msg = String((e && e.message) || e || "Erro");
       addLog("Erro no init: " + msg);
+
       if (msg === "not_logged_in") {
         goLogin();
         return;
       }
+
       setHint("❌ " + msg);
       setStatus("bad", "Erro");
     }
